@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ERSKI 滑雪急診室 - 預約系統</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif;
+         background: #f4f6f9; color: #1a2433; margin: 0; }
+  header { background: #000000; color: #fff; padding: 14px 18px; }
+  header h1 { margin: 0; font-size: 36px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  header .sub { font-size: 12px; color: #9fb3c8; font-weight: normal; }
+
+  #loginScreen { max-width: 380px; margin: 60px auto; background: white; border-radius: 14px;
+                 padding: 28px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); text-align: center; }
+  #loginScreen h2 { margin-top: 0; }
+  .oauth-btn { display:block; width:100%; padding: 12px; margin: 10px 0; border-radius: 8px;
+               border: 1px solid #d0d7de; background: white; font-size: 14px; cursor: pointer; }
+  .oauth-btn.line { background: #06C755; color: white; border: none; }
+  .oauth-btn.google { background: #fff; color: #333; }
+  .hint { font-size: 11px; color: #8a94a3; margin-top: 4px; }
+  .staff-link { display:block; margin-top: 18px; font-size: 13px; color: #2563eb; cursor: pointer; }
+
+  #mainLayout { display: flex; max-width: 1100px; margin: 0 auto; align-items: flex-start; }
+  #contentArea { flex: 1; min-width: 0; padding: 14px; order: 2; }
+  #rightNav { width: 200px; flex-shrink: 0; padding: 14px 0 14px 14px; order: 1; }
+  .nav-group { background: white; border: 1px solid #e2e6ea; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  .nav-top { padding: 12px 14px; font-weight: 600; font-size: 14px; cursor: pointer;
+             display:flex; justify-content: space-between; align-items:center; background:#fafbfc; }
+  .nav-top.active-top { background: #000; color: white; }
+  .nav-sub-item { padding: 10px 14px 10px 22px; font-size: 13px; cursor: pointer; border-top: 1px solid #f0f2f5; color:#4a5568; }
+  .nav-sub-item:hover { background: #f4f6f9; }
+  .nav-sub-item.active { background:#e7edfb; color:#2563eb; font-weight:600; }
+  .nav-flat { padding: 12px 14px; font-weight: 600; font-size: 14px; cursor: pointer; }
+  .nav-flat.active-top { background: #000; color: white; }
+
+  .page { display:none; }
+  .page.active { display:block; }
+
+  .card { background: white; border: 1px solid #e2e6ea; border-radius: 12px;
+          padding: 16px; margin-bottom: 14px; }
+  .card h3 { margin-top:0; font-size: 15px; }
+  .note { font-size: 12px; color: #7d8794; line-height:1.6; }
+
+  label { display:block; font-size: 12px; color: #5a6472; margin: 10px 0 4px; }
+  input:not([type="checkbox"]), select { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid #d0d7de;
+                  background: white; font-size: 14px; }
+  input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
+  button { background: #000; color: white; border: none; border-radius: 8px;
+           padding: 10px 16px; font-size: 13px; margin-top: 10px; cursor: pointer; }
+  button.secondary { background: #eef1f5; color: #1a2433; }
+  button.small { padding: 6px 10px; font-size: 12px; margin: 2px; }
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .equip-row { display:flex; gap:10px; margin-top:6px; }
+  .equip-opt { flex:1; text-align:center; padding:10px; border:1px solid #d0d7de; border-radius:8px; cursor:pointer; font-size:13px; }
+  .equip-opt.selected { background:#000; color:white; border-color:#000; }
+
+  .person-card { background:#f7f9fb; border:1px solid #e2e6ea; border-radius:8px; padding:10px; margin-top:8px; }
+  .person-card b { font-size:13px; }
+
+  .hour-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0;
+              border-bottom: 1px solid #eef1f5; font-size: 13px; }
+  .price-tag { display:inline-block; background:#e7f6ec; color:#1a7d3a; border-radius: 6px;
+               padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+  .status-tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .status-tag.ok { background:#e7f6ec; color:#1a7d3a; }
+  .status-tag.warn { background:#fdf1dc; color:#a6650a; }
+
+  a.back { color: #2563eb; cursor: pointer; font-size: 13px; display:inline-block; margin-bottom:8px; }
+  pre { background: #0d1b2a; color: #7ee787; padding: 10px; border-radius: 8px;
+        overflow-x: auto; font-size: 11px; max-height: 160px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .list-item { padding: 8px 0; border-bottom: 1px solid #eef1f5; font-size: 13px; }
+
+  .coach-card { display:flex; gap:12px; padding:12px; border:1px solid #e2e6ea; border-radius:10px; margin-bottom:10px; }
+  .coach-card img { width:80px; height:80px; object-fit:cover; border-radius:8px; background:#eee; }
+
+  @media (max-width: 720px) {
+    #mainLayout { flex-direction: column; }
+    #rightNav { width: 100%; padding: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h2>❄ ERSKI 會員登入</h2>
+  <p class="note">請先串聯 LINE 或 Google 才能登入／建立會員</p>
+  <button class="oauth-btn line" onclick="oauthLogin('line')">💬 串聯 LINE</button>
+  <button class="oauth-btn google" onclick="oauthLogin('google')">G 使用 Google 帳號登入</button>
+  <p class="hint">示範用途:點選即模擬 OAuth 授權成功。正式系統會導向真正的登入頁面。</p>
+
+  <div id="memberCreateForm" style="display:none; text-align:left; margin-top:16px; border-top:1px solid #eef1f5; padding-top:16px;">
+    <h3 style="font-size:14px;">建立會員資料</h3>
+    <label>姓名</label><input id="mName" value="王小明">
+    <label>電話</label><input id="mPhone" value="0912345678">
+    <label>緊急聯絡人姓名</label><input id="mEmergencyName" value="王媽媽">
+    <label>緊急聯絡人電話</label><input id="mEmergencyPhone" value="0987654321">
+    <button onclick="createMember()">完成建立會員</button>
+  </div>
+
+  <a class="staff-link" onclick="openStaffLogin()">🔒 員工後台登入</a>
+</div>
+
+<div id="staffLoginScreen" style="display:none; max-width:600px; margin:0 auto; padding:14px;">
+  <div class="card">
+    <a class="back" onclick="closeStaffLogin()">← 返回會員端</a>
+    <h3>後台登入</h3>
+    <p class="note">工號＋密碼登入,登入後直接進入該帳號對應的角色畫面。</p>
+    <label>工號</label><input id="staffWorkId">
+    <label>密碼</label><input id="staffPw" type="password">
+    <button onclick="staffLogin()">登入</button>
+    <div id="staffLoginStatus" style="margin-top:10px;"></div>
+
+    <p class="note" style="margin-top:16px;">示範快速登入(測試用途,正式系統無此按鈕):</p>
+    <div id="demoStaffButtons"></div>
+  </div>
+
+  <div id="staffPanel" class="card" style="display:none;">
+    <h3 id="staffPanelTitle"></h3>
+    <div id="staffPanelBody"></div>
+  </div>
+</div>
+
+<div id="mainScreen" style="display:none;">
+  <header>
+    <h1>ERSKI 滑雪急診室 <span class="sub" id="memberBanner"></span></h1>
+  </header>
+
+  <div id="mainLayout">
+    <div id="contentArea">
+
+      <div id="page-charter" class="page active">
+        <div class="card">
+          <h3>包機預約</h3>
+          <div id="wizard-charter"></div>
+        </div>
+        <div class="card" id="charterPassCard" style="display:none;">
+          <h3>我的包機堂數包</h3>
+          <div id="myCharterPasses">尚未查詢</div>
+          <p class="note" style="margin-top:10px;">沒有可用堂數包時,請先購買(1對1或1對2,對應上方選擇的人數)。</p>
+          <label>堂數包大小</label>
+          <select id="pkgSize"><option value="5">5堂</option><option value="10">10堂</option></select>
+          <button onclick="purchaseCharterPass()">購買堂數包</button>
+        </div>
+        <div class="card" id="charterDateCard" style="display:none;">
+          <h3>選擇日期</h3>
+          <p class="note">將自動使用你現有的堂數包扣抵(需先在上方購買)。</p>
+          <input type="date" id="charterDatePicker" onchange="loadCharterDay()">
+          <div id="charterHourGrid" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div id="page-group" class="page">
+        <div class="card">
+          <h3>我的方案資格</h3>
+          <p class="note">開班規則:<b>滿2人成班・滿4人截止報名</b>。團課方案需申請後由客服審核通過才會生效,不可指定教練。</p>
+          <div id="myPlanStatus">尚未查詢</div>
+        </div>
+        <div class="card">
+          <h3>申請方案</h3>
+          <label>方案</label>
+          <select id="applyPlanName">
+            <option value="A">方案A(年繳NT$2500／月繳NT$1500)</option>
+            <option value="B">方案B(年繳NT$3500／月繳NT$2500)</option>
+          </select>
+          <label>計費週期</label>
+          <select id="applyPlanCycle">
+            <option value="annual">年繳</option>
+            <option value="monthly">月繳</option>
+          </select>
+          <button onclick="applyForPlan()">送出申請</button>
+          <div id="applyPlanStatus" style="margin-top:8px;"></div>
+        </div>
+        <div class="card">
+          <h3>團課預約</h3>
+          <div id="wizard-group"></div>
+        </div>
+        <div class="card" id="groupDateCard" style="display:none;">
+          <h3>選擇日期</h3>
+          <input type="date" id="groupDatePicker" onchange="loadGroupDay()">
+          <div id="groupHourGrid" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div id="page-trial" class="page">
+        <div class="card">
+          <h3>體驗課預約</h3>
+          <div id="wizard-trial"></div>
+        </div>
+        <div class="card" id="trialDateCard" style="display:none;">
+          <h3>選擇日期</h3>
+          <input type="date" id="trialDatePicker" onchange="loadTrialDay()">
+          <div id="trialHourGrid" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div id="page-self" class="page">
+        <div class="card">
+          <h3>自主練習預約</h3>
+          <p class="note">自主練習優先權最低,如與其他課程衝突將提示櫃檯人工協調,不會自動取消。</p>
+          <div id="selfQuotaStatus" class="list-item">尚未查詢額度</div>
+          <div id="selfQuotaToggleWrap" style="display:none;">
+            <label style="display:flex; align-items:center; gap:8px;">
+              <input type="checkbox" id="useQuotaCheckbox" style="width:auto;" onchange="onWizardChange('self')">
+              使用方案額度預約(免費,額度用完會自動改為原價付款)
+            </label>
+          </div>
+          <div id="wizard-self"></div>
+          <label>時長</label>
+          <select id="spDuration" onchange="onWizardChange('self')">
+            <option value="30">30分鐘</option><option value="60" selected>1小時</option>
+            <option value="120">2小時</option>
+          </select>
+        </div>
+        <div class="card" id="selfDateCard" style="display:none;">
+          <h3>選擇日期</h3>
+          <input type="date" id="selfDatePicker" onchange="loadSelfDay()">
+          <div id="selfHourGrid" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div id="page-jump" class="page">
+        <div class="card">
+          <h3>跳台體驗預約</h3>
+          <p class="note">獨立資源,不受機台時段互斥限制,全年每日皆可預約。</p>
+          <div id="wizard-jump"></div>
+          <label>時長</label>
+          <select id="jumpDuration" onchange="onWizardChange('jump')">
+            <option value="60">1小時</option><option value="120">2小時</option>
+          </select>
+        </div>
+        <div class="card" id="jumpDateCard" style="display:none;">
+          <h3>選擇日期</h3>
+          <input type="date" id="jumpDatePicker" onchange="loadJumpDay()">
+          <div id="jumpHourGrid" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <div id="page-japan" class="page">
+        <div class="card">
+          <h3 id="japanRegionTitle">日本滑雪預約</h3>
+          <p class="note">固定每年 <b>12月至隔年4月</b> 為雪季開放預約,其餘月份不開放。雪場與教練為整趟行程共用。</p>
+          <div id="japanResortWrap" style="display:none;">
+            <label>① 雪場</label>
+            <select id="japanResort" onchange="onJapanResortChange()"></select>
+          </div>
+          <div id="japanResortManageWrap" style="display:none; margin-top:8px;">
+            <button class="small secondary" onclick="openResortManage()">管理此分區雪場清單(新增/刪除)</button>
+          </div>
+          <label>② 指定教練</label>
+          <select id="japanCoach" onchange="onWizardChange('japan')"></select>
+          <div id="japanAccommodationWrap" style="display:none;">
+            <label>是否需要預訂住宿</label>
+            <select id="japanAccommodation"><option value="0">不需要</option><option value="1">需要</option></select>
+          </div>
+        </div>
+
+        <div class="card">
+          <div id="wizard-japan"></div>
+        </div>
+
+        <div class="card" id="japanDateCard">
+          <label>③ 行程開始日期</label>
+          <input type="date" id="japanStartDate" onchange="generateJapanDateRange()">
+          <label>④ 行程結束日期</label>
+          <input type="date" id="japanEndDate" onchange="generateJapanDateRange()">
+          <p class="note" id="japanRangeNote" style="margin-top:8px;"></p>
+          <label>每日課程類型(全程一致)</label>
+          <select id="japanDayType" onchange="toggleJapanHalfSlot(); onWizardChange('japan')">
+            <option value="full">全日(5小時,9:00-11:30/13:00-15:30)</option>
+            <option value="half">半日(3小時)</option>
+          </select>
+          <div id="japanHalfSlotWrap" style="display:none;">
+            <label>半日時段</label>
+            <select id="japanHalfSlot">
+              <option value="morning">上午 9:00-12:00</option>
+              <option value="afternoon">下午 13:00-16:00</option>
+            </select>
+          </div>
+          <div class="price-tag" id="japanPriceDisplay" style="margin-top:8px;"></div>
+          <button onclick="submitJapanTrip()">確認並前往付款</button>
+        </div>
+      </div>
+
+      <div id="page-coaches" class="page">
+        <div class="card">
+          <h3>教練團隊</h3>
+          <div id="coachTeamList"></div>
+        </div>
+      </div>
+
+      <div id="page-center" class="page">
+        <div class="card">
+          <h3>帳戶總覽</h3>
+          <p class="note">即時反映實際購買/預約狀態:包機私人課堂數包、分級團體班方案與本季額度、已預約課程、未完成課程與教練資訊。</p>
+          <div id="accountOverview"></div>
+        </div>
+        <div class="card">
+          <h3>我的資料</h3>
+          <p class="note">請填寫完整,方便教練依你的程度安排課程。</p>
+
+          <label>姓名</label><input id="pName">
+          <div class="row">
+            <div><label>出生年月日</label><input id="pBirthDate" type="date"></div>
+            <div><label>性別</label>
+              <select id="pGender"><option value="">未填寫</option><option value="male">男</option><option value="female">女</option></select>
+            </div>
+          </div>
+          <div class="row">
+            <div><label>身分證字號</label><input id="pIdNumber"></div>
+            <div><label>血型</label>
+              <select id="pBloodType"><option value="">未填寫</option><option>A</option><option>B</option><option>AB</option><option>O</option></select>
+            </div>
+          </div>
+          <label>地址</label><input id="pAddress">
+          <div class="row">
+            <div><label>電話</label><input id="pPhone"></div>
+            <div><label>Email</label><input id="pEmail"></div>
+          </div>
+          <div class="row">
+            <div><label>LINE ID</label><input id="pLineId"></div>
+            <div><label>FB / IG / Threads</label><input id="pSocial"></div>
+          </div>
+          <label>緊急聯絡人姓名</label><input id="pEmergencyName">
+          <label>緊急聯絡人電話</label><input id="pEmergencyPhone">
+          <div class="row">
+            <div><label>身高(cm)</label><input id="pHeight" type="number"></div>
+            <div><label>體重(kg)</label><input id="pWeight" type="number"></div>
+          </div>
+
+          <h3 style="margin-top:16px;">滑行項目</h3>
+          <div class="row">
+            <div><label>Snowboard 板長</label><input id="pSbLength"></div>
+            <div><label>Snowboard 鞋碼</label><input id="pSbBoot"></div>
+          </div>
+          <div class="row">
+            <div><label>Ski 板長</label><input id="pSkiLength"></div>
+            <div><label>Ski 鞋碼</label><input id="pSkiBoot"></div>
+          </div>
+
+          <label>雪機滑行程度</label>
+          <select id="pMachineLevel">
+            <option value="">未填寫</option>
+            <option value="beginner_none">完全初學-沒有任何滑行經驗</option>
+            <option value="beginner">雪機初學-可以前、後刃推坡</option>
+            <option value="advanced_basic">雪機進階-可以前、後刃舉昇</option>
+            <option value="intermediate">雪機中階-可以s turn</option>
+            <option value="advanced">雪機高階-可以連續s turn</option>
+            <option value="expert">雪機高手-完全掌握</option>
+          </select>
+
+          <label>雪上滑行程度</label>
+          <select id="pSnowLevel">
+            <option value="">未填寫</option>
+            <option value="beginner_none">完全初學-沒有任何滑行經驗</option>
+            <option value="beginner">初學-可以前、後刃推坡</option>
+            <option value="entry">入門-可以落葉飄</option>
+            <option value="advanced_basic">進階-可以c turn</option>
+            <option value="intermediate">中階-綠線s turn</option>
+            <option value="advanced">高階-紅線s turn</option>
+            <option value="expert">高手-雪道內完全可以克服</option>
+          </select>
+
+          <label>主要滑行項目(用於產生會員編號)</label>
+          <select id="pPrimaryEquipment">
+            <option value="">未選擇</option>
+            <option value="ski">雙板 SKI</option>
+            <option value="snowboard">單板 Snowboard</option>
+          </select>
+
+          <button onclick="saveMyProfile()">儲存我的資料</button>
+          <div id="profileSaveStatus" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <div id="rightNav">
+      <div class="nav-group">
+        <div class="nav-top active-top" id="navtop-indoor" onclick="toggleNavGroup('indoor')">室內滑雪 ▾</div>
+        <div id="navsub-indoor">
+          <div class="nav-sub-item active" onclick="switchPage('charter','indoor')">包機預約</div>
+          <div class="nav-sub-item" onclick="switchPage('group','indoor')">團課預約</div>
+          <div class="nav-sub-item" onclick="switchPage('trial','indoor')">體驗課預約</div>
+          <div class="nav-sub-item" onclick="switchPage('self','indoor')">自主練習預約</div>
+          <div class="nav-sub-item" onclick="switchPage('jump','indoor')">跳台預約</div>
+        </div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-top" id="navtop-japan" onclick="toggleNavGroup('japan')">日本滑雪 ▾</div>
+        <div id="navsub-japan" style="display:none;"></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-flat" onclick="switchPage('coaches', null)">教練團隊</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-flat" onclick="switchPage('center', null)">會員中心</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1100px; margin:0 auto; padding:0 14px 14px;">
+  <div class="card" style="display:none;">
+    <h3>API 原始回應(除錯用)</h3>
+    <pre id="rawLog">等待操作...</pre>
+  </div>
+</div>
+
+<!-- ================= 付款彈窗 ================= -->
+<div id="paymentOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+  <div class="card" style="max-width:360px; width:90%;">
+    <h3>確認付款</h3>
+    <p class="note">應付金額</p>
+    <div class="price-tag" id="paymentAmountDisplay" style="font-size:16px;"></div>
+    <label>付款方式</label>
+    <select id="paymentMethod">
+      <option value="online_card">線上刷卡</option>
+      <option value="onsite">現場付款</option>
+      <option value="bank_transfer">匯款轉帳</option>
+    </select>
+    <button onclick="confirmPaymentModal()">確認付款</button>
+    <button class="secondary" onclick="closePaymentModal()">稍後付款</button>
+  </div>
+</div>
+
+<div id="rescheduleOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:999; align-items:center; justify-content:center;">
+  <div class="card" style="max-width:360px; width:90%;">
+    <h3>修改日期時段</h3>
+    <label>新日期</label>
+    <input type="date" id="rescheduleDate" onchange="onRescheduleDateChange()">
+    <div id="rescheduleHourWrap" style="display:none;">
+      <label>新時段</label>
+      <select id="rescheduleHour"></select>
+    </div>
+    <div id="rescheduleTimeWrap" style="display:none;">
+      <label>新時間</label>
+      <input type="time" id="rescheduleTime">
+    </div>
+    <button onclick="confirmRescheduleModal()">確認修改</button>
+    <button class="secondary" onclick="closeRescheduleModal()">取消</button>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin + "/api";
+let currentMemberId = null;
+let currentStaffId = null;
+let pricingData = null;
+let resorts = [];
+let japanRegions = [];
+let currentJapanRegion = null;
+let japanSelectedDates = [];
+let _pendingPayment = null;
+
+function requestPayment(amount, ref_type, ref_id) {
+  if (!amount || amount <= 0) return; // 免付費項目(例如額度內預約、團課)不跳付款
+  _pendingPayment = { amount, ref_type, ref_id };
+  document.getElementById("paymentAmountDisplay").textContent = `NT$ ${amount}`;
+  document.getElementById("paymentOverlay").style.display = "flex";
+}
+function closePaymentModal() {
+  document.getElementById("paymentOverlay").style.display = "none";
+  _pendingPayment = null;
+}
+async function confirmPaymentModal() {
+  if (!_pendingPayment) return;
+  const payment_method = document.getElementById("paymentMethod").value;
+  const { ok, data } = await api("/payments/create", {
+    method: "POST",
+    body: JSON.stringify({
+      member_id: currentMemberId, amount: _pendingPayment.amount,
+      payment_method, order_ref: "ORDER-" + Date.now(),
+      ref_type: _pendingPayment.ref_type, ref_id: _pendingPayment.ref_id,
+    })
+  });
+  document.getElementById("paymentOverlay").style.display = "none";
+  _pendingPayment = null;
+  if (ok) {
+    if (data.status === "confirmed") alert("付款完成!");
+    else alert("已登記付款,待客服核對入帳後即完成確認。");
+  } else {
+    alert("付款失敗,請稍後再試或洽詢客服。");
+  }
+  loadAccountOverview();
+  refreshMyCharterPasses();
+}
+
+function log(label, data) {
+  document.getElementById("rawLog").textContent = `[${label}]\n` + JSON.stringify(data, null, 2);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (currentStaffId) headers["X-Staff-Id"] = currentStaffId;
+  const res = await fetch(BASE + path, { ...opts, headers: { ...headers, ...(opts.headers||{}) } });
+  const data = await res.json();
+  log(path, data);
+  return { ok: res.ok, data };
+}
+
+async function ensurePricing() {
+  if (!pricingData) {
+    const { data } = await api("/pricing");
+    pricingData = data;
+  }
+}
+
+async function oauthLogin(provider) {
+  const mock_external_id = provider === "line" ? "line-demo-user" : "test@gmail.com";
+  const { data } = await api("/auth/oauth-login", {
+    method: "POST", body: JSON.stringify({ provider, mock_external_id })
+  });
+  if (data.is_new) {
+    document.getElementById("memberCreateForm").style.display = "block";
+    window._pendingProvider = provider;
+    window._pendingExternalId = mock_external_id;
+  } else {
+    currentMemberId = data.member.id;
+    enterMainScreen(data.member);
+  }
+}
+
+async function createMember() {
+  const { data } = await api("/auth/create-member", {
+    method: "POST",
+    body: JSON.stringify({
+      name: document.getElementById("mName").value,
+      phone: document.getElementById("mPhone").value,
+      emergency_contact_name: document.getElementById("mEmergencyName").value,
+      emergency_contact_phone: document.getElementById("mEmergencyPhone").value,
+      auth_provider: window._pendingProvider,
+      [window._pendingProvider === "line" ? "line_user_id" : "email"]: window._pendingExternalId,
+    })
+  });
+  currentMemberId = data.id;
+  enterMainScreen(data);
+}
+
+async function enterMainScreen(member) {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("mainScreen").style.display = "block";
+  document.getElementById("memberBanner").textContent = `會員:${member.name}(member_id=${member.id})`;
+  await ensurePricing();
+
+  const today = new Date().toISOString().slice(0,10);
+  ["trialDatePicker","selfDatePicker","charterDatePicker","groupDatePicker","jumpDatePicker"].forEach(id => {
+    const el = document.getElementById(id);
+    el.min = today; el.value = today;
+  });
+  document.getElementById("japanStartDate").min = today;
+  document.getElementById("japanEndDate").min = today;
+
+  renderWizard("charter", { headcountOptions: [1,2], headcountLabel: "對戰人數" });
+  renderWizard("group", { fixedHeadcount: 1 });
+  renderWizard("trial", { headcountOptions: [1,2,3,4] });
+  renderWizard("self", { headcountOptions: [1,2,3,4] });
+  renderWizard("jump", { headcountOptions: [1,2,3,4] });
+  renderWizard("japan", { headcountOptions: [1,2,3,4] });
+
+  await loadJapanRegions();
+  loadTrialDay();
+  loadGroupDay();
+  loadJumpDay();
+  loadMyPlanStatus();
+  loadSelfQuotaStatus();
+  loadAccountOverview();
+  loadCoachTeam();
+}
+
+function openStaffLogin() {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("staffLoginScreen").style.display = "block";
+  loadDemoStaffButtons();
+}
+function closeStaffLogin() {
+  document.getElementById("staffLoginScreen").style.display = "none";
+  document.getElementById("loginScreen").style.display = "block";
+}
+async function loadDemoStaffButtons() {
+  const { data } = await api("/auth/demo-staff");
+  const wrap = document.getElementById("demoStaffButtons");
+  const roleLabel = { boss: "老闆", manager: "主管", cs: "客服", coach: "教練" };
+  wrap.innerHTML = data.map(s =>
+    `<button class="small secondary" onclick="quickStaffLogin('${s.work_id}','${s.password}')">${roleLabel[s.role]}</button>`
+  ).join("");
+}
+async function quickStaffLogin(work_id, password) {
+  document.getElementById("staffWorkId").value = work_id;
+  document.getElementById("staffPw").value = password;
+  await staffLogin();
+}
+async function staffLogin() {
+  const work_id = document.getElementById("staffWorkId").value;
+  const password = document.getElementById("staffPw").value;
+  const { ok, data } = await api("/auth/staff-login", {
+    method: "POST", body: JSON.stringify({ work_id, password })
+  });
+  if (ok) {
+    currentStaffId = work_id;
+    document.getElementById("staffLoginStatus").innerHTML =
+      `<span class="status-tag ok">登入成功:${data.name}(${data.role})</span>`;
+    renderStaffPanel(data);
+  } else {
+    document.getElementById("staffLoginStatus").innerHTML = `<span class="status-tag warn">${data.error}</span>`;
+  }
+}
+async function renderStaffPanel(staff) {
+  const panel = document.getElementById("staffPanel");
+  panel.style.display = "block";
+  document.getElementById("staffPanelTitle").textContent = `${staff.name}(${staff.role})後台`;
+  const body = document.getElementById("staffPanelBody");
+  if (["cs","manager","boss"].includes(staff.role)) {
+    const { data: members } = await api("/admin/members");
+    const { data: bookings } = await api("/admin/bookings");
+    body.innerHTML = `<p class="note">會員清單(客服以上權限):</p>` +
+      members.map(m => `<div class="list-item">${m.name} - ${m.phone||""} - ${m.email||""}</div>`).join("") +
+      `<h3 style="margin-top:14px; font-size:14px;">訂客資料總覽</h3>` +
+      bookings.slice(0,30).map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.equipment_type ? "・"+(b.equipment_type==="ski"?"雙板":"單板") : ""}${b.resort_name ? "・"+b.resort_name : ""}${b.coach_name ? "・教練:"+b.coach_name : ""} — NT$${b.price ?? 0}${b.needs_accommodation ? "・需住宿" : ""}</div>`).join("") +
+      `<div id="pendingActionsWrap"></div>` +
+      `<div id="groupClassAssignWrap"></div>` +
+      `<div id="adminManageWrap"></div>`;
+    await renderPendingActions();
+    await renderGroupClassAssignTools();
+    if (["manager","boss"].includes(staff.role)) {
+      await renderAdminManageTools();
+    }
+  } else if (staff.role === "coach") {
+    await renderCoachOwnPanel(staff);
+  } else {
+    body.innerHTML = `<p class="note">此角色尚未實作專屬畫面。</p>`;
+  }
+}
+
+async function renderCoachOwnPanel(staff) {
+  const body = document.getElementById("staffPanelBody");
+  const { data: mySchedule } = await api("/admin/coach/my-schedule");
+  const { data: myBookings } = await api("/admin/coach/my-bookings");
+
+  const statusLabel = { working: "上班", personal_leave: "事假", sick_leave: "病假", annual_leave: "特休", business_trip: "出差" };
+  const upcomingLeave = mySchedule.filter(s => s.status !== "working");
+
+  body.innerHTML = `
+    <h3 style="font-size:14px;">我的課表(未來)</h3>
+    ${myBookings.length
+      ? myBookings.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}</div>`).join("")
+      : `<div class="list-item">目前沒有已排定的課程</div>`}
+
+    <h3 style="margin-top:14px; font-size:14px;">我的請假紀錄</h3>
+    ${upcomingLeave.length
+      ? upcomingLeave.map(s => `<div class="list-item">${s.work_date} — ${statusLabel[s.status] || s.status}${s.reason ? "("+s.reason+")" : ""}</div>`).join("")
+      : `<div class="list-item">目前沒有請假紀錄</div>`}
+
+    <h3 style="margin-top:14px; font-size:14px;">申請請假/出差</h3>
+    <label>日期</label>
+    <input type="date" id="coachLeaveDate">
+    <label>類型</label>
+    <select id="coachLeaveStatus">
+      <option value="personal_leave">事假</option>
+      <option value="sick_leave">病假</option>
+      <option value="annual_leave">特休</option>
+      <option value="business_trip">出差</option>
+      <option value="working">恢復上班(取消請假)</option>
+    </select>
+    <label>備註</label>
+    <input id="coachLeaveReason">
+    <button class="small" onclick="submitCoachLeave(${staff.id})">送出</button>
+    <div id="coachLeaveStatusMsg" style="margin-top:6px;"></div>
+  `;
+}
+
+async function submitCoachLeave(coachId) {
+  const work_date = document.getElementById("coachLeaveDate").value;
+  const status = document.getElementById("coachLeaveStatus").value;
+  const reason = document.getElementById("coachLeaveReason").value;
+  if (!work_date) { alert("請選擇日期"); return; }
+  const { ok, data } = await api("/admin/coach-schedule", {
+    method: "POST", body: JSON.stringify({ coach_id: coachId, work_date, status, reason })
+  });
+  document.getElementById("coachLeaveStatusMsg").innerHTML = ok
+    ? `<span class="status-tag ok">已送出</span>` : `<span class="status-tag warn">${data.error || "送出失敗"}</span>`;
+  if (ok) renderStaffPanel({ id: coachId, name: document.getElementById("staffPanelTitle").textContent, role: "coach" });
+}
+
+// ---------------- 主管/老闆專屬:雪場管理 + 教練團隊管理 ----------------
+// ---------------- 待處理事項:待核准付款 / 需人工協調時段(客服以上) ----------------
+async function renderPendingActions() {
+  const wrap = document.getElementById("pendingActionsWrap");
+  const { data: pendingPayments } = await api("/admin/payments/pending");
+  const { data: reviewSessions } = await api("/admin/sessions/needs-review");
+  const { data: pendingApplications } = await api("/admin/plan-applications");
+  const { data: pendingBilling } = await api("/admin/plan-billing/pending");
+  const methodLabel = { onsite: "現場付款", bank_transfer: "匯款轉帳" };
+
+  let html = `<h3 style="margin-top:14px; font-size:14px;">待核准付款</h3>`;
+  html += pendingPayments.length
+    ? pendingPayments.map(t => `
+        <div class="list-item">
+          ${t.member_name} — NT$${t.amount}(${methodLabel[t.payment_method] || t.payment_method})
+          <button class="small" onclick="approvePayment(${t.id})">核准付款</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有待核准的付款</div>`;
+
+  html += `<h3 style="margin-top:14px; font-size:14px;">需人工協調的時段衝突</h3>`;
+  html += reviewSessions.length
+    ? reviewSessions.map(s => `
+        <div class="list-item">
+          ${s.booking_date} ${s.start_hour}:00 — ${s.member_names}
+          <button class="small" onclick="resolveSessionConflict(${s.id})">確認保留此預約</button>
+          <button class="small secondary" onclick="cancelSessionAsStaff(${s.id})">改為取消</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有需要協調的時段衝突</div>`;
+
+  html += `<h3 style="margin-top:14px; font-size:14px;">待審核團課方案申請</h3>`;
+  html += pendingApplications.length
+    ? pendingApplications.map(a => `
+        <div class="list-item">
+          ${a.member_name} — 方案${a.plan_name}(${a.billing_cycle === "annual" ? "年繳" : "月繳"})
+          <button class="small" onclick="reviewPlanApplication(${a.id}, true)">核准</button>
+          <button class="small secondary" onclick="reviewPlanApplication(${a.id}, false)">拒絕</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有待審核的方案申請</div>`;
+
+  html += `<h3 style="margin-top:14px; font-size:14px;">待核准月繳方案費用</h3>`;
+  html += pendingBilling.length
+    ? pendingBilling.map(b => `
+        <div class="list-item">
+          ${b.member_name} — ${b.period} 月費 NT$${b.amount}
+          <button class="small" onclick="approvePlanBilling(${b.id})">核准繳費</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有待核准的月繳費用</div>`;
+
+  wrap.innerHTML = html;
+}
+async function approvePlanBilling(recordId) {
+  const { ok } = await api(`/admin/plan-billing/${recordId}/confirm`, { method: "POST" });
+  if (ok) { alert("已核准本月繳費"); renderPendingActions(); }
+}
+async function reviewPlanApplication(applicationId, approve) {
+  const { ok, data } = await api(`/admin/plan-applications/${applicationId}/review`, {
+    method: "POST", body: JSON.stringify({ approve })
+  });
+  if (ok) { alert(approve ? "已核准" : "已拒絕"); renderPendingActions(); }
+  else alert(data.error);
+}
+async function approvePayment(txId) {
+  const { ok } = await api(`/admin/payments/${txId}/confirm`, { method: "POST" });
+  if (ok) { alert("已核准付款"); renderPendingActions(); }
+}
+async function resolveSessionConflict(sessionId) {
+  const { ok } = await api(`/admin/sessions/${sessionId}/resolve`, { method: "POST" });
+  if (ok) { alert("已確認保留"); renderPendingActions(); }
+}
+async function cancelSessionAsStaff(sessionId) {
+  if (!confirm("確定要取消這個場次嗎?(將取消所有報名此場次的會員)")) return;
+  const { ok, data } = await api(`/admin/sessions/${sessionId}/cancel`, { method: "POST" });
+  if (ok) { alert(`已取消,共${data.cancelled_count}筆預約`); renderPendingActions(); }
+}
+
+// ---------------- 團課教練指派(客服以上) ----------------
+async function renderGroupClassAssignTools() {
+  const wrap = document.getElementById("groupClassAssignWrap");
+  const { data: sessions } = await api("/admin/group-classes");
+  const { data: coaches } = await api("/coaches");
+  const coachOptions = '<option value="">不指定</option>' +
+    coaches.map(c => `<option value="${c.id}">${c.display_code || c.name}</option>`).join("");
+
+  wrap.innerHTML = `<h3 style="margin-top:14px; font-size:14px;">團課教練指派</h3>` +
+    (sessions.length ? sessions.map(s => `
+      <div class="list-item">
+        ${s.booking_date} ${s.start_hour}:00 — ${s.enrolled_count}人已成班
+        目前教練:${s.coach_name || "尚未指派"}
+        <select id="groupCoachSel-${s.id}">${coachOptions}</select>
+        <button class="small" onclick="assignGroupCoach(${s.id})">指派</button>
+      </div>
+    `).join("") : `<div class="list-item">目前沒有已成班待指派教練的團課場次</div>`);
+
+  sessions.forEach(s => {
+    if (s.coach_id) document.getElementById(`groupCoachSel-${s.id}`).value = s.coach_id;
+  });
+}
+async function assignGroupCoach(sessionId) {
+  const coachVal = document.getElementById(`groupCoachSel-${sessionId}`).value;
+  const { ok } = await api(`/admin/group-classes/${sessionId}/assign-coach`, {
+    method: "POST", body: JSON.stringify({ coach_id: coachVal ? parseInt(coachVal) : null })
+  });
+  if (ok) { alert("已指派"); renderGroupClassAssignTools(); }
+}
+
+// ---------------- 管理報表/營收統計(主管/老闆) ----------------
+async function renderReportsTools() {
+  const today = new Date().toISOString().slice(0,10);
+  const monthStart = today.slice(0,8) + "01";
+  const { data: r } = await api(`/admin/reports/summary?date_from=${monthStart}&date_to=${today}`);
+
+  const catLabel = { trial: "體驗課", charter: "包機課", self_practice: "自主練習", group_class: "團課", jump: "跳台體驗", japan: "日本教練課" };
+
+  let html = `<h3 style="margin-top:16px; font-size:14px;">管理報表(${r.date_from} ~ ${r.date_to})</h3>`;
+  html += `<div class="list-item"><b>本期總營收:NT$ ${r.total_revenue}</b></div>`;
+  html += r.revenue_by_type.map(x => `<div class="list-item">${x.label}:NT$ ${x.total}(${x.count} 筆)</div>`).join("");
+  html += `<div class="list-item" style="margin-top:8px;"><b>機台利用率:${r.machine_utilization_pct}%</b></div>`;
+  html += `<div class="list-item"><b>各課程預約數(依日期範圍):</b></div>`;
+  html += Object.entries(r.booking_counts).map(([k,v]) => `<div class="list-item">${catLabel[k]||k}:${v} 筆</div>`).join("");
+  html += `<div class="list-item" style="margin-top:8px;"><b>教練帶課績效:</b></div>`;
+  html += r.coach_performance.length
+    ? r.coach_performance.map(c => `<div class="list-item">${c.name}:${c.count} 堂</div>`).join("")
+    : `<div class="list-item">尚無資料</div>`;
+
+  document.getElementById("reportsWrap").innerHTML = html;
+}
+
+async function renderAdminManageTools() {
+  const wrap = document.getElementById("adminManageWrap");
+  const { data: regions } = await api("/admin/resorts");
+  const { data: regionList } = await api("/japan-regions");
+
+  let resortHtml = `<h3 style="margin-top:16px; font-size:14px;">日本雪場管理(主管/老闆)</h3>`;
+  regionList.forEach(region => {
+    const resortsInRegion = regions.filter(r => r.region_id === region.id);
+    resortHtml += `
+      <div class="person-card">
+        <b>${region.name}</b>
+        <div id="resortList-${region.id}">
+          ${resortsInRegion.map(r => `
+            <div class="list-item">
+              ${r.name}${r.is_active ? "" : "(已停用)"}
+              ${r.is_active ? `<button class="small secondary" onclick="deleteResortAdmin(${r.id}, ${region.id})">刪除</button>` : ""}
+            </div>`).join("") || `<div class="list-item">尚無雪場</div>`}
+        </div>
+        <div class="row">
+          <input id="newResortName-${region.id}" placeholder="新雪場名稱">
+          <button class="small" onclick="addResortAdmin(${region.id})">新增</button>
+        </div>
+      </div>`;
+  });
+
+  const { data: coaches } = await api("/coaches");
+  let coachHtml = `<h3 style="margin-top:16px; font-size:14px;">教練團隊管理(主管/老闆)</h3>`;
+  coachHtml += coaches.map(c => `
+    <div class="person-card">
+      <b>${c.name}${c.display_code ? `(${c.display_code})` : ""}</b>
+      <label>自我介紹</label>
+      <input id="coachIntro-${c.id}" value="${(c.self_intro || "").replace(/"/g, '&quot;')}">
+      <label>宣傳照</label>
+      <input type="file" accept="image/*" id="coachPromoFile-${c.id}">
+      <label>證件照(僅供內部使用)</label>
+      <input type="file" accept="image/*" id="coachIdFile-${c.id}">
+      <button class="small" onclick="saveCoachProfileAdmin(${c.id})">儲存</button>
+      <div id="coachSaveStatus-${c.id}" style="margin-top:6px;"></div>
+    </div>
+  `).join("") || `<p class="note">尚無教練資料</p>`;
+
+  coachHtml += `
+    <div class="person-card">
+      <b>新增教練</b>
+      <label>姓名</label><input id="newCoachName">
+      <label>顯示代號(如:甲)</label><input id="newCoachCode">
+      <label>工號</label><input id="newCoachWorkId">
+      <label>生日(YYYY-MM-DD,預設密碼為生日六碼)</label><input id="newCoachBirthday" type="date">
+      <label>電話</label><input id="newCoachPhone">
+      <label>分店</label><input id="newCoachBranch" value="高雄">
+      <button class="small" onclick="createCoachAdmin()">建立教練帳號</button>
+      <div id="newCoachStatus" style="margin-top:6px;"></div>
+    </div>
+  `;
+
+  wrap.innerHTML = resortHtml + coachHtml + `<div id="reportsWrap"></div>`;
+  await renderReportsTools();
+}
+
+function fileToBase64(fileInput) {
+  return new Promise((resolve) => {
+    if (!fileInput.files || !fileInput.files[0]) { resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(fileInput.files[0]);
+  });
+}
+
+async function addResortAdmin(regionId) {
+  const nameInput = document.getElementById(`newResortName-${regionId}`);
+  const name = nameInput.value.trim();
+  if (!name) return;
+  const code = "resort_" + Date.now();
+  await api("/admin/resorts", { method: "POST", body: JSON.stringify({ region_id: regionId, code, name }) });
+  nameInput.value = "";
+  await renderAdminManageTools();
+}
+async function deleteResortAdmin(resortId, regionId) {
+  if (!confirm("確定要刪除(停用)這個雪場嗎?")) return;
+  await api(`/admin/resorts/${resortId}`, { method: "DELETE" });
+  await renderAdminManageTools();
+}
+
+async function saveCoachProfileAdmin(coachId) {
+  const self_intro = document.getElementById(`coachIntro-${coachId}`).value;
+  const promo_photo = await fileToBase64(document.getElementById(`coachPromoFile-${coachId}`));
+  const id_photo = await fileToBase64(document.getElementById(`coachIdFile-${coachId}`));
+  const payload = { self_intro };
+  if (promo_photo) payload.promo_photo = promo_photo;
+  if (id_photo) payload.id_photo = id_photo;
+  const { ok } = await api(`/admin/coaches/${coachId}/profile`, { method: "PUT", body: JSON.stringify(payload) });
+  document.getElementById(`coachSaveStatus-${coachId}`).innerHTML = ok
+    ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">儲存失敗</span>`;
+  loadCoachTeam();
+}
+
+async function createCoachAdmin() {
+  const name = document.getElementById("newCoachName").value;
+  const display_code = document.getElementById("newCoachCode").value;
+  const work_id = document.getElementById("newCoachWorkId").value;
+  const birthday = document.getElementById("newCoachBirthday").value;
+  const phone = document.getElementById("newCoachPhone").value;
+  const branch = document.getElementById("newCoachBranch").value;
+  if (!name || !work_id || !birthday) {
+    document.getElementById("newCoachStatus").innerHTML = `<span class="status-tag warn">請填寫姓名/工號/生日</span>`;
+    return;
+  }
+  const { ok, data } = await api("/admin/staff", {
+    method: "POST",
+    body: JSON.stringify({ name, display_code, work_id, birthday, phone, branch, role: "coach" })
+  });
+  document.getElementById("newCoachStatus").innerHTML = ok
+    ? `<span class="status-tag ok">建立成功,預設密碼:${data.default_password}</span>`
+    : `<span class="status-tag warn">建立失敗</span>`;
+  if (ok) await renderAdminManageTools();
+}
+
+function toggleNavGroup(name) {
+  const sub = document.getElementById("navsub-" + name);
+  sub.style.display = sub.style.display === "none" ? "block" : "none";
+}
+function switchPage(pageName, groupName) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.getElementById("page-" + pageName).classList.add("active");
+
+  document.querySelectorAll(".nav-top, .nav-flat").forEach(n => n.classList.remove("active-top"));
+  document.querySelectorAll(".nav-sub-item").forEach(n => n.classList.remove("active"));
+
+  if (groupName) {
+    document.getElementById("navtop-" + groupName).classList.add("active-top");
+    document.getElementById("navsub-" + groupName).style.display = "block";
+    if (event && event.target && event.target.classList.contains("nav-sub-item")) {
+      event.target.classList.add("active");
+    }
+  } else if (event && event.target) {
+    event.target.classList.add("active-top");
+  }
+
+  const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay };
+  if (refreshMap[pageName]) refreshMap[pageName]();
+}
+
+const wizardState = {};
+function renderWizard(key, opts) {
+  wizardState[key] = { opts, equipment: "ski", headcount: opts.fixedHeadcount || (opts.headcountOptions ? opts.headcountOptions[0] : 1), people: [] };
+  const container = document.getElementById("wizard-" + key);
+  const headcountSelectHtml = opts.fixedHeadcount
+    ? ""
+    : `<label>${opts.headcountLabel || "人數"}</label>
+       <select id="wiz-${key}-headcount" onchange="onWizardHeadcountChange('${key}')">
+         ${opts.headcountOptions.map(n => `<option value="${n}">${n}人</option>`).join("")}
+       </select>`;
+  container.innerHTML = `
+    <label>裝備</label>
+    <div class="equip-row">
+      <div class="equip-opt selected" id="wiz-${key}-equip-ski" onclick="setWizardEquip('${key}','ski')">雙板 SKI</div>
+      <div class="equip-opt" id="wiz-${key}-equip-snowboard" onclick="setWizardEquip('${key}','snowboard')">單板 Snowboard</div>
+    </div>
+    ${headcountSelectHtml}
+    <div id="wiz-${key}-people"></div>
+  `;
+  renderWizardPeople(key);
+  onWizardChange(key);
+}
+function setWizardEquip(key, val) {
+  wizardState[key].equipment = val;
+  document.getElementById(`wiz-${key}-equip-ski`).classList.toggle("selected", val === "ski");
+  document.getElementById(`wiz-${key}-equip-snowboard`).classList.toggle("selected", val === "snowboard");
+  onWizardChange(key);
+}
+function onWizardHeadcountChange(key) {
+  wizardState[key].headcount = parseInt(document.getElementById(`wiz-${key}-headcount`).value);
+  renderWizardPeople(key);
+  onWizardChange(key);
+}
+function renderWizardPeople(key) {
+  const n = wizardState[key].headcount;
+  const wrap = document.getElementById(`wiz-${key}-people`);
+  let html = "";
+  for (let i = 1; i <= n; i++) {
+    html += `
+      <div class="person-card">
+        <b>第 ${i} 人</b>
+        <div class="row">
+          <div><label>性別</label><select id="wiz-${key}-p${i}-gender"><option value="male">男</option><option value="female">女</option></select></div>
+          <div><label>年齡</label><input id="wiz-${key}-p${i}-age" type="number"></div>
+        </div>
+        <div class="row">
+          <div><label>身高(cm)</label><input id="wiz-${key}-p${i}-height" type="number"></div>
+          <div><label>體重(kg)</label><input id="wiz-${key}-p${i}-weight" type="number"></div>
+        </div>
+        <label>鞋子尺寸</label><input id="wiz-${key}-p${i}-shoe">
+      </div>`;
+  }
+  wrap.innerHTML = html;
+}
+function getWizardParticipants(key) {
+  const n = wizardState[key].headcount;
+  const list = [];
+  for (let i = 1; i <= n; i++) {
+    list.push({
+      gender: document.getElementById(`wiz-${key}-p${i}-gender`).value,
+      age: parseInt(document.getElementById(`wiz-${key}-p${i}-age`).value) || null,
+      height_cm: parseFloat(document.getElementById(`wiz-${key}-p${i}-height`).value) || null,
+      weight_kg: parseFloat(document.getElementById(`wiz-${key}-p${i}-weight`).value) || null,
+      shoe_size: document.getElementById(`wiz-${key}-p${i}-shoe`).value,
+    });
+  }
+  return list;
+}
+function getWizardEquipment(key) { return wizardState[key].equipment; }
+function getWizardHeadcount(key) { return wizardState[key].headcount; }
+
+function onWizardChange(key) {
+  if (key === "trial") { showDateCard("trial"); }
+  if (key === "charter") { showDateCard("charter"); document.getElementById("charterPassCard").style.display = "block"; refreshMyCharterPasses(); }
+  if (key === "self") { showDateCard("self"); }
+  if (key === "jump") { showDateCard("jump"); }
+  if (key === "group") { showDateCard("group"); }
+  if (key === "japan") { updateJapanPrice(); }
+}
+function showDateCard(key) {
+  const map = { trial: "trialDateCard", charter: "charterDateCard", self: "selfDateCard", jump: "jumpDateCard", group: "groupDateCard" };
+  document.getElementById(map[key]).style.display = "block";
+}
+
+function buildHourGrid(gridEl, dateStr, sessions, onBookClick) {
+  const occupied = {};
+  sessions.filter(s => s.category !== "group_class").forEach(s => {
+    const hoursNeeded = Math.max(1, Math.ceil(s.duration_minutes / 60));
+    for (let h = s.start_hour; h < s.start_hour + hoursNeeded; h++) occupied[h] = s;
+  });
+  gridEl.innerHTML = "";
+  for (let h = pricingData.indoor_hours.start; h <= pricingData.indoor_hours.last_start; h++) {
+    const row = document.createElement("div");
+    row.className = "hour-row";
+    const sess = occupied[h];
+    if (sess) {
+      const label = { trial: "體驗課", charter: "包機課", self_practice: "自主練習" }[sess.category];
+      const tagClass = sess.status === "needs_manual_review" ? "warn" : "ok";
+      const tagText = sess.status === "needs_manual_review" ? "衝突待協調" : "已預約";
+      row.innerHTML = `<div>${h}:00 — ${label}</div><div><span class="status-tag ${tagClass}">${tagText}</span></div>`;
+    } else {
+      const btn = document.createElement("button");
+      btn.className = "small"; btn.textContent = "可預約";
+      btn.onclick = () => onBookClick(dateStr, h);
+      row.appendChild(Object.assign(document.createElement("div"), { textContent: `${h}:00` }));
+      const cell = document.createElement("div"); cell.appendChild(btn);
+      row.appendChild(cell);
+    }
+    gridEl.appendChild(row);
+  }
+}
+
+async function loadTrialDay() {
+  const dateStr = document.getElementById("trialDatePicker").value;
+  if (!dateStr) return;
+  const { data } = await api(`/indoor/day/${dateStr}`);
+  buildHourGrid(document.getElementById("trialHourGrid"), dateStr, data.indoor_sessions, submitTrial);
+}
+async function submitTrial(dateStr, hour) {
+  const headcount = getWizardHeadcount("trial");
+  const equipment_type = getWizardEquipment("trial");
+  const participants = getWizardParticipants("trial");
+  const { ok, data } = await api("/booking/trial", {
+    method: "POST",
+    body: JSON.stringify({ member_id: currentMemberId, booking_date: dateStr, start_hour: hour, headcount, equipment_type, participants })
+  });
+  if (ok) { requestPayment(data.price, "indoor_session", data.id); loadTrialDay(); loadAccountOverview(); }
+  else alert(data.error);
+}
+
+async function loadSelfDay() {
+  const dateStr = document.getElementById("selfDatePicker").value;
+  if (!dateStr) return;
+  const { data } = await api(`/indoor/day/${dateStr}`);
+  buildHourGrid(document.getElementById("selfHourGrid"), dateStr, data.indoor_sessions, submitSelfPractice);
+}
+async function submitSelfPractice(dateStr, hour) {
+  const duration_minutes = parseInt(document.getElementById("spDuration").value);
+  const headcount = getWizardHeadcount("self");
+  const equipment_type = getWizardEquipment("self");
+  const participants = getWizardParticipants("self");
+  const useQuotaBox = document.getElementById("useQuotaCheckbox");
+  const use_plan_quota = useQuotaBox && !useQuotaBox.disabled && useQuotaBox.checked;
+  const { ok, data } = await api("/booking/self-practice", {
+    method: "POST",
+    body: JSON.stringify({ member_id: currentMemberId, booking_date: dateStr, start_hour: hour, duration_minutes, headcount, equipment_type, participants, use_plan_quota })
+  });
+  if (ok) {
+    if (!data.quota_consumed) requestPayment(data.price, "indoor_session", data.id);
+    else alert("已使用方案額度預約,免費完成!");
+    loadSelfDay(); loadAccountOverview(); loadSelfQuotaStatus();
+  }
+  else alert(data.error);
+}
+async function loadSelfQuotaStatus() {
+  const { data } = await api(`/members/${currentMemberId}`);
+  const el = document.getElementById("selfQuotaStatus");
+  const toggleWrap = document.getElementById("selfQuotaToggleWrap");
+  const checkbox = document.getElementById("useQuotaCheckbox");
+  const q = data.quota_status;
+  if (!q) {
+    el.innerHTML = `<span class="status-tag warn">尚未取得團課方案,自主練習需以原價付款</span>`;
+    toggleWrap.style.display = "none";
+    return;
+  }
+  const remaining = q.self_practice_total - q.self_practice_used;
+  const canUse = remaining > 0 && q.monthly_paid;
+  el.innerHTML = `本月自主練習額度:${q.self_practice_used}/${q.self_practice_total}` +
+    (q.monthly_paid ? "" : `<span class="status-tag warn"> 本月方案費用尚未繳納,額度暫不可用</span>`);
+  toggleWrap.style.display = "block";
+  checkbox.checked = canUse;
+  checkbox.disabled = !canUse;
+}
+
+async function loadCharterDay() {
+  const dateStr = document.getElementById("charterDatePicker").value;
+  if (!dateStr) return;
+  const { data } = await api(`/indoor/day/${dateStr}`);
+  buildHourGrid(document.getElementById("charterHourGrid"), dateStr, data.indoor_sessions, bookWithExistingCharterPass);
+  document.getElementById("charterPassCard").style.display = "block";
+  await refreshMyCharterPasses();
+}
+async function refreshMyCharterPasses() {
+  const { data } = await api(`/members/${currentMemberId}`);
+  const headcount_type = getWizardHeadcount("charter");
+  const matching = data.charter_passes.filter(p => p.headcount_type === headcount_type && p.remaining > 0);
+  const el = document.getElementById("myCharterPasses");
+  el.innerHTML = matching.length
+    ? matching.map(p => `<div class="list-item">1對${p.headcount_type}・${p.package_size}堂包:剩餘 ${p.remaining} 堂</div>`).join("")
+    : `<div class="list-item">目前沒有可用的堂數包(1對${headcount_type}),請先購買</div>`;
+}
+async function purchaseCharterPass() {
+  const headcount_type = getWizardHeadcount("charter");
+  const package_size = parseInt(document.getElementById("pkgSize").value);
+  const { data: purchase } = await api("/charter/purchase", {
+    method: "POST", body: JSON.stringify({ member_id: currentMemberId, package_size, headcount_type })
+  });
+  requestPayment(purchase.price, "charter_order", purchase.order_id);
+  await refreshMyCharterPasses();
+}
+async function bookWithExistingCharterPass(dateStr, hour) {
+  const headcount_type = getWizardHeadcount("charter");
+  const equipment_type = getWizardEquipment("charter");
+  const participants = getWizardParticipants("charter");
+  const { data: member } = await api(`/members/${currentMemberId}`);
+  const pass = member.charter_passes.find(p => p.headcount_type === headcount_type && p.remaining > 0);
+  if (!pass) { alert(`你目前沒有可用的堂數包(1對${headcount_type}),請先在上方購買`); return; }
+
+  const { ok, data } = await api("/booking/charter", {
+    method: "POST",
+    body: JSON.stringify({
+      member_id: currentMemberId, booking_date: dateStr, start_hour: hour,
+      charter_pass_id: pass.id, equipment_type, participants,
+    })
+  });
+  if (ok) {
+    alert(`預約成功!這是第 ${data.lesson_number}/${data.package_size} 堂,剩餘 ${data.remaining} 堂(已用堂數包付款,無需再付費)`);
+    loadCharterDay(); loadAccountOverview();
+  } else {
+    alert(data.error);
+  }
+}
+
+async function loadJumpDay() {
+  const dateStr = document.getElementById("jumpDatePicker").value;
+  if (!dateStr) return;
+  const { data } = await api(`/indoor/day/${dateStr}`);
+  const existing = {};
+  data.jump_bookings.forEach(j => { existing[parseInt(j.start_time.split(":")[0])] = j; });
+  const grid = document.getElementById("jumpHourGrid");
+  grid.innerHTML = "";
+  for (let h = pricingData.indoor_hours.start; h <= pricingData.indoor_hours.last_start; h++) {
+    const row = document.createElement("div");
+    row.className = "hour-row";
+    const j = existing[h];
+    if (j) {
+      row.innerHTML = `<div>${h}:00 — 已有預約(${j.duration_minutes}分鐘)</div><div><span class="status-tag ok">已預約</span></div>`;
+    } else {
+      row.innerHTML = `<div>${h}:00</div><div><button class="small" onclick="submitJump('${dateStr}', ${h})">可預約</button></div>`;
+    }
+    grid.appendChild(row);
+  }
+}
+async function submitJump(dateStr, hour) {
+  const duration_minutes = parseInt(document.getElementById("jumpDuration").value);
+  const equipment_type = getWizardEquipment("jump");
+  const participants = getWizardParticipants("jump");
+  const { ok, data } = await api("/booking/jump", {
+    method: "POST",
+    body: JSON.stringify({
+      member_id: currentMemberId, booking_date: dateStr,
+      start_time: `${String(hour).padStart(2,"0")}:00`, duration_minutes, equipment_type, participants,
+    })
+  });
+  if (ok) { requestPayment(data.price, "jump_booking", data.id); loadJumpDay(); loadAccountOverview(); }
+  else alert(data.error);
+}
+
+async function loadMyPlanStatus() {
+  const { data } = await api(`/members/${currentMemberId}`);
+  const el = document.getElementById("myPlanStatus");
+  let html = "";
+  if (data.plan) {
+    html += `<span class="status-tag ok">方案 ${data.plan.plan_name}(${data.plan.billing_cycle === "annual" ? "年繳" : "月繳"})</span>`;
+  } else {
+    html += `<span class="status-tag warn">尚未取得團課資格</span>`;
+  }
+  const { data: applications } = await api(`/members/${currentMemberId}/plan-applications`);
+  const pending = applications.find(a => a.status === "pending");
+  if (pending) {
+    html += `<div class="list-item">申請中:方案${pending.plan_name}(${pending.billing_cycle === "annual" ? "年繳" : "月繳"})— 待客服審核</div>`;
+  }
+  el.innerHTML = html;
+}
+async function applyForPlan() {
+  const plan_name = document.getElementById("applyPlanName").value;
+  const billing_cycle = document.getElementById("applyPlanCycle").value;
+  const { ok, data } = await api("/plans/apply", {
+    method: "POST", body: JSON.stringify({ member_id: currentMemberId, plan_name, billing_cycle })
+  });
+  document.getElementById("applyPlanStatus").innerHTML = ok
+    ? `<span class="status-tag ok">已送出申請,待客服審核</span>`
+    : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) loadMyPlanStatus();
+}
+async function loadGroupDay() {
+  const dateStr = document.getElementById("groupDatePicker").value;
+  if (!dateStr) return;
+  const { data } = await api(`/indoor/day/${dateStr}`);
+  const groupSessions = {};
+  data.indoor_sessions.filter(s => s.category === "group_class").forEach(s => groupSessions[s.start_hour] = s);
+  const grid = document.getElementById("groupHourGrid");
+  grid.innerHTML = "";
+  const max = pricingData.group_class_max;
+  for (let h = pricingData.indoor_hours.start; h <= pricingData.indoor_hours.last_start; h++) {
+    const row = document.createElement("div");
+    row.className = "hour-row";
+    const sess = groupSessions[h];
+    if (sess) {
+      const count = sess.members.length;
+      const remaining = max - count;
+      const tagClass = sess.status === "confirmed" ? "ok" : "warn";
+      const full = remaining <= 0;
+      row.innerHTML = `<div>${h}:00 — 目前 ${count}/${max} 人(尚可預約 ${Math.max(remaining,0)} 人)</div>
+        <div><span class="status-tag ${tagClass}">${sess.status === "confirmed" ? "已開課" : "尚未滿2人"}</span>
+        ${full ? "" : `<button class="small" onclick="joinGroupClass('${dateStr}', ${h})">加入</button>`}</div>`;
+    } else {
+      row.innerHTML = `<div>${h}:00 — 目前 0/${max} 人(尚可預約 ${max} 人)</div>
+        <div><button class="small" onclick="joinGroupClass('${dateStr}', ${h})">開新場次</button></div>`;
+    }
+    grid.appendChild(row);
+  }
+}
+async function joinGroupClass(dateStr, hour) {
+  const equipment_type = getWizardEquipment("group");
+  const participant = getWizardParticipants("group")[0];
+  const { ok, data } = await api("/booking/group-class", {
+    method: "POST", body: JSON.stringify({ member_id: currentMemberId, booking_date: dateStr, start_hour: hour, equipment_type, participant })
+  });
+  if (ok) {
+    alert(`報名成功!目前 ${data.enrolled_count}/${data.min_required} 人(滿${data.min_required}開課)`);
+    requestPayment(data.price, "indoor_session", data.session_id);
+    loadGroupDay(); loadAccountOverview();
+  }
+  else alert(data.error);
+}
+
+async function loadJapanRegions() {
+  const { data } = await api("/japan-regions");
+  japanRegions = data;
+  const wrap = document.getElementById("navsub-japan");
+  wrap.innerHTML = data.map(r =>
+    `<div class="nav-sub-item" onclick="openJapanRegion(${r.id})">${r.name}</div>`
+  ).join("");
+}
+async function openJapanRegion(regionId) {
+  currentJapanRegion = japanRegions.find(r => r.id === regionId);
+  switchPage("japan", "japan");
+  document.querySelectorAll("#navsub-japan .nav-sub-item").forEach(el => el.classList.remove("active"));
+  if (event && event.target) event.target.classList.add("active");
+
+  document.getElementById("japanRegionTitle").textContent = `日本滑雪預約 — ${currentJapanRegion.name}`;
+  document.getElementById("japanAccommodationWrap").style.display = currentJapanRegion.requires_accommodation_option ? "block" : "none";
+  document.getElementById("japanResortManageWrap").style.display = currentJapanRegion.resort_list_editable ? "block" : "none";
+
+  const resortWrap = document.getElementById("japanResortWrap");
+  const coachSel = document.getElementById("japanCoach");
+
+  if (currentJapanRegion.requires_resort_selection) {
+    resortWrap.style.display = "block";
+    resorts = currentJapanRegion.resorts;
+    document.getElementById("japanResort").innerHTML = resorts.map(r => `<option value="${r.id}">${r.name}</option>`).join("");
+    await onJapanResortChange();
+  } else {
+    resortWrap.style.display = "none";
+    resorts = currentJapanRegion.resorts;
+    const soleResortId = resorts[0] ? resorts[0].id : null;
+    if (!currentJapanRegion.allow_designate_coach) {
+      coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
+    } else if (soleResortId) {
+      const { data } = await api(`/resorts/${soleResortId}/coaches`);
+      coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
+        data.map(c => `<option value="${c.id}">${c.display_code || c.name} 教練</option>`).join("");
+    }
+  }
+  updateJapanPrice();
+}
+async function onJapanResortChange() {
+  const resortId = document.getElementById("japanResort").value;
+  const coachSel = document.getElementById("japanCoach");
+  if (!currentJapanRegion.allow_designate_coach) {
+    coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
+    updateJapanPrice();
+    return;
+  }
+  if (!resortId) { coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>'; return; }
+  const { data } = await api(`/resorts/${resortId}/coaches`);
+  coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派,系統將自動確認該雪場當天教練容量)</option>' +
+    data.map(c => `<option value="${c.id}">${c.display_code || c.name} 教練</option>`).join("");
+  updateJapanPrice();
+}
+function openResortManage() {
+  const name = prompt("輸入要新增的雪場名稱(直接按取消可跳過新增):");
+  if (!name) return;
+  const code = "custom_" + Date.now();
+  api("/admin/resorts", {
+    method: "POST", body: JSON.stringify({ region_id: currentJapanRegion.id, code, name })
+  }).then(() => { alert("已新增,重新整理雪場清單"); loadJapanRegions().then(() => openJapanRegion(currentJapanRegion.id)); });
+}
+
+function generateJapanDateRange() {
+  const startStr = document.getElementById("japanStartDate").value;
+  const endStr = document.getElementById("japanEndDate").value;
+  const note = document.getElementById("japanRangeNote");
+  if (!startStr || !endStr) { japanSelectedDates = []; return; }
+
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  if (end < start) {
+    note.innerHTML = `<span class="status-tag warn">結束日期不能早於開始日期</span>`;
+    japanSelectedDates = [];
+    return;
+  }
+  const dates = [];
+  let cur = new Date(start);
+  while (cur <= end) {
+    dates.push(cur.toISOString().slice(0,10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  const outOfSeason = dates.filter(d => !pricingData.japan_season_months.includes(parseInt(d.split("-")[1])));
+  if (outOfSeason.length) {
+    note.innerHTML = `<span class="status-tag warn">${outOfSeason.join("、")} 不在雪季範圍內(每年12月至隔年4月),請重新選擇日期</span>`;
+    japanSelectedDates = [];
+    return;
+  }
+  note.innerHTML = `<span class="status-tag ok">共 ${dates.length} 天:${dates[0]} ~ ${dates[dates.length-1]}</span>`;
+  japanSelectedDates = dates;
+  toggleJapanHalfSlot();
+  updateJapanPrice();
+}
+function toggleJapanHalfSlot() {
+  const type = document.getElementById("japanDayType").value;
+  document.getElementById("japanHalfSlotWrap").style.display = type === "half" ? "block" : "none";
+}
+function updateJapanPrice() {
+  if (!pricingData || japanSelectedDates.length === 0) return;
+  const dayType = document.getElementById("japanDayType").value;
+  const headcount = getWizardHeadcount("japan");
+  const coach = document.getElementById("japanCoach").value;
+  const table = dayType === "half" ? pricingData.japan_half_day : pricingData.japan_full_day;
+  const perDay = table[headcount] + (coach ? pricingData.japan_designate_coach_fee : 0);
+  const total = perDay * japanSelectedDates.length;
+  document.getElementById("japanPriceDisplay").textContent =
+    `每日 NT$${perDay} × ${japanSelectedDates.length} 天 = 總金額 NT$${total}`;
+}
+async function submitJapanTrip() {
+  if (japanSelectedDates.length === 0) { alert("請先選擇行程日期"); return; }
+  const resortId = currentJapanRegion.requires_resort_selection
+    ? parseInt(document.getElementById("japanResort").value)
+    : currentJapanRegion.resorts[0].id;
+  const coachVal = document.getElementById("japanCoach").value;
+  const coach_id = (currentJapanRegion.allow_designate_coach && coachVal) ? parseInt(coachVal) : null;
+  const headcount = getWizardHeadcount("japan");
+  const equipment_type = getWizardEquipment("japan");
+  const participants = getWizardParticipants("japan");
+  const day_type = document.getElementById("japanDayType").value;
+  const half_day_slot = day_type === "half" ? document.getElementById("japanHalfSlot").value : null;
+  const needs_accommodation = currentJapanRegion.requires_accommodation_option
+    ? document.getElementById("japanAccommodation").value === "1" : false;
+
+  const bookings = japanSelectedDates.map(d => ({
+    resort_id: resortId, date: d, day_type, half_day_slot, headcount, coach_id,
+  }));
+
+  const { ok, data } = await api("/booking/japan", {
+    method: "POST",
+    body: JSON.stringify({ member_id: currentMemberId, bookings, equipment_type, participants, needs_accommodation })
+  });
+  if (ok) {
+    japanSelectedDates = [];
+    document.getElementById("japanStartDate").value = "";
+    document.getElementById("japanEndDate").value = "";
+    document.getElementById("japanRangeNote").innerHTML = "";
+    requestPayment(data.total_price, "japan_booking", data.booking_ids[0]);
+    loadAccountOverview();
+  } else {
+    alert(data.error);
+  }
+}
+
+async function loadCoachTeam() {
+  const { data } = await api("/coaches");
+  const el = document.getElementById("coachTeamList");
+  el.innerHTML = data.map(c => `
+    <div class="coach-card">
+      <img src="${c.promo_photo || ''}" alt="${c.name}">
+      <div>
+        <b>${c.name}${c.display_code ? `(${c.display_code})` : ""}</b>
+        <p class="note">${c.self_intro || "尚未填寫自我介紹"}</p>
+      </div>
+    </div>
+  `).join("") || `<p class="note">尚無教練資料</p>`;
+}
+
+function bookingRowHtml(b) {
+  const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
+  const resort = b.resort_name ? `${b.resort_name}・` : "";
+  const equip = b.equipment_type ? `・${b.equipment_type === "ski" ? "雙板" : "單板"}` : "";
+  const accom = b.needs_accommodation ? "・需住宿" : "";
+  const payTagClass = b.payment_status === "confirmed" ? "ok" : "warn";
+  const payTag = `<span class="status-tag ${payTagClass}">${b.payment_label}</span>`;
+  const isCancelled = b.status === "cancelled";
+  let actions = "";
+  if (!isCancelled) {
+    if (b.category === "japan") {
+      actions = `<button class="small secondary" onclick="cancelBooking('japan','${b.group_key}')">取消整趟行程</button>`;
+    } else {
+      const cat = b.category === "jump" ? "jump" : "indoor";
+      actions = `
+        <button class="small secondary" onclick="cancelBooking('${cat}', ${b.booking_ref_id})">取消</button>
+        <button class="small secondary" onclick="rescheduleBooking('${cat}', ${b.booking_ref_id})">修改日期時段</button>`;
+    }
+  }
+  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag}<br>${actions}</div>`;
+}
+
+async function cancelBooking(kind, refId) {
+  if (!confirm("確定要取消這筆預約嗎?")) return;
+  let path;
+  if (kind === "indoor") path = `/booking/indoor/${refId}/cancel`;
+  else if (kind === "jump") path = `/booking/jump/${refId}/cancel`;
+  else path = `/booking/japan/${refId}/cancel`;
+  const { ok, data } = await api(path, { method: "POST" });
+  if (ok) { alert("已取消"); loadAccountOverview(); }
+  else alert(data.error);
+}
+
+let _pendingReschedule = null;
+
+function rescheduleBooking(kind, refId) {
+  _pendingReschedule = { kind, refId };
+  document.getElementById("rescheduleDate").value = "";
+  document.getElementById("rescheduleDate").min = new Date().toISOString().slice(0,10);
+  document.getElementById("rescheduleHourWrap").style.display = kind === "indoor" ? "block" : "none";
+  document.getElementById("rescheduleTimeWrap").style.display = kind === "jump" ? "block" : "none";
+  if (kind === "indoor") {
+    const sel = document.getElementById("rescheduleHour");
+    sel.innerHTML = "";
+    for (let h = pricingData.indoor_hours.start; h <= pricingData.indoor_hours.last_start; h++) {
+      sel.innerHTML += `<option value="${h}">${h}:00</option>`;
+    }
+  }
+  document.getElementById("rescheduleOverlay").style.display = "flex";
+}
+function closeRescheduleModal() {
+  document.getElementById("rescheduleOverlay").style.display = "none";
+  _pendingReschedule = null;
+}
+function onRescheduleDateChange() {}
+async function confirmRescheduleModal() {
+  if (!_pendingReschedule) return;
+  const newDate = document.getElementById("rescheduleDate").value;
+  if (!newDate) { alert("請選擇新日期"); return; }
+  const { kind, refId } = _pendingReschedule;
+  let path, body;
+  if (kind === "indoor") {
+    const newHour = parseInt(document.getElementById("rescheduleHour").value);
+    path = `/booking/indoor/${refId}/reschedule`;
+    body = { new_date: newDate, new_hour: newHour };
+  } else {
+    const newTime = document.getElementById("rescheduleTime").value;
+    if (!newTime) { alert("請選擇新時間"); return; }
+    path = `/booking/jump/${refId}/reschedule`;
+    body = { new_date: newDate, new_time: newTime };
+  }
+  const { ok, data } = await api(path, { method: "POST", body: JSON.stringify(body) });
+  document.getElementById("rescheduleOverlay").style.display = "none";
+  _pendingReschedule = null;
+  if (ok) { alert("修改成功"); loadAccountOverview(); }
+  else alert(data.error);
+}
+async function loadAccountOverview() {
+  const { data } = await api(`/members/${currentMemberId}`);
+  const el = document.getElementById("accountOverview");
+
+  document.getElementById("memberBanner").textContent = data.member_code
+    ? `會員編號:${data.member_code}`
+    : `會員:${data.member.name}(尚未產生會員編號,請至會員中心填寫性別與主要滑行項目)`;
+
+  let html = "";
+  if (data.plan) {
+    html += `<div class="list-item">目前方案:${data.plan.plan_name}(${data.plan.billing_cycle === "annual" ? "年繳" : "月繳"})</div>`;
+  } else {
+    html += `<div class="list-item">尚未取得團課方案資格</div>`;
+  }
+  if (data.quota_status) {
+    const q = data.quota_status;
+    const cycleNote = q.quota_cycle_start
+      ? `(額度週期自 ${q.quota_cycle_start} 起算,每滿一個月重新計算)`
+      : "";
+    html += `<div class="list-item">本月包機課額度:${q.charter_used}/${q.charter_total}、自主練習額度:${q.self_practice_used}/${q.self_practice_total}、團課額度:${q.group_class_used}/${q.group_class_total}${cycleNote}</div>`;
+    if (q.billing_cycle === "monthly") {
+      html += q.monthly_paid
+        ? `<div class="list-item"><span class="status-tag ok">本月方案費用已繳納</span></div>`
+        : `<div class="list-item"><span class="status-tag warn">本月方案費用尚未繳納,額度暫不可用,請洽客服確認繳費</span></div>`;
+    }
+  }
+  if (data.charter_passes.length) {
+    html += data.charter_passes.map(p => `<div class="list-item">包機堂數包(1對${p.headcount_type}・${p.package_size}堂):剩餘 ${p.remaining} 堂</div>`).join("");
+  } else {
+    html += `<div class="list-item">尚無包機堂數包</div>`;
+  }
+
+  html += `<h3 style="margin-top:14px; font-size:14px;">我的預約</h3>`;
+  html += data.my_bookings.length ? data.my_bookings.map(bookingRowHtml).join("") : `<div class="list-item">目前沒有預約紀錄</div>`;
+
+  el.innerHTML = html;
+
+  const m = data.member;
+  document.getElementById("pName").value = m.name || "";
+  document.getElementById("pBirthDate").value = m.birth_date || "";
+  document.getElementById("pGender").value = m.gender || "";
+  document.getElementById("pIdNumber").value = m.id_number || "";
+  document.getElementById("pBloodType").value = m.blood_type || "";
+  document.getElementById("pAddress").value = m.address || "";
+  document.getElementById("pPhone").value = m.phone || "";
+  document.getElementById("pEmail").value = m.email || "";
+  document.getElementById("pLineId").value = m.line_id || "";
+  document.getElementById("pSocial").value = m.social_handle || "";
+  document.getElementById("pEmergencyName").value = m.emergency_contact_name || "";
+  document.getElementById("pEmergencyPhone").value = m.emergency_contact_phone || "";
+  document.getElementById("pHeight").value = m.height_cm || "";
+  document.getElementById("pWeight").value = m.weight_kg || "";
+  document.getElementById("pSbLength").value = m.snowboard_length || "";
+  document.getElementById("pSbBoot").value = m.snowboard_boot_size || "";
+  document.getElementById("pSkiLength").value = m.ski_length || "";
+  document.getElementById("pSkiBoot").value = m.ski_boot_size || "";
+  document.getElementById("pMachineLevel").value = m.machine_level || "";
+  document.getElementById("pSnowLevel").value = m.snow_level || "";
+  document.getElementById("pPrimaryEquipment").value = m.primary_equipment || "";
+}
+async function saveMyProfile() {
+  const payload = {
+    name: document.getElementById("pName").value,
+    birth_date: document.getElementById("pBirthDate").value,
+    gender: document.getElementById("pGender").value,
+    id_number: document.getElementById("pIdNumber").value,
+    blood_type: document.getElementById("pBloodType").value,
+    address: document.getElementById("pAddress").value,
+    phone: document.getElementById("pPhone").value,
+    email: document.getElementById("pEmail").value,
+    line_id: document.getElementById("pLineId").value,
+    social_handle: document.getElementById("pSocial").value,
+    emergency_contact_name: document.getElementById("pEmergencyName").value,
+    emergency_contact_phone: document.getElementById("pEmergencyPhone").value,
+    height_cm: document.getElementById("pHeight").value || null,
+    weight_kg: document.getElementById("pWeight").value || null,
+    snowboard_length: document.getElementById("pSbLength").value,
+    snowboard_boot_size: document.getElementById("pSbBoot").value,
+    ski_length: document.getElementById("pSkiLength").value,
+    ski_boot_size: document.getElementById("pSkiBoot").value,
+    machine_level: document.getElementById("pMachineLevel").value,
+    snow_level: document.getElementById("pSnowLevel").value,
+    primary_equipment: document.getElementById("pPrimaryEquipment").value,
+  };
+  const { ok } = await api(`/members/${currentMemberId}/profile`, {
+    method: "PUT", body: JSON.stringify(payload)
+  });
+  document.getElementById("profileSaveStatus").innerHTML = ok
+    ? `<span class="status-tag ok">已儲存</span>`
+    : `<span class="status-tag warn">儲存失敗</span>`;
+  loadAccountOverview();
+}
+</script>
+</body>
+</html>

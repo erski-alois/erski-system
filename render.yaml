@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: erski-system
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt && python3 db.py"
+    startCommand: "gunicorn -w 2 -b 0.0.0.0:$PORT app:app"
