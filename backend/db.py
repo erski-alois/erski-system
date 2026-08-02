@@ -229,8 +229,16 @@ def _seed_demo_bookings(conn):
 
 
 def init_db(reset=False):
-    if reset and os.path.exists(DB_PATH):
+    already_exists = os.path.exists(DB_PATH)
+    if reset and already_exists:
         os.remove(DB_PATH)
+        already_exists = False
+    if already_exists:
+        # 資料庫檔案已存在:不重跑 schema.sql/種子資料。schema.sql 裡的 INSERT 是
+        # 一般 INSERT(非 INSERT OR IGNORE),對已存在的資料庫重跑會因為 UNIQUE
+        # 欄位衝突而丟例外;更重要的是,這裡本來就不該對已經有資料的資料庫重新
+        # 塞一次種子資料,以免蓋掉/弄亂正式環境已經累積的真實資料。
+        return
     conn = get_conn()
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
         conn.executescript(f.read())
@@ -246,8 +254,14 @@ def rows_to_dicts(rows):
 
 
 if __name__ == "__main__":
-    init_db(reset=True)
-    print(f"Database initialized at {DB_PATH}")
+    import sys
+    # 重要:預設不重置資料庫!Render 的 build command 會在「每一次 deploy」都執行
+    # `python3 db.py`,如果這裡預設 reset=True,等於每次上版都會把正式環境資料庫
+    # 整個刪掉重建、洗光所有真實會員/訂單資料。只有明確加上 --reset 參數
+    # (本機開發想重來一份乾淨資料庫時)才會真的清空重建。
+    do_reset = "--reset" in sys.argv
+    init_db(reset=do_reset)
+    print(f"Database initialized at {DB_PATH} (reset={do_reset})")
     print("示範員工帳號(工號 / 密碼 / 角色): "
           "0001/800101/boss、0002/850202/manager、0003/900303/cs、0004/950404/coach")
 
