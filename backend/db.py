@@ -166,7 +166,14 @@ def _seed_zao_coaches(conn):
                 "INSERT INTO coach_certifications (coach_id, cert_type, cert_name, cert_level) VALUES (?, ?, ?, ?)",
                 (staff_id, cert_type, cert_name, cert_level),
             )
-        # 駐在地不預先指派,由後台主管視需要手動指派
+        # 藏王駐站教練預設指派到藏王溫泉滑雪場,讓客戶端「指定教練」選單一開始就看得到人
+        # (其他雪場駐點仍由後台主管視需要手動指派/調整)
+        zao_resort = conn.execute("SELECT id FROM ski_resorts WHERE code='zao_main'").fetchone()
+        if zao_resort:
+            conn.execute(
+                "INSERT OR IGNORE INTO resort_coaches (resort_id, coach_id) VALUES (?, ?)",
+                (zao_resort["id"], staff_id),
+            )
 
 
 def _seed_demo_bookings(conn):

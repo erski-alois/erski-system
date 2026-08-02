@@ -2481,6 +2481,7 @@ const CONTRACT_TYPE_LABEL = {
 async function renderCoachManageTools() {
   const wrap = document.getElementById("staffTab-coaches");
   const { data: coaches } = await api("/coaches");
+  const { data: resorts } = await api("/admin/resorts");
 
   let coachHtml = `<h3 style="margin-top:16px; font-size:14px;">教練團隊管理(主管/老闆)</h3>`;
   coachHtml += coaches.map(c => `
@@ -2509,6 +2510,11 @@ async function renderCoachManageTools() {
       </div>
       <label>電話</label><input id="newCoachPhone">
       <label>分店</label><input id="newCoachBranch" value="高雄">
+      <label>日本雪場駐點(可不選,之後再到「日本雪場管理」指派)</label>
+      <select id="newCoachResort">
+        <option value="">先不指派</option>
+        ${resorts.filter(r => r.is_active).map(r => `<option value="${r.id}">${r.name}</option>`).join("")}
+      </select>
       <button class="small" onclick="createCoachAdmin()">建立教練帳號</button>
       <div id="newCoachStatus" style="margin-top:6px;"></div>
     </div>
@@ -2802,6 +2808,7 @@ async function createCoachAdmin() {
   const birthday = (by && bm && bd) ? `${by}-${String(bm).padStart(2,"0")}-${String(bd).padStart(2,"0")}` : "";
   const phone = document.getElementById("newCoachPhone").value;
   const branch = document.getElementById("newCoachBranch").value;
+  const resort_id = document.getElementById("newCoachResort").value;
   if (!name || !work_id || !birthday) {
     document.getElementById("newCoachStatus").innerHTML = `<span class="status-tag warn">請填寫姓名/工號/生日</span>`;
     return;
@@ -2810,9 +2817,19 @@ async function createCoachAdmin() {
     method: "POST",
     body: JSON.stringify({ name, work_id, birthday, phone, branch, role: "coach" })
   });
-  document.getElementById("newCoachStatus").innerHTML = ok
-    ? `<span class="status-tag ok">建立成功,預設密碼:${data.default_password}</span>`
-    : `<span class="status-tag warn">建立失敗</span>`;
+  if (ok && resort_id) {
+    const assignRes = await api("/admin/resort-coaches", {
+      method: "POST",
+      body: JSON.stringify({ resort_id: parseInt(resort_id), coach_id: data.id })
+    });
+    document.getElementById("newCoachStatus").innerHTML = assignRes.ok
+      ? `<span class="status-tag ok">建立成功並已指派雪場,預設密碼:${data.default_password}</span>`
+      : `<span class="status-tag warn">教練建立成功,但雪場指派失敗(${assignRes.data.error || "請到日本雪場管理頁面手動指派"}),預設密碼:${data.default_password}</span>`;
+  } else {
+    document.getElementById("newCoachStatus").innerHTML = ok
+      ? `<span class="status-tag ok">建立成功,預設密碼:${data.default_password}</span>`
+      : `<span class="status-tag warn">建立失敗</span>`;
+  }
   if (ok) await renderCoachManageTools();
 }
 

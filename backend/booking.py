@@ -184,6 +184,24 @@ def _validate_not_past(booking_date, start_hour=None):
             )
 
 
+def _check_equipment_consistency(conn, member_id, equipment_type):
+    """團課與自主練習共用同一份裝備(雙板/單板),兩者裝備類型須一致:
+    若會員先前已用某種裝備類型報名過團課或自主練習,之後這兩類課程都必須維持同一種裝備類型。"""
+    if not equipment_type:
+        return
+    row = conn.execute(
+        """SELECT sm.equipment_type FROM indoor_session_members sm
+           JOIN indoor_sessions s ON sm.session_id = s.id
+           WHERE sm.member_id=? AND s.category IN ('group_class','self_practice')
+             AND sm.status != 'cancelled' AND sm.equipment_type IS NOT NULL
+           ORDER BY sm.created_at LIMIT 1""",
+        (member_id,),
+    ).fetchone()
+    if row and row["equipment_type"] != equipment_type:
+        label = "雙板" if row["equipment_type"] == "ski" else "單板"
+        raise ValueError(f"你的團課/自主練習裝備類型已固定為{label},請選擇相同裝備類型")
+
+
 def _insert_participants(conn, ref_type, ref_id, participants):
     """participants: [{'gender':'male','age':30,'height_cm':170,'weight_kg':65,'shoe_size':'26'}, ...]"""
     for p in participants or []:
@@ -398,6 +416,11 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
+    try:
+        _check_equipment_consistency(conn, member_id, equipment_type)
+    except ValueError:
+        conn.close()
+        raise
 
     quota_consumed = False
     if use_plan_quota:
@@ -450,6 +473,11 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
+    try:
+        _check_equipment_consistency(conn, member_id, equipment_type)
+    except ValueError:
+        conn.close()
+        raise
 
     plan = conn.execute(
         "SELECT * FROM member_plans WHERE member_id=? AND is_active=1", (member_id,)
