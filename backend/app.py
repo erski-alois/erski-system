@@ -41,6 +41,11 @@ def serve_icon_512():
     return send_from_directory(FRONTEND_DIR, "icon-512.png", mimetype="image/png")
 
 
+@app.route("/logo-erski.png")
+def serve_login_logo():
+    return send_from_directory(FRONTEND_DIR, "logo-erski.png", mimetype="image/png")
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
