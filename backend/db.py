@@ -44,6 +44,11 @@ else:
 
 _INSERT_TABLE_RE = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
 _HAS_RETURNING_RE = re.compile(r"\bRETURNING\b", re.IGNORECASE)
+# SQLite的GROUP_CONCAT(expr, sep)跟Postgres的STRING_AGG(expr, sep)參數順序、
+# 行為完全一樣(串接非NULL值、用sep分隔)，可以直接置換函式名稱，不用改寫
+# 呼叫端SQL(上線後才發現這處，2026-08-23補上，同類SQLite專屬語法如果之後
+# 又漏到，錯誤訊息會是psycopg2.errors.UndefinedFunction，照這個模式加规则)。
+_GROUP_CONCAT_RE = re.compile(r"GROUP_CONCAT\s*\(", re.IGNORECASE)
 
 
 class _PGCursorWrapper:
@@ -55,6 +60,7 @@ class _PGCursorWrapper:
 
     def execute(self, sql, params=()):
         translated = sql.replace("?", "%s")
+        translated = _GROUP_CONCAT_RE.sub("STRING_AGG(", translated)
         stripped_upper = translated.strip().upper()
 
         # SQLite用「BEGIN IMMEDIATE」立即取得寫入鎖，避免多個請求同時通過
