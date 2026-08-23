@@ -1,12 +1,125 @@
-import sqlite3
+"""
+資料庫連線層。
+
+有設定 DATABASE_URL 環境變數(格式 postgres://... 或 postgresql://...)時，
+連正式的 PostgreSQL；沒有設定時，退回本機 erski.db 這個 SQLite 檔案，方便
+本機開發/測試不用另外裝資料庫。
+
+上層(app.py/booking.py/payroll.py/pricing.py/auth.py)完全不用改，繼續用
+原本 sqlite3 風格寫法(? 參數、cur.lastrowid、conn.execute("BEGIN IMMEDIATE")
+等)即可 — 底下的 _PGConnWrapper/_PGCursorWrapper 負責把這些呼叫轉換成
+psycopg2 能懂的形式。這是刻意的設計選擇:與其把323處既有SQL呼叫全部
+改寫成psycopg2原生寫法(改動大、風險高)，不如做一層薄的相容層，讓兩種
+資料庫共用同一套上層程式碼，日後也比較好同時維護SQLite(本機測試用)
+與PostgreSQL(正式環境用)兩份schema。
+"""
+
 import os
+import re
+import sqlite3
 import hashlib
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "erski.db")
-SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
+SCHEMA_PATH_SQLITE = os.path.join(os.path.dirname(__file__), "schema.sql")
+SCHEMA_PATH_POSTGRES = os.path.join(os.path.dirname(__file__), "schema_postgres.sql")
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
+
+if USE_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+    import psycopg2.extensions
+
+# app.py/booking.py/payroll.py/pricing.py 裡有多處直接在SQL字串中寫
+# datetime('now')(SQLite專屬語法),取現在時間字串。這裡提供一個依連線
+# 對象動態選用的SQL片段常數,讓那些呼叫端把 datetime('now') 換成
+# f"{db.NOW_SQL}" 就能兩種資料庫通用,不用整段改寫成Python端算好時間字串
+# 再傳參數(改動範圍更大、更容易漏改)。
+if USE_POSTGRES:
+    NOW_SQL = "to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+else:
+    NOW_SQL = "datetime('now')"
+
+
+_INSERT_TABLE_RE = re.compile(r"^\s*INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
+_HAS_RETURNING_RE = re.compile(r"\bRETURNING\b", re.IGNORECASE)
+
+
+class _PGCursorWrapper:
+    """把 psycopg2 cursor 包裝成跟 sqlite3 cursor 介面相容(?, lastrowid)。"""
+
+    def __init__(self, pg_cursor):
+        self._cur = pg_cursor
+        self.lastrowid = None
+
+    def execute(self, sql, params=()):
+        translated = sql.replace("?", "%s")
+        stripped_upper = translated.strip().upper()
+
+        # SQLite用「BEGIN IMMEDIATE」立即取得寫入鎖，避免多個請求同時通過
+        # 衝突檢查造成雙重預約；Postgres沒有這個語法，改用SERIALIZABLE
+        # isolation level做同等的保護(必須是這個連線的第一個指令，程式碼裡
+        # 目前4處用法都確實是conn = get_conn()後的第一個呼叫)。
+        if stripped_upper in ("BEGIN IMMEDIATE", "BEGIN"):
+            self._cur.connection.set_session(isolation_level=psycopg2.extensions.ISOLATION_LEVEL_SERIALIZABLE)
+            self.lastrowid = None
+            return self
+
+        m = _INSERT_TABLE_RE.match(translated)
+        if m and not _HAS_RETURNING_RE.search(translated):
+            # 所有41張表都是 id SERIAL PRIMARY KEY，所以自動補 RETURNING id
+            # 就能讓 cur.lastrowid 跟 sqlite3 的行為一致，不用逐一改寫36處
+            # 呼叫端程式碼。
+            translated = translated.rstrip().rstrip(";") + " RETURNING id"
+            self._cur.execute(translated, params)
+            row = self._cur.fetchone()
+            self.lastrowid = row["id"] if row else None
+        else:
+            self._cur.execute(translated, params)
+            self.lastrowid = None
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+
+class _PGConnWrapper:
+    """把 psycopg2 連線包裝成跟 sqlite3.Connection 介面相容(execute/executescript/commit/rollback/close)。"""
+
+    def __init__(self, pg_conn):
+        self._conn = pg_conn
+
+    def execute(self, sql, params=()):
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        wrapper = _PGCursorWrapper(cur)
+        return wrapper.execute(sql, params)
+
+    def executescript(self, script):
+        cur = self._conn.cursor()
+        cur.execute(script)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
 
 
 def get_conn():
+    if USE_POSTGRES:
+        pg_conn = psycopg2.connect(DATABASE_URL)
+        return _PGConnWrapper(pg_conn)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -19,6 +132,8 @@ def _hash(raw):
 
 DEMO_STAFF = [
     # work_id, name, display_code, birthday(YYYY-MM-DD), role, branch
+    # ⚠️ 這5筆是「展示/測試帳號」，正式營運請勿沿用預設密碼(生日六碼)，
+    # 首次登入後務必要求改密碼，正式員工資料建議另外用後台/匯入工具建立。
     ("0001", "陳老闆", "", "1980-01-01", "boss", "高雄"),
     ("0002", "林主管", "", "1985-02-02", "manager", "高雄"),
     ("0003", "黃客服", "", "1990-03-03", "cs", "高雄"),
@@ -31,9 +146,10 @@ def _seed_demo_staff(conn):
     for work_id, name, code, birthday, role, branch in DEMO_STAFF:
         password = birthday.replace("-", "")[2:8]  # 生日六碼(YYMMDD)
         conn.execute(
-            """INSERT OR IGNORE INTO staff
+            """INSERT INTO staff
                (work_id, name, display_code, phone, birthday, password_hash, role, branch)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (work_id) DO NOTHING""",
             (work_id, name, code, "0900000000", birthday, _hash(password), role, branch),
         )
     # 示範:把甲、乙教練指派到雪場 A(id=1),供日本教練課容量計算測試
@@ -42,15 +158,15 @@ def _seed_demo_staff(conn):
     ).fetchall()
     for c in coach_ids:
         conn.execute(
-            "INSERT OR IGNORE INTO resort_coaches (resort_id, coach_id) VALUES (1, ?)",
+            "INSERT INTO resort_coaches (resort_id, coach_id) VALUES (1, ?) ON CONFLICT (resort_id, coach_id) DO NOTHING",
             (c["id"],),
         )
 
 
 def _seed_zao_coaches(conn):
-    """藏王駐站教練團隊完整資料(姓名/證照/駐在地/自我介紹)。"""
-    import re
-    import hashlib
+    """藏王駐站教練團隊完整資料(姓名/證照/駐在地/自我介紹)。這不是測試資料，是實際教練團隊的介紹內容，
+    只有生日/密碼是佔位值，正式使用前記得在後台把每位教練的真實生日更新過一次(密碼=生日六碼)。"""
+    import re as _re
 
     CERT_TYPE_MAP = {"CASI": "snowboard", "CSAI": "snowboard", "CSIA": "ski",
                       "PARK": "other", "APSI": "other", "SIA": "other"}
@@ -61,7 +177,7 @@ def _seed_zao_coaches(conn):
             part = part.strip()
             if not part:
                 continue
-            m = re.match(r"([A-Za-z]+)\s+(.*)", part)
+            m = _re.match(r"([A-Za-z]+)\s+(.*)", part)
             if m:
                 cert_name, cert_level = m.group(1), m.group(2)
                 cert_type = CERT_TYPE_MAP.get(cert_name.upper(), "other")
@@ -143,7 +259,6 @@ def _seed_zao_coaches(conn):
          "quote": "滑雪不只是運動,更是與自己身體對話的療癒旅程。"},
     ]
 
-    locs = {r["name"]: r["id"] for r in conn.execute("SELECT * FROM coach_location_options")}
     work_id_start = 2001
     for i, c in enumerate(coaches):
         work_id = str(work_id_start + i)
@@ -154,7 +269,7 @@ def _seed_zao_coaches(conn):
         password = birthday.replace("-", "")[2:8]
         cur = conn.execute(
             "INSERT INTO staff (work_id, name, phone, birthday, password_hash, role, branch) VALUES (?, ?, ?, ?, ?, 'coach', ?)",
-            (work_id, c["name"], None, birthday, hashlib.sha256(password.encode()).hexdigest(), "日本藏王"),
+            (work_id, c["name"], None, birthday, _hash(password), "日本藏王"),
         )
         staff_id = cur.lastrowid
         conn.execute(
@@ -166,21 +281,12 @@ def _seed_zao_coaches(conn):
                 "INSERT INTO coach_certifications (coach_id, cert_type, cert_name, cert_level) VALUES (?, ?, ?, ?)",
                 (staff_id, cert_type, cert_name, cert_level),
             )
-        # 藏王駐站教練預設指派到藏王溫泉滑雪場,讓客戶端「指定教練」選單一開始就看得到人
-        # (其他雪場駐點仍由後台主管視需要手動指派/調整)
-        zao_resort = conn.execute("SELECT id FROM ski_resorts WHERE code='zao_main'").fetchone()
-        if zao_resort:
-            conn.execute(
-                "INSERT OR IGNORE INTO resort_coaches (resort_id, coach_id) VALUES (?, ?)",
-                (zao_resort["id"], staff_id),
-            )
+        # 駐在地不預先指派,由後台主管視需要手動指派
 
 
 def _seed_demo_bookings(conn):
-    """
-    示範資料:給ALOIS設定時薪,並建立幾筆測試課程(高雄體驗課x2、日本教練課全日x1),
-    方便對照「教練課表/授課時數/計費」實際畫面,拿來參考後續表單管理需要調整什麼。
-    """
+    """⚠️ 純測試資料(假會員陳小姐+幾筆假預約)，只給本機/測試環境用來對照畫面，
+    正式環境的 init_production_db() 不會呼叫這個函式，避免正式資料庫混入假訂單。"""
     alois = conn.execute("SELECT id FROM staff WHERE work_id='2001'").fetchone()
     if not alois:
         return
@@ -191,9 +297,9 @@ def _seed_demo_bookings(conn):
         return  # 已經建立過示範資料,不重複建立
 
     conn.execute(
-        """INSERT INTO coach_profiles (coach_id, hourly_rate, updated_at)
-           VALUES (?, ?, datetime('now'))
-           ON CONFLICT(coach_id) DO UPDATE SET hourly_rate=excluded.hourly_rate, updated_at=datetime('now')""",
+        f"""INSERT INTO coach_profiles (coach_id, hourly_rate, updated_at)
+           VALUES (?, ?, {NOW_SQL})
+           ON CONFLICT(coach_id) DO UPDATE SET hourly_rate=excluded.hourly_rate, updated_at=excluded.updated_at""",
         (alois_id, 800),
     )
 
@@ -228,20 +334,29 @@ def _seed_demo_bookings(conn):
         )
 
 
-def init_db(reset=False):
-    already_exists = os.path.exists(DB_PATH)
-    if reset and already_exists:
-        os.remove(DB_PATH)
-        already_exists = False
-    if already_exists:
-        # 資料庫檔案已存在:不重跑 schema.sql/種子資料。schema.sql 裡的 INSERT 是
-        # 一般 INSERT(非 INSERT OR IGNORE),對已存在的資料庫重跑會因為 UNIQUE
-        # 欄位衝突而丟例外;更重要的是,這裡本來就不該對已經有資料的資料庫重新
-        # 塞一次種子資料,以免蓋掉/弄亂正式環境已經累積的真實資料。
-        return
+def init_schema():
+    """只建立資料表結構(不清空既有資料)。正式環境改用Alembic migration取代這個函式，
+    這裡保留給本機快速測試用。"""
     conn = get_conn()
-    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-        conn.executescript(f.read())
+    if USE_POSTGRES:
+        with open(SCHEMA_PATH_POSTGRES, "r", encoding="utf-8") as f:
+            conn.executescript(f.read())
+    else:
+        with open(SCHEMA_PATH_SQLITE, "r", encoding="utf-8") as f:
+            conn.executescript(f.read())
+    conn.commit()
+    conn.close()
+
+
+def init_db(reset=False):
+    """⚠️ 僅供本機開發/測試使用！reset=True會先整個刪掉SQLite檔案再重建，
+    這正是造成「正式環境每次重新部署資料就消失」那個問題的函式，正式環境
+    建置腳本(build.sh/render.yaml)不應該再呼叫這個函式，改呼叫下面的
+    ensure_schema_only()，資料表結構改由Alembic migration管理。"""
+    if reset and not USE_POSTGRES and os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+    init_schema()
+    conn = get_conn()
     _seed_demo_staff(conn)
     _seed_zao_coaches(conn)
     _seed_demo_bookings(conn)
@@ -249,19 +364,33 @@ def init_db(reset=False):
     conn.close()
 
 
+def ensure_schema_only():
+    """正式環境部署用：只確保資料表結構存在(不重建、不塞測試資料)。
+    實際正式環境請改用 Alembic migration(見 alembic/ 目錄)，這個函式只是
+    給還沒設定好Alembic前的過渡期/緊急情況使用。"""
+    init_schema()
+
+
 def rows_to_dicts(rows):
     return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":
-    import sys
-    # 重要:預設不重置資料庫!Render 的 build command 會在「每一次 deploy」都執行
-    # `python3 db.py`,如果這裡預設 reset=True,等於每次上版都會把正式環境資料庫
-    # 整個刪掉重建、洗光所有真實會員/訂單資料。只有明確加上 --reset 參數
-    # (本機開發想重來一份乾淨資料庫時)才會真的清空重建。
-    do_reset = "--reset" in sys.argv
-    init_db(reset=do_reset)
-    print(f"Database initialized at {DB_PATH} (reset={do_reset})")
-    print("示範員工帳號(工號 / 密碼 / 角色): "
-          "0001/800101/boss、0002/850202/manager、0003/900303/cs、0004/950404/coach")
-
+    if USE_POSTGRES:
+        # 正式資料庫：資料表結構一律由「alembic upgrade head」建立/更新，
+        # 這裡不再呼叫init_schema()(避免在已經跑過migration的資料庫上重複
+        # 執行整份schema_postgres.sql,種子資料INSERT會因為UNIQUE constraint
+        # 而報錯)。這支指令只負責補「示範員工帳號+藏王教練團隊真實資料」，
+        # 兩者都是idempotent(重複執行不會出錯/不會重複新增)，執行前請先
+        # 確認已經跑過 `alembic upgrade head`。
+        conn = get_conn()
+        _seed_demo_staff(conn)  # 內含展示帳號，正式營運請盡快在後台改密碼或停用
+        _seed_zao_coaches(conn)
+        conn.commit()
+        conn.close()
+        print("已補上示範員工帳號與藏王教練團隊資料(資料表結構請改用 alembic upgrade head 建立/更新)")
+    else:
+        init_db(reset=True)
+        print(f"Database initialized at {DB_PATH}")
+        print("示範員工帳號(工號 / 密碼 / 角色): "
+              "0001/800101/boss、0002/850202/manager、0003/900303/cs、0004/950404/coach")

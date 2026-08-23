@@ -9,7 +9,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from db import get_conn
+from db import get_conn, NOW_SQL
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -39,7 +39,7 @@ def set_config(key, value, staff_id=None):
     """後台寫入一筆價格設定(value 會被轉成 JSON 字串儲存)。"""
     conn = get_conn()
     conn.execute(
-        """UPDATE pricing_config SET config_value=?, updated_at=datetime('now'), updated_by_staff_id=?
+        f"""UPDATE pricing_config SET config_value=?, updated_at={NOW_SQL}, updated_by_staff_id=?
            WHERE config_key=?""",
         (json.dumps(value), staff_id, key),
     )

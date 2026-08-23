@@ -19,7 +19,7 @@ import calendar
 import os
 from datetime import datetime
 
-from db import get_conn
+from db import get_conn, NOW_SQL
 
 
 def _period_date_range(period):
@@ -131,20 +131,20 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     )
 
     conn.execute(
-        """INSERT INTO coach_payroll_records
+        f"""INSERT INTO coach_payroll_records
            (coach_id, period, base_salary, work_days, leave_days, leave_deduction,
             group_class_hours, group_class_amount, trial_hours, trial_amount,
             assistant_hours, assistant_amount, overtime_bonus, other_subsidy, other_subsidy_note,
             japan_travel_subsidy, japan_transportation_subsidy,
             labor_insurance, health_insurance, net_pay, notes, generated_at, confirmed_by_staff_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)
            ON CONFLICT(coach_id, period) DO UPDATE SET
              base_salary=excluded.base_salary, work_days=excluded.work_days, leave_days=excluded.leave_days,
              leave_deduction=excluded.leave_deduction, group_class_hours=excluded.group_class_hours,
              group_class_amount=excluded.group_class_amount, trial_hours=excluded.trial_hours,
              trial_amount=excluded.trial_amount, assistant_hours=excluded.assistant_hours,
              assistant_amount=excluded.assistant_amount, net_pay=excluded.net_pay,
-             generated_at=datetime('now'), confirmed_by_staff_id=excluded.confirmed_by_staff_id""",
+             generated_at={NOW_SQL}, confirmed_by_staff_id=excluded.confirmed_by_staff_id""",
         (coach_id, period, base_salary, work_days, leave_days, leave_deduction,
          group_class_hours, group_class_amount, trial_hours, trial_amount,
          assistant_hours, assistant_amount, overtime_bonus, other_subsidy, other_subsidy_note,

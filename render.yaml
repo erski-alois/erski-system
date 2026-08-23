@@ -1,8 +1,48 @@
+# ⚠️ 這份設定改用正式PostgreSQL資料庫，取代原本「每次部署都用本機SQLite
+# 重建、資料會消失」的作法。第一次用這份設定部署前，請先在Render後台
+# 手動建立一個PostgreSQL資料庫服務(Render目前的Blueprint格式建議直接在
+# 網頁後台建立資料庫，再把它的Internal Database URL貼到下面web服務的
+# DATABASE_URL環境變數裡；如果你的Render方案支援databases區塊自動建立，
+# 也可以取消下面databases區塊的註解讓它自動建立，但請先確認你的帳號方案
+# 支援這個語法，避免部署失敗)。
+#
+# buildCommand從「python3 db.py」(會清空重建整個資料庫)改成
+# 「alembic upgrade head」(只套用尚未套用過的結構變更，不影響既有資料)。
 services:
   - type: web
     name: erski-system
     runtime: python
-    plan: free
+    plan: starter   # 免費方案(free)有休眠限制，會讓APScheduler排程/資料庫連線不穩定，正式營運建議至少用starter
     rootDir: backend
-    buildCommand: "pip install -r requirements.txt && python3 db.py"
+    buildCommand: "pip install -r requirements.txt && alembic upgrade head"
     startCommand: "gunicorn -w 2 -b 0.0.0.0:$PORT app:app"
+    envVars:
+      - key: ERSKI_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false   # 請在Render後台手動貼上PostgreSQL的連線字串，不要寫在這份檔案裡
+      - key: FLASK_SECRET_KEY
+        sync: false   # 用來簽發會員/員工登入token,務必設定,可用 python3 -c "import secrets; print(secrets.token_hex(32))" 產生一組
+      - key: ECPAY_MERCHANT_ID
+        sync: false
+      - key: ECPAY_HASH_KEY
+        sync: false
+      - key: ECPAY_HASH_IV
+        sync: false
+      - key: ECPAY_MODE
+        value: test   # 申請到正式商店帳號、確認金流測試無誤後，再手動改成 production
+      - key: LINE_CHANNEL_ID
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+
+# 如果你的Render方案支援用Blueprint自動建立資料庫，取消下面註解即可；
+# 否則請在Render網頁後台手動建立PostgreSQL資料庫，並把連線字串貼到
+# 上面web服務的DATABASE_URL環境變數。
+# databases:
+#   - name: erski-db
+#     plan: basic-256mb

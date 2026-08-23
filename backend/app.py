@@ -3,8 +3,10 @@ import functools
 import os
 import json
 
-from db import get_conn, init_db, rows_to_dicts
+from db import get_conn, init_db, rows_to_dicts, NOW_SQL
+import db as _db
 import auth
+import authtoken
 import booking
 import pricing
 import payroll
@@ -13,9 +15,77 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
 
 
+# ------------------------------------------------------------------
+# 排程:團課開課前24小時內未滿成班人數自動取消(對照規則書§三)
+# ------------------------------------------------------------------
+# 這支邏輯原本只有一個要「有人/有排程呼叫」才會執行的手動API
+# (/api/admin/group-classes/check-auto-cancel),不是真的自動背景執行。
+# 這裡加上APScheduler,讓它變成真的每隔一段時間自動跑一次。
+#
+# 正式環境用gunicorn多個worker process(見render.yaml的-w 2),如果每個
+# worker都各自啟動一份排程,同一個檢查會被重複執行好幾次(邏輯本身雖然是
+# 幂等的、重複執行不會造成資料錯誤，但會浪費資源、也可能讓通知重複寫入)。
+# 用PostgreSQL的advisory lock確保同一時間只有一個worker真的執行這個工作;
+# 本機SQLite開發模式下通常只有單一process,不需要這個保護就直接執行。
+_GROUP_CLASS_AUTO_CANCEL_LOCK_KEY = 872634501  # 任意固定整數,只要在這個系統裡不跟其他advisory lock用途撞key即可
+
+
+def _run_group_class_auto_cancel_job():
+    if _db.USE_POSTGRES:
+        lock_conn = _db.psycopg2.connect(_db.DATABASE_URL)
+        try:
+            lock_conn.autocommit = True
+            cur = lock_conn.cursor()
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_GROUP_CLASS_AUTO_CANCEL_LOCK_KEY,))
+            got_lock = cur.fetchone()[0]
+            if not got_lock:
+                return  # 別的worker正在跑或剛跑完,這個worker這次不用做事
+            try:
+                cancelled = booking.check_and_auto_cancel_group_classes()
+                if cancelled:
+                    app.logger.info(f"[團課自動取消排程] 已取消場次: {cancelled}")
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (_GROUP_CLASS_AUTO_CANCEL_LOCK_KEY,))
+        finally:
+            lock_conn.close()
+    else:
+        cancelled = booking.check_and_auto_cancel_group_classes()
+        if cancelled:
+            app.logger.info(f"[團課自動取消排程] 已取消場次: {cancelled}")
+
+
+def _start_scheduler_once():
+    """避免Flask debug reloader(會啟動兩個process)或重複import造成排程被啟動兩次。"""
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "false":
+        return  # debug reloader的第一個(父)process,不用啟動
+    if getattr(app, "_erski_scheduler_started", False):
+        return
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ImportError:
+        app.logger.warning("未安裝APScheduler,團課自動取消排程不會執行,請執行 pip install -r requirements.txt")
+        return
+    scheduler = BackgroundScheduler(timezone="Asia/Taipei")
+    # 每15分鐘檢查一次即可:規則是「開課前24小時內未滿成班人數」,不需要到分鐘級即時性
+    scheduler.add_job(_run_group_class_auto_cancel_job, "interval", minutes=15, id="group_class_auto_cancel")
+    scheduler.start()
+    app._erski_scheduler_started = True
+    app.logger.info("團課自動取消排程已啟動(每15分鐘檢查一次)")
+
+
+if os.environ.get("ERSKI_DISABLE_SCHEDULER") != "1":
+    _start_scheduler_once()
+
+
 @app.route("/")
 def serve_frontend():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    # index.html 內含所有前台邏輯(訂課/價格計算等),改動頻繁,絕對不能被瀏覽器快取,
+    # 否則重新部署後使用者還是會看到舊版邏輯,以為改動沒生效。
+    resp = send_from_directory(FRONTEND_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/manifest.json")
@@ -41,15 +111,12 @@ def serve_icon_512():
     return send_from_directory(FRONTEND_DIR, "icon-512.png", mimetype="image/png")
 
 
-@app.route("/logo-erski.png")
-def serve_login_logo():
-    return send_from_directory(FRONTEND_DIR, "logo-erski.png", mimetype="image/png")
-
-
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Id"
+    # 2026-08:X-Staff-Id(未簽章、可偽造的純工號)全面改成X-Staff-Token/X-Member-Token
+    # (見authtoken.py),詳見README_部署交接指南.md第二節「會員身分沒有真的驗證」。
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
@@ -62,24 +129,76 @@ def cors_preflight(_any):
 ROLE_RANK = {"coach": 1, "cs": 2, "manager": 3, "boss": 4}
 
 
+# ------------------------------------------------------------------
+# 身分驗證(2026-08新增):員工/會員登入後,前端要帶著簽章token發後續請求,
+# 後端一律驗證token,不再相信前端直接聲稱的work_id/member_id。
+# 員工token放在 X-Staff-Token header,會員token放在 X-Member-Token header
+# (兩者互不影響,同一個瀏覽器分頁可以同時登入會員+員工,兩個token都會被送出)。
+# ------------------------------------------------------------------
+def _current_staff():
+    """驗證X-Staff-Token,回傳員工資料dict;沒帶token/token無效過期/帳號停用一律回傳None。
+    不會中斷請求——給「員工或本人都可以」的路由自行判斷用;需要強制要求員工身分的路由請用require_role。"""
+    work_id = authtoken.verify_staff_token(request.headers.get("X-Staff-Token"))
+    if not work_id:
+        return None
+    conn = get_conn()
+    staff = conn.execute("SELECT * FROM staff WHERE work_id=?", (work_id,)).fetchone()
+    conn.close()
+    if not staff or not staff["is_active"]:
+        return None
+    return dict(staff)
+
+
+def _current_member_id():
+    """驗證X-Member-Token,回傳token內的member_id(int);沒帶token/token無效過期回傳None。"""
+    return authtoken.verify_member_token(request.headers.get("X-Member-Token"))
+
+
 def require_role(min_role):
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
-            work_id = request.headers.get("X-Staff-Id")
-            conn = get_conn()
-            staff = conn.execute("SELECT * FROM staff WHERE work_id=?", (work_id,)).fetchone()
-            conn.close()
+            staff = _current_staff()
             if not staff:
-                return jsonify({"error": "未登入或工號無效"}), 401
-            if not staff["is_active"]:
-                return jsonify({"error": "此帳號已停用"}), 401
+                return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
             if ROLE_RANK.get(staff["role"], 0) < ROLE_RANK[min_role]:
                 return jsonify({"error": "權限不足"}), 403
-            request.current_staff = dict(staff)
+            request.current_staff = staff
             return f(*args, **kwargs)
         return wrapper
     return decorator
+
+
+def require_member_or_staff(min_staff_role="cs"):
+    """給/api/members/<member_id>/...這類路由用:必須是「本人的會員token」,
+    或是「min_staff_role以上的員工token」(員工可以查看/操作任何會員的資料,對照現有
+    客服後台「查看會員詳情」功能),不再直接信任路徑上的member_id參數。"""
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(member_id, *args, **kwargs):
+            staff = _current_staff()
+            if staff and ROLE_RANK.get(staff["role"], 0) >= ROLE_RANK[min_staff_role]:
+                request.current_staff = staff
+                return f(member_id, *args, **kwargs)
+            auth_member_id = _current_member_id()
+            if auth_member_id is None:
+                return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+            if auth_member_id != member_id:
+                return jsonify({"error": "無權限操作其他會員的資料"}), 403
+            return f(member_id, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def _require_member_id_from_token():
+    """給訂課/付款這類路由用:一律用X-Member-Token裡的member_id,不再信任前端傳來的
+    member_id欄位(避免有人把body裡的member_id改成別人的id去下單/查詢)。
+    回傳(member_id, None)表示驗證成功;驗證失敗回傳(None, (response, status_code)),
+    呼叫端直接 `return err` 即可。"""
+    member_id = _current_member_id()
+    if member_id is None:
+        return None, (jsonify({"error": "未登入或登入已過期,請重新登入"}), 401)
+    return member_id, None
 
 
 # ------------------------------------------------------------------
@@ -89,6 +208,11 @@ def require_role(min_role):
 def oauth_login():
     data = request.json
     result = auth.mock_oauth_login(data["provider"], data["mock_external_id"])
+    # 找到既有會員=視同這次OAuth登入完成身分驗證(正式串接LINE/Google OAuth後,
+    # 「第三方回傳的身分已通過驗證」這件事本來就是由OAuth provider保證,
+    # 目前是mock_external_id模擬這個結果),核發一組會員token給前端後續請求使用。
+    if not result.get("is_new") and result.get("member"):
+        result["token"] = authtoken.issue_member_token(result["member"]["id"])
     return jsonify(result)
 
 
@@ -104,6 +228,7 @@ def create_member():
     conn.commit()
     conn.close()
     member.pop("password_hash", None)
+    member["token"] = authtoken.issue_member_token(member["id"])
     return jsonify(member), 201
 
 
@@ -199,6 +324,7 @@ def admin_partner_report(partner_id):
 
 
 @app.route("/api/members/<int:member_id>/referral-code", methods=["PUT"])
+@require_member_or_staff()
 def set_member_referral_code(member_id):
     """會員填寫優惠碼(僅能設定一次,設定過後不可再自行更改,避免濫用回饋歸屬)。"""
     d = request.json
@@ -226,6 +352,7 @@ def set_member_referral_code(member_id):
 
 
 @app.route("/api/members/<int:member_id>/password", methods=["PUT"])
+@require_member_or_staff()
 def set_member_password(member_id):
     d = request.json
     try:
@@ -250,10 +377,12 @@ def staff_login_route():
     staff = auth.staff_login(data["work_id"], data["password"])
     if not staff:
         return jsonify({"error": "工號或密碼錯誤"}), 401
+    staff["token"] = authtoken.issue_staff_token(staff["work_id"])
     return jsonify(staff)
 
 
 @app.route("/api/members/<int:member_id>", methods=["GET"])
+@require_member_or_staff()
 def get_member(member_id):
     conn = get_conn()
     m = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
@@ -307,6 +436,7 @@ def compute_member_code(m):
 
 
 @app.route("/api/members/<int:member_id>/notifications", methods=["GET"])
+@require_member_or_staff()
 def member_notifications(member_id):
     conn = get_conn()
     rows = conn.execute(
@@ -317,6 +447,7 @@ def member_notifications(member_id):
 
 
 @app.route("/api/members/<int:member_id>/companions", methods=["GET"])
+@require_member_or_staff()
 def list_member_companions(member_id):
     conn = get_conn()
     rows = conn.execute(
@@ -327,6 +458,7 @@ def list_member_companions(member_id):
 
 
 @app.route("/api/members/<int:member_id>/companions", methods=["POST"])
+@require_member_or_staff()
 def create_member_companion(member_id):
     d = request.json
     conn = get_conn()
@@ -343,6 +475,7 @@ def create_member_companion(member_id):
 
 
 @app.route("/api/members/<int:member_id>/companions/<int:companion_id>", methods=["PUT"])
+@require_member_or_staff()
 def update_member_companion(member_id, companion_id):
     d = request.json
     conn = get_conn()
@@ -358,6 +491,7 @@ def update_member_companion(member_id, companion_id):
 
 
 @app.route("/api/members/<int:member_id>/companions/<int:companion_id>", methods=["DELETE"])
+@require_member_or_staff()
 def delete_member_companion(member_id, companion_id):
     conn = get_conn()
     conn.execute("DELETE FROM member_companions WHERE id=? AND member_id=?", (companion_id, member_id))
@@ -367,6 +501,7 @@ def delete_member_companion(member_id, companion_id):
 
 
 @app.route("/api/members/<int:member_id>/entitlement-ledger", methods=["GET"])
+@require_member_or_staff()
 def member_entitlement_ledger(member_id):
     conn = get_conn()
     rows = conn.execute(
@@ -377,6 +512,7 @@ def member_entitlement_ledger(member_id):
 
 
 @app.route("/api/members/<int:member_id>/profile", methods=["PUT"])
+@require_member_or_staff()
 def update_member_profile(member_id):
     d = request.json
     fields = [
@@ -395,7 +531,9 @@ def update_member_profile(member_id):
     conn.commit()
     row = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
-    return jsonify(dict(row))
+    row_dict = dict(row)
+    row_dict.pop("password_hash", None)  # 2026-08修正:原本這裡會把密碼雜湊值一起回傳給前端
+    return jsonify(row_dict)
 
 
 # ------------------------------------------------------------------
@@ -516,10 +654,13 @@ def indoor_day_view(date_str):
 # ------------------------------------------------------------------
 @app.route("/api/booking/trial", methods=["POST"])
 def book_trial():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.book_trial(
-            member_id=d["member_id"], booking_date=d["booking_date"],
+            member_id=member_id, booking_date=d["booking_date"],
             start_hour=d["start_hour"], headcount=d["headcount"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
             coach_id=d.get("coach_id"),
@@ -534,10 +675,13 @@ def book_trial():
 # ------------------------------------------------------------------
 @app.route("/api/charter/purchase", methods=["POST"])
 def purchase_charter():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.purchase_charter_pass(
-            member_id=d["member_id"], package_size=d["package_size"], headcount_type=d["headcount_type"]
+            member_id=member_id, package_size=d["package_size"], headcount_type=d["headcount_type"]
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -546,10 +690,13 @@ def purchase_charter():
 
 @app.route("/api/booking/charter", methods=["POST"])
 def book_charter():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.book_charter(
-            member_id=d["member_id"], booking_date=d["booking_date"], start_hour=d["start_hour"],
+            member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             charter_pass_id=d["charter_pass_id"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
             coach_id=d.get("coach_id"),
@@ -564,10 +711,13 @@ def book_charter():
 # ------------------------------------------------------------------
 @app.route("/api/booking/self-practice", methods=["POST"])
 def book_self_practice():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.book_self_practice(
-            member_id=d["member_id"], booking_date=d["booking_date"], start_hour=d["start_hour"],
+            member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             duration_minutes=d["duration_minutes"], headcount=d.get("headcount", 1),
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
             use_plan_quota=d.get("use_plan_quota", False),
@@ -582,10 +732,13 @@ def book_self_practice():
 # ------------------------------------------------------------------
 @app.route("/api/booking/group-class", methods=["POST"])
 def enroll_group_class():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.enroll_group_class(
-            member_id=d["member_id"], booking_date=d["booking_date"], start_hour=d["start_hour"],
+            member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             equipment_type=d.get("equipment_type"), participant=d.get("participant"),
         )
         return jsonify(result), 201
@@ -598,10 +751,13 @@ def enroll_group_class():
 # ------------------------------------------------------------------
 @app.route("/api/booking/jump", methods=["POST"])
 def book_jump():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.book_jump(
-            member_id=d["member_id"], booking_date=d["booking_date"],
+            member_id=member_id, booking_date=d["booking_date"],
             start_time=d["start_time"], duration_minutes=d["duration_minutes"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
         )
@@ -670,6 +826,116 @@ def admin_delete_resort(resort_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/coaches/export.xlsx", methods=["GET"])
+@require_role("manager")
+def admin_export_coaches_xlsx():
+    """匯出全部教練完整資料(基本資料+教練介紹+能力證照+人事機密欄位)為Excel,僅限主管以上使用。"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    import tempfile
+
+    conn = get_conn()
+    coaches = conn.execute(
+        """SELECT s.*, cp.rank, cp.resume, cp.experience, cp.self_intro, cp.contract_type,
+                  cp.years_of_service, cp.contract_year, cp.hourly_rate, cp.base_salary,
+                  cp.rate_group_class, cp.rate_trial, cp.rate_assistant, cp.japan_commission_rate
+           FROM staff s LEFT JOIN coach_profiles cp ON cp.coach_id = s.id
+           WHERE s.role='coach' ORDER BY s.name"""
+    ).fetchall()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "教練資料"
+    headers = ["工號", "姓名", "電話", "分店", "在職狀態", "職稱", "資歷(年)", "經歷", "自我介紹",
+               "合約類型", "年資", "合約年", "堂課時薪", "體驗時薪", "助教時薪", "基本薪資",
+               "日本教練課提成比例", "教練能力", "證照", "駐在地"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1E2761")
+
+    for c in coaches:
+        caps = conn.execute(
+            """SELECT co.name FROM coach_capabilities cc
+               JOIN coach_capability_options co ON cc.capability_option_id = co.id
+               WHERE cc.coach_id=?""", (c["id"],),
+        ).fetchall()
+        certs = conn.execute(
+            "SELECT cert_type, cert_name, cert_level FROM coach_certifications WHERE coach_id=?", (c["id"],)
+        ).fetchall()
+        locs = conn.execute(
+            """SELECT lo.name FROM coach_locations cl
+               JOIN coach_location_options lo ON cl.location_option_id = lo.id
+               WHERE cl.coach_id=?""", (c["id"],),
+        ).fetchall()
+        ws.append([
+            c["work_id"], c["name"], c["phone"], c["branch"], "在職" if c["is_active"] else "已停用",
+            c["rank"], c["resume"], c["experience"], c["self_intro"],
+            c["contract_type"], c["years_of_service"], c["contract_year"],
+            c["rate_group_class"], c["rate_trial"], c["rate_assistant"], c["base_salary"],
+            c["japan_commission_rate"],
+            "、".join(r["name"] for r in caps),
+            "、".join(f"{r['cert_name']}({r['cert_level']})" for r in certs),
+            "、".join(r["name"] for r in locs),
+        ])
+    for col in ws.columns:
+        max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 40)
+    conn.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        wb.save(tmp.name)
+        path = tmp.name
+    return send_file(path, as_attachment=True, download_name="教練資料匯出.xlsx",
+                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/api/admin/resorts/export.xlsx", methods=["GET"])
+@require_role("cs")
+def admin_export_resorts_xlsx():
+    """匯出全部雪場資料為Excel。"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    import tempfile
+
+    conn = get_conn()
+    resorts = conn.execute(
+        """SELECT r.*, jr.name AS region_name FROM ski_resorts r
+           LEFT JOIN japan_regions jr ON r.region_id = jr.id
+           ORDER BY jr.display_order, r.name"""
+    ).fetchall()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "雪場資料"
+    headers = ["地區", "雪場代碼", "雪場名稱", "狀態", "駐點教練"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1E2761")
+
+    for r in resorts:
+        coaches = conn.execute(
+            """SELECT st.name FROM resort_coaches rc JOIN staff st ON rc.coach_id = st.id
+               WHERE rc.resort_id=?""", (r["id"],),
+        ).fetchall()
+        ws.append([
+            r["region_name"], r["code"], r["name"],
+            "營運中" if r["is_active"] else "已停用",
+            "、".join(c["name"] for c in coaches),
+        ])
+    for col in ws.columns:
+        max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 40)
+    conn.close()
+
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        wb.save(tmp.name)
+        path = tmp.name
+    return send_file(path, as_attachment=True, download_name="雪場資料匯出.xlsx",
+                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/api/admin/resorts", methods=["GET"])
@@ -767,16 +1033,13 @@ def admin_remove_resort_coach(assignment_id):
 @app.route("/api/admin/coach-schedule", methods=["POST"])
 def admin_set_coach_schedule():
     d = request.json
-    work_id = request.headers.get("X-Staff-Id")
-    conn = get_conn()
-    staff = conn.execute("SELECT * FROM staff WHERE work_id=?", (work_id,)).fetchone()
+    staff = _current_staff()
     if not staff:
-        conn.close()
-        return jsonify({"error": "未登入或工號無效"}), 401
+        return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
     is_self = staff["role"] == "coach" and staff["id"] == d.get("coach_id")
     if not is_self and ROLE_RANK.get(staff["role"], 0) < ROLE_RANK["cs"]:
-        conn.close()
         return jsonify({"error": "權限不足"}), 403
+    conn = get_conn()
     conn.execute(
         """INSERT INTO coach_schedule (coach_id, work_date, status, reason)
            VALUES (?, ?, ?, ?)
@@ -877,6 +1140,52 @@ def admin_list_coach_schedule():
     return jsonify(rows_to_dicts(rows))
 
 
+@app.route("/api/admin/dashboard-summary", methods=["GET"])
+@require_role("cs")
+def admin_dashboard_summary():
+    """營運中心首頁彙總資料:今日課程數、報到狀況、待付款、待指派教練、設備異常。"""
+    today_str = booking.today_tw().isoformat()
+    conn = get_conn()
+
+    today_sessions = conn.execute(
+        "SELECT COUNT(*) c FROM indoor_sessions WHERE booking_date=? AND status != 'cancelled'", (today_str,)
+    ).fetchone()["c"]
+    today_japan = conn.execute(
+        "SELECT COUNT(*) c FROM japan_bookings WHERE booking_date=? AND status != 'cancelled'", (today_str,)
+    ).fetchone()["c"]
+    today_jump = conn.execute(
+        "SELECT COUNT(*) c FROM jump_bookings WHERE booking_date=? AND status != 'cancelled'", (today_str,)
+    ).fetchone()["c"]
+    total_today = today_sessions + today_japan + today_jump
+
+    checked_in = conn.execute(
+        "SELECT COUNT(*) c FROM indoor_sessions WHERE booking_date=? AND attendance_status='completed'", (today_str,)
+    ).fetchone()["c"]
+
+    pending_payment_orders = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(amount),0) total FROM orders WHERE status='pending'"
+    ).fetchone()
+
+    unassigned_group = conn.execute(
+        "SELECT COUNT(*) c FROM indoor_sessions WHERE category='group_class' AND coach_id IS NULL AND status != 'cancelled' AND booking_date >= ?",
+        (today_str,),
+    ).fetchone()["c"]
+
+    equipment_issue = conn.execute(
+        "SELECT COUNT(*) c FROM equipment_items WHERE status != 'active'"
+    ).fetchone()["c"]
+
+    conn.close()
+    return jsonify({
+        "today_sessions": total_today,
+        "today_checked_in": checked_in,
+        "pending_payment_count": pending_payment_orders["c"],
+        "pending_payment_total": pending_payment_orders["total"],
+        "unassigned_group_class": unassigned_group,
+        "equipment_issue_count": equipment_issue,
+    })
+
+
 @app.route("/api/admin/team-calendar", methods=["GET"])
 @require_role("cs")
 def admin_team_calendar():
@@ -946,10 +1255,13 @@ def admin_team_calendar():
 
 @app.route("/api/booking/japan", methods=["POST"])
 def book_japan():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.book_japan_multi_day(
-            member_id=d["member_id"], bookings=d["bookings"],
+            member_id=member_id, bookings=d["bookings"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
             needs_accommodation=d.get("needs_accommodation", False),
             payment_plan=d.get("payment_plan", "full"),
@@ -966,6 +1278,9 @@ def book_japan():
 @app.route("/api/payments/create", methods=["POST"])
 def create_payment():
     from payments import active_provider
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     result = active_provider.create_payment(
         amount=d["amount"], payment_method=d["payment_method"], order_ref=d["order_ref"]
@@ -976,7 +1291,7 @@ def create_payment():
             """INSERT INTO transactions
                (member_id, ref_type, ref_id, amount, payment_type, payment_method, payment_status, provider_ref)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (d["member_id"], d.get("ref_type"), d.get("ref_id"), d["amount"],
+            (member_id, d.get("ref_type"), d.get("ref_id"), d["amount"],
              d.get("payment_type", "full"), d["payment_method"], result["status"], result["provider_ref"]),
         )
         tx_id = cur.lastrowid
@@ -1183,10 +1498,13 @@ def admin_list_bookings():
 
 @app.route("/api/plans/apply", methods=["POST"])
 def apply_for_plan():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
     d = request.json
     try:
         result = booking.apply_for_plan(
-            member_id=d["member_id"], plan_name=d["plan_name"], billing_cycle=d["billing_cycle"]
+            member_id=member_id, plan_name=d["plan_name"], billing_cycle=d["billing_cycle"]
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1194,6 +1512,7 @@ def apply_for_plan():
 
 
 @app.route("/api/members/<int:member_id>/plan-applications", methods=["GET"])
+@require_member_or_staff()
 def member_plan_applications(member_id):
     conn = get_conn()
     rows = conn.execute(
@@ -1565,16 +1884,16 @@ def admin_update_coach_details(coach_id):
         japan_commission_rate = before_profile["japan_commission_rate"] if before_profile else None
 
     conn.execute(
-        """INSERT INTO coach_profiles
+        f"""INSERT INTO coach_profiles
            (coach_id, contract_type, rank, hourly_rate, years_of_service, contract_year,
             base_salary, rate_group_class, rate_trial, rate_assistant, japan_commission_rate, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL})
            ON CONFLICT(coach_id) DO UPDATE SET
              contract_type=excluded.contract_type, rank=excluded.rank, hourly_rate=excluded.hourly_rate,
              years_of_service=excluded.years_of_service, contract_year=excluded.contract_year,
              base_salary=excluded.base_salary, rate_group_class=excluded.rate_group_class,
              rate_trial=excluded.rate_trial, rate_assistant=excluded.rate_assistant,
-             japan_commission_rate=excluded.japan_commission_rate, updated_at=datetime('now')""",
+             japan_commission_rate=excluded.japan_commission_rate, updated_at={NOW_SQL}""",
         (coach_id, contract_type, rank, hourly_rate, years_of_service, contract_year,
          base_salary, rate_group_class, rate_trial, rate_assistant, japan_commission_rate),
     )
@@ -1583,14 +1902,16 @@ def admin_update_coach_details(coach_id):
         conn.execute("DELETE FROM coach_locations WHERE coach_id=?", (coach_id,))
         for loc_id in d.get("location_option_ids", []):
             conn.execute(
-                "INSERT OR IGNORE INTO coach_locations (coach_id, location_option_id) VALUES (?, ?)",
+                "INSERT INTO coach_locations (coach_id, location_option_id) VALUES (?, ?) "
+                "ON CONFLICT (coach_id, location_option_id) DO NOTHING",
                 (coach_id, loc_id),
             )
 
     conn.execute("DELETE FROM coach_capabilities WHERE coach_id=?", (coach_id,))
     for cap_id in d.get("capability_option_ids", []):
         conn.execute(
-            "INSERT OR IGNORE INTO coach_capabilities (coach_id, capability_option_id) VALUES (?, ?)",
+            "INSERT INTO coach_capabilities (coach_id, capability_option_id) VALUES (?, ?) "
+            "ON CONFLICT (coach_id, capability_option_id) DO NOTHING",
             (coach_id, cap_id),
         )
 
@@ -1633,15 +1954,15 @@ def admin_update_coach_profile(coach_id):
     d = request.json
     conn = get_conn()
     conn.execute(
-        """INSERT INTO coach_profiles (coach_id, promo_photo, id_photo, self_intro, resume, experience, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        f"""INSERT INTO coach_profiles (coach_id, promo_photo, id_photo, self_intro, resume, experience, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, {NOW_SQL})
            ON CONFLICT(coach_id) DO UPDATE SET
              promo_photo=COALESCE(excluded.promo_photo, coach_profiles.promo_photo),
              id_photo=COALESCE(excluded.id_photo, coach_profiles.id_photo),
              self_intro=COALESCE(excluded.self_intro, coach_profiles.self_intro),
              resume=COALESCE(excluded.resume, coach_profiles.resume),
              experience=COALESCE(excluded.experience, coach_profiles.experience),
-             updated_at=datetime('now')""",
+             updated_at={NOW_SQL}""",
         (coach_id, d.get("promo_photo"), d.get("id_photo"), d.get("self_intro"), d.get("resume"), d.get("experience")),
     )
     conn.execute(
@@ -1656,23 +1977,37 @@ def admin_update_coach_profile(coach_id):
 
 # ------------------------------------------------------------------
 # 修改/取消預約(客戶自行操作有時間限制;員工操作不受限)
+#
+# ⚠️2026-08修正:這幾支路由原本完全沒有member_id參數(只有預約本身的數字id),
+# 也沒有檢查操作者跟這筆預約有沒有關係——任何人只要猜到/枚舉一個id就能取消/
+# 改期任何人的預約。現在改成:員工(客服以上)不受限;一般使用者則必須帶有效的
+# 會員token,而且token裡的member_id要對得上這筆預約實際所屬的會員,否則拒絕。
 # ------------------------------------------------------------------
 def _is_staff_request():
-    work_id = request.headers.get("X-Staff-Id")
-    if not work_id:
-        return False
-    conn = get_conn()
-    staff = conn.execute(
-        "SELECT * FROM staff WHERE work_id=?", (work_id,)
-    ).fetchone()
-    conn.close()
+    staff = _current_staff()
     return bool(staff) and ROLE_RANK.get(staff["role"], 0) >= ROLE_RANK["cs"]
+
+
+def _check_owns_booking_or_staff(owner_member_id):
+    """owner_member_id是這筆預約實際所屬的member_id(None表示預約不存在,留給呼叫端處理404)。
+    回傳(is_staff, error_response)——error_response不是None時,呼叫端應直接回傳它。"""
+    if _is_staff_request():
+        return True, None
+    auth_member_id = _current_member_id()
+    if auth_member_id is None:
+        return False, (jsonify({"error": "未登入或登入已過期,請重新登入"}), 401)
+    if owner_member_id is not None and auth_member_id != owner_member_id:
+        return False, (jsonify({"error": "無權限操作其他會員的預約"}), 403)
+    return False, None
 
 
 @app.route("/api/booking/indoor/<int:member_ref_id>/cancel", methods=["POST"])
 def cancel_indoor(member_ref_id):
+    is_staff, err = _check_owns_booking_or_staff(booking.get_indoor_booking_owner(member_ref_id))
+    if err:
+        return err
     try:
-        result = booking.cancel_indoor_booking(member_ref_id, is_staff=_is_staff_request())
+        result = booking.cancel_indoor_booking(member_ref_id, is_staff=is_staff)
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -1680,10 +2015,13 @@ def cancel_indoor(member_ref_id):
 
 @app.route("/api/booking/indoor/<int:member_ref_id>/reschedule", methods=["POST"])
 def reschedule_indoor(member_ref_id):
+    is_staff, err = _check_owns_booking_or_staff(booking.get_indoor_booking_owner(member_ref_id))
+    if err:
+        return err
     d = request.json
     try:
         result = booking.reschedule_indoor_booking(
-            member_ref_id, d["new_date"], d["new_hour"], is_staff=_is_staff_request()
+            member_ref_id, d["new_date"], d["new_hour"], is_staff=is_staff
         )
         return jsonify(result)
     except ValueError as e:
@@ -1692,8 +2030,11 @@ def reschedule_indoor(member_ref_id):
 
 @app.route("/api/booking/jump/<int:jump_id>/cancel", methods=["POST"])
 def cancel_jump(jump_id):
+    is_staff, err = _check_owns_booking_or_staff(booking.get_jump_booking_owner(jump_id))
+    if err:
+        return err
     try:
-        result = booking.cancel_jump_booking(jump_id, is_staff=_is_staff_request())
+        result = booking.cancel_jump_booking(jump_id, is_staff=is_staff)
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -1701,10 +2042,13 @@ def cancel_jump(jump_id):
 
 @app.route("/api/booking/jump/<int:jump_id>/reschedule", methods=["POST"])
 def reschedule_jump(jump_id):
+    is_staff, err = _check_owns_booking_or_staff(booking.get_jump_booking_owner(jump_id))
+    if err:
+        return err
     d = request.json
     try:
         result = booking.reschedule_jump_booking(
-            jump_id, d["new_date"], d["new_time"], is_staff=_is_staff_request()
+            jump_id, d["new_date"], d["new_time"], is_staff=is_staff
         )
         return jsonify(result)
     except ValueError as e:
@@ -1713,8 +2057,11 @@ def reschedule_jump(jump_id):
 
 @app.route("/api/booking/japan/<group_key>/cancel", methods=["POST"])
 def cancel_japan(group_key):
+    is_staff, err = _check_owns_booking_or_staff(booking.get_japan_trip_owner(group_key))
+    if err:
+        return err
     try:
-        result = booking.cancel_japan_trip(group_key, is_staff=_is_staff_request())
+        result = booking.cancel_japan_trip(group_key, is_staff=is_staff)
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -2538,7 +2885,7 @@ def admin_resolve_equipment_log(log_id):
     d = request.json
     conn = get_conn()
     conn.execute(
-        "UPDATE equipment_maintenance_log SET status='resolved', resolved_at=datetime('now'), resolution_note=? WHERE id=?",
+        f"UPDATE equipment_maintenance_log SET status='resolved', resolved_at={NOW_SQL}, resolution_note=? WHERE id=?",
         (d.get("resolution_note"), log_id),
     )
     conn.commit()
@@ -2589,6 +2936,12 @@ def health():
 
 if __name__ == "__main__":
     import os
-    if not os.path.exists(os.path.join(os.path.dirname(__file__), "erski.db")):
+    import db as _db
+    if _db.USE_POSTGRES:
+        # 正式/測試用PostgreSQL:資料表結構交給Alembic migration管理(見alembic/目錄)，
+        # 這裡不再每次啟動都重新執行schema.sql(那樣會在第二次啟動時因為seed資料
+        # 已存在而報錯，也不該每次啟動都重新塞測試資料)。
+        pass
+    elif not os.path.exists(os.path.join(os.path.dirname(__file__), "erski.db")):
         init_db()
     app.run(debug=False, port=5001)

@@ -2,7 +2,7 @@
 // 策略:app shell(首頁/圖示)快取備援;所有 /api/ 請求一律直接打網路,絕不快取,
 // 避免價格、預約狀態、額度這類會即時變動的資料被快取成舊資料。
 
-const CACHE_NAME = "erski-shell-v1";
+const CACHE_NAME = "erski-shell-v3";
 const APP_SHELL = ["/", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

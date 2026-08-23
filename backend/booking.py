@@ -8,7 +8,7 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from db import get_conn, rows_to_dicts
+from db import get_conn, rows_to_dicts, NOW_SQL
 import pricing
 
 TW_TZ = timezone(timedelta(hours=8))  # 台灣時區(UTC+8),伺服器主機時間可能是UTC,需明確換算
@@ -182,24 +182,6 @@ def _validate_not_past(booking_date, start_hour=None):
                 f"預約當天課程須至少提前 {MIN_ADVANCE_BOOKING_HOURS} 小時,"
                 f"{start_hour}:00 的課程最晚需在 {start_hour - MIN_ADVANCE_BOOKING_HOURS}:00 前預約"
             )
-
-
-def _check_equipment_consistency(conn, member_id, equipment_type):
-    """團課與自主練習共用同一份裝備(雙板/單板),兩者裝備類型須一致:
-    若會員先前已用某種裝備類型報名過團課或自主練習,之後這兩類課程都必須維持同一種裝備類型。"""
-    if not equipment_type:
-        return
-    row = conn.execute(
-        """SELECT sm.equipment_type FROM indoor_session_members sm
-           JOIN indoor_sessions s ON sm.session_id = s.id
-           WHERE sm.member_id=? AND s.category IN ('group_class','self_practice')
-             AND sm.status != 'cancelled' AND sm.equipment_type IS NOT NULL
-           ORDER BY sm.created_at LIMIT 1""",
-        (member_id,),
-    ).fetchone()
-    if row and row["equipment_type"] != equipment_type:
-        label = "雙板" if row["equipment_type"] == "ski" else "單板"
-        raise ValueError(f"你的團課/自主練習裝備類型已固定為{label},請選擇相同裝備類型")
 
 
 def _insert_participants(conn, ref_type, ref_id, participants):
@@ -416,11 +398,6 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
-    try:
-        _check_equipment_consistency(conn, member_id, equipment_type)
-    except ValueError:
-        conn.close()
-        raise
 
     quota_consumed = False
     if use_plan_quota:
@@ -473,11 +450,6 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
-    try:
-        _check_equipment_consistency(conn, member_id, equipment_type)
-    except ValueError:
-        conn.close()
-        raise
 
     plan = conn.execute(
         "SELECT * FROM member_plans WHERE member_id=? AND is_active=1", (member_id,)
@@ -646,7 +618,7 @@ def review_plan_application(application_id, staff_id, approve, reason=None):
 
         new_status = "approved" if approve else "rejected"
         conn.execute(
-            "UPDATE plan_applications SET status=?, reviewed_by_staff_id=?, reviewed_at=datetime('now') WHERE id=?",
+            f"UPDATE plan_applications SET status=?, reviewed_by_staff_id=?, reviewed_at={NOW_SQL} WHERE id=?",
             (new_status, staff_id, application_id),
         )
 
@@ -1011,8 +983,8 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
                 coach_commission_rate, coach_income)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (member_id, b["resort_id"], b["date"], b["day_type"], b.get("half_day_slot"),
-             b["headcount"], equipment_type, b.get("coach_id"), designate, designate_fee,
-             bool(needs_accommodation), price, group_key, payment_plan, deposit_amount, balance_amount,
+             b["headcount"], equipment_type, b.get("coach_id"), int(designate), designate_fee,
+             int(bool(needs_accommodation)), price, group_key, payment_plan, deposit_amount, balance_amount,
              commission_rate, coach_income),
         )
         created.append(cur.lastrowid)
@@ -1213,6 +1185,42 @@ def _check_edit_window(booking_date_str, min_days, is_staff):
     days_left = (datetime.strptime(booking_date_str, "%Y-%m-%d").date() - _now_tw().date()).days
     if days_left < min_days:
         raise ValueError(f"課程開始前 {min_days} 天內無法自行修改/取消,請洽客服協助處理")
+
+
+# ------------------------------------------------------------------
+# 身分歸屬查詢(2026-08新增,給app.py在取消/改期前確認「操作者是不是這筆預約本人」用):
+# 這幾支cancel/reschedule原本完全沒有member_id參數,任何人只要猜到一個數字id
+# 就能取消/改期別人的預約,詳見README_部署交接指南.md第二節。
+# ------------------------------------------------------------------
+def get_indoor_booking_owner(member_ref_id):
+    """回傳這筆indoor_session_members紀錄所屬的member_id;找不到回傳None。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT member_id FROM indoor_session_members WHERE id=?", (member_ref_id,)
+    ).fetchone()
+    conn.close()
+    return row["member_id"] if row else None
+
+
+def get_jump_booking_owner(jump_booking_id):
+    """回傳這筆jump_bookings紀錄所屬的member_id;找不到回傳None。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT member_id FROM jump_bookings WHERE id=?", (jump_booking_id,)
+    ).fetchone()
+    conn.close()
+    return row["member_id"] if row else None
+
+
+def get_japan_trip_owner(group_key):
+    """回傳這個group_key(整趟日本行程)所屬的member_id;找不到回傳None。
+    同一group_key底下每天都是同一位會員,取第一筆即可。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT member_id FROM japan_bookings WHERE group_key=? LIMIT 1", (group_key,)
+    ).fetchone()
+    conn.close()
+    return row["member_id"] if row else None
 
 
 def cancel_indoor_booking(member_ref_id, is_staff=False):
@@ -1530,8 +1538,8 @@ def check_in_indoor_session(session_id, attendance_status, lesson_notes, staff_i
         conn.close()
         raise ValueError("此場次已經報到過了")
     conn.execute(
-        """UPDATE indoor_sessions SET attendance_status=?, lesson_notes=?,
-           checked_in_at=datetime('now'), checked_in_by_staff_id=? WHERE id=?""",
+        f"""UPDATE indoor_sessions SET attendance_status=?, lesson_notes=?,
+           checked_in_at={NOW_SQL}, checked_in_by_staff_id=? WHERE id=?""",
         (attendance_status, lesson_notes, staff_id, session_id),
     )
     conn.commit()
@@ -1554,8 +1562,8 @@ def check_in_jump_booking(jump_booking_id, attendance_status, lesson_notes, staf
         conn.close()
         raise ValueError("此預約已經報到過了")
     conn.execute(
-        """UPDATE jump_bookings SET attendance_status=?, lesson_notes=?,
-           checked_in_at=datetime('now'), checked_in_by_staff_id=? WHERE id=?""",
+        f"""UPDATE jump_bookings SET attendance_status=?, lesson_notes=?,
+           checked_in_at={NOW_SQL}, checked_in_by_staff_id=? WHERE id=?""",
         (attendance_status, lesson_notes, staff_id, jump_booking_id),
     )
     conn.commit()
@@ -1578,8 +1586,8 @@ def check_in_japan_booking(japan_booking_id, attendance_status, lesson_notes, st
         conn.close()
         raise ValueError("此預約已經報到過了")
     conn.execute(
-        """UPDATE japan_bookings SET attendance_status=?, lesson_notes=?,
-           checked_in_at=datetime('now'), checked_in_by_staff_id=? WHERE id=?""",
+        f"""UPDATE japan_bookings SET attendance_status=?, lesson_notes=?,
+           checked_in_at={NOW_SQL}, checked_in_by_staff_id=? WHERE id=?""",
         (attendance_status, lesson_notes, staff_id, japan_booking_id),
     )
     conn.commit()
