@@ -442,7 +442,8 @@
 
   <div id="mainLayout">
     <div id="contentArea">
-      <div id="profileGateBanner" class="card" style="display:none; background:#fdf1dc; border-color:#f0d9a8;">
+      <div id="profileGateBanner" class="card" style="display:none; background:#fdf1dc; border-color:#f0d9a8; position:relative; transition:opacity 0.4s ease;">
+        <span onclick="dismissProfileGateBanner()" style="position:absolute; top:10px; right:14px; cursor:pointer; color:#8a7248; font-weight:700;">✕</span>
         <b>建議完善你的基本資料</b>
         <p class="note">建議填寫:姓名、出生年月日、地址、電話、Email、緊急聯絡人姓名、緊急聯絡人電話,方便教練與客服協助你。可以到「會員中心」隨時補上,不影響現在使用其他功能。</p>
       </div>
@@ -451,6 +452,11 @@
         <div class="card">
           <h3>包機預約</h3>
           <div id="wizard-charter"></div>
+          <label>指定教練(可選)</label>
+          <select id="charterCoach" onchange="updateCharterDesignateFeeNote()">
+            <option value="">不指定(由 ER SKI 分派)</option>
+          </select>
+          <p class="note" id="charterDesignateFeeNote" style="display:none; color:#a6650a; margin-top:4px;"></p>
         </div>
         <div class="card" id="charterPassCard" style="display:none;">
           <h3>我的包機堂數包</h3>
@@ -994,6 +1000,7 @@ function populateBirthDateSelects(yearId="pBirthYear", monthId="pBirthMonth", da
   }
 }
 async function enterMainScreen(member) {
+  _profileBannerShownOnce = false;  // 新的登入階段,資料未補齊的話允許再快閃提醒一次
   populateBirthDateSelects();
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("mainScreen").style.display = "block";
@@ -1094,6 +1101,7 @@ async function renderStaffPanel(staff) {
     const isBoss = staff.role === "boss";
     window.currentStaffIsManagerUp = isManagerUp;
     window.currentStaffRole = staff.role;
+    window.currentStaffId = staff.id;
 
     const navGroups = [
       { title: "今日營運", items: [
@@ -1469,8 +1477,9 @@ async function viewPartnerReport(partnerId) {
   const el = document.getElementById(`partnerReport-${partnerId}`);
   el.innerHTML = `
     <div class="list-item">推薦會員數:${data.referred_member_count} 人</div>
-    <div class="list-item">已付款總營收:NT$${data.total_paid_revenue}</div>
+    <div class="list-item">首購總營收(每位會員只算第一筆已付款訂單):NT$${data.total_paid_revenue}</div>
     <div class="list-item"><b>應回饋金額:NT$${data.rebate_amount}</b></div>
+    <div class="note">${data.rebate_basis || ""}</div>
     ${data.referred_members.map(m => `<div class="list-item">${m.name}(${m.phone || m.email || ""})</div>`).join("")}
   `;
 }
@@ -1959,10 +1968,31 @@ async function savePricingConfig(key) {
 async function renderOrdersManageTab() {
   const wrap = document.getElementById("staffTab-orders");
   const { data: orders } = await api("/admin/orders");
+  const { data: pendingRefunds } = await api("/admin/orders/refunds/pending");
   const catLabelMap = { charter_pass:"包機堂數包", trial:"體驗課", self_practice:"自主練習", jump:"跳台體驗", japan_trip:"日本教練課", plan_subscription:"團課方案" };
   const statusLabelMap = { pending:"待付款", paid:"已付款", refunded:"已退款", cancelled:"已取消" };
 
+  const pendingRefundsHtml = pendingRefunds.length ? `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="sub-section-title">待核准退款申請(金額NT$5,000以上,需另一位主管/老闆核准)</div>
+      ${pendingRefunds.map(r => {
+        const isSelf = r.pending_refund_requested_by === window.currentStaffId;
+        return `
+        <div class="list-item">
+          #${r.order_id} ${r.member_name} — 申請退款NT$${r.pending_refund_amount}
+          ${r.pending_refund_reason ? `(原因:${r.pending_refund_reason})` : ""}
+          ・申請人:${r.requested_by_name || "-"}
+          ${isSelf ? `<span class="note">(這是你自己送出的申請,需要另一位主管/老闆核准)</span>` : `
+            <button class="small" onclick="approveRefund(${r.order_id})">核准並執行退款</button>
+            <button class="small secondary" onclick="rejectRefund(${r.order_id})">駁回</button>
+          `}
+        </div>
+      `;}).join("")}
+    </div>
+  ` : "";
+
   wrap.innerHTML = `<p class="note">列出最近的訂單,可套用折扣、記錄收款(支援訂金/尾款分次)、辦理退款。</p>` +
+    pendingRefundsHtml +
     orders.slice(0, 50).map(o => {
       const payable = o.amount - o.discount_amount;
       const remaining = payable - o.paid_amount;
@@ -2026,9 +2056,26 @@ async function refundOrderAdmin(orderId) {
   if (!amount) { alert("請輸入退款金額"); return; }
   if (!confirm(`確定要退款NT$${amount}嗎?`)) return;
   const { ok, data } = await api(`/admin/orders/${orderId}/refund`, { method: "POST", body: JSON.stringify({ amount, reason }) });
+  if (ok && data.status === "pending_approval") {
+    document.getElementById(`orderActionStatus-${orderId}`).innerHTML = `<span class="status-tag warn">${data.message}</span>`;
+    await renderOrdersManageTab();
+    return;
+  }
   document.getElementById(`orderActionStatus-${orderId}`).innerHTML = ok
     ? `<span class="status-tag ok">退款已記錄</span>` : `<span class="status-tag warn">${data.error}</span>`;
   if (ok) renderOrdersManageTab();
+}
+async function approveRefund(orderId) {
+  if (!confirm("確定要核准並執行這筆退款嗎?")) return;
+  const { ok, data } = await api(`/admin/orders/${orderId}/refund/approve`, { method: "POST" });
+  if (!ok) { alert(data.error); return; }
+  await renderOrdersManageTab();
+}
+async function rejectRefund(orderId) {
+  const note = prompt("駁回原因(選填):") || "";
+  const { ok, data } = await api(`/admin/orders/${orderId}/refund/reject`, { method: "POST", body: JSON.stringify({ note }) });
+  if (!ok) { alert(data.error); return; }
+  await renderOrdersManageTab();
 }
 
 let staffAllMembers = [];
@@ -2391,6 +2438,7 @@ async function renderPendingActions() {
   const { data: reviewSessions } = await api("/admin/sessions/needs-review");
   const { data: pendingApplications } = await api("/admin/plan-applications");
   const { data: pendingBilling } = await api("/admin/plan-billing/pending");
+  const { data: charterPassRequests } = await api("/admin/charter-pass-requests/pending");
   const methodLabel = { onsite: "現場付款", bank_transfer: "匯款轉帳" };
 
   let html = `<h3 style="margin-top:14px; font-size:14px;">待核准付款</h3>`;
@@ -2431,7 +2479,45 @@ async function renderPendingActions() {
         </div>`).join("")
     : `<div class="list-item">目前沒有待核准的月繳費用</div>`;
 
+  html += `<h3 style="margin-top:14px; font-size:14px;">待審核包機堂數包取消/更改方案申請</h3>`;
+  html += charterPassRequests.length
+    ? charterPassRequests.map(r => {
+        const typeLabel = r.request_type === "cancel"
+          ? "申請取消"
+          : `申請換成${r.requested_package_size}堂(目前1對${r.current_headcount_type}・${r.current_package_size}堂包,剩餘${r.current_remaining}堂)`;
+        const resizeInput = r.request_type === "resize"
+          ? `<label style="display:inline-block; margin:4px 0;">核准後最終剩餘堂數:<input type="number" id="resizeRemaining-${r.id}" style="width:70px;" value="${r.requested_package_size}"></label>`
+          : "";
+        return `
+        <div class="list-item">
+          ${r.member_name}(${r.member_phone || "無電話"}) — ${typeLabel}
+          ${r.note ? `<div class="note">會員留言:${r.note}</div>` : ""}
+          ${resizeInput}
+          <button class="small" onclick="resolveCharterPassRequest(${r.id}, 'approve')">核准</button>
+          <button class="small secondary" onclick="resolveCharterPassRequest(${r.id}, 'reject')">拒絕</button>
+        </div>`;
+      }).join("")
+    : `<div class="list-item">目前沒有待審核的包機堂數包申請</div>`;
+
   wrap.innerHTML = html;
+}
+async function resolveCharterPassRequest(requestId, action) {
+  let new_remaining = null;
+  if (action === "approve") {
+    const input = document.getElementById(`resizeRemaining-${requestId}`);
+    if (input) {
+      new_remaining = parseInt(input.value);
+      if (!new_remaining || new_remaining < 0) { alert("請輸入有效的最終剩餘堂數"); return; }
+    }
+    if (!confirm("確定要核准這筆申請嗎?")) return;
+  } else {
+    if (!confirm("確定要拒絕這筆申請嗎?")) return;
+  }
+  const { ok, data } = await api(`/admin/charter-pass-requests/${requestId}/resolve`, {
+    method: "POST", body: JSON.stringify({ action, new_remaining })
+  });
+  if (ok) { alert(action === "approve" ? "已核准" : "已拒絕"); renderPendingActions(); }
+  else alert(data.error);
 }
 async function approvePlanBilling(recordId) {
   const { ok } = await api(`/admin/plan-billing/${recordId}/confirm`, { method: "POST" });
@@ -2971,15 +3057,18 @@ async function toggleCoachEdit(coachId) {
     </div>
     <button class="small secondary" onclick="addCoachCertRow(${coachId})">+ 新增證照</button>
 
-    <label style="margin-top:8px;">教練駐在地(可複選,可新增選項)</label>
+    <label style="margin-top:8px;">教練駐在地(可複選,可新增選項;室內滑雪分店會直接連動前台包機「指定教練」下拉選單)</label>
     <div class="row" style="flex-wrap:wrap;" id="coachLocWrap-${coachId}">
       ${locationOptions.map(loc => `
         <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
-          <input type="checkbox" class="coachLoc-${coachId}" value="${loc.id}" ${details.location_option_ids.includes(loc.id)?"checked":""}> ${loc.name}
+          <input type="checkbox" class="coachLoc-${coachId}" value="${loc.id}" ${details.location_option_ids.includes(loc.id)?"checked":""}> ${loc.name}${loc.is_indoor_branch ? '<span class="status-tag ok" style="margin-left:2px;">室內分店</span>' : ""}
         </label>`).join("")}
     </div>
     <div class="row">
       <input id="newLocationName-${coachId}" placeholder="新增駐在地選項名稱">
+      <label style="display:flex; align-items:center; gap:4px; width:auto;">
+        <input type="checkbox" id="newLocationIsIndoor-${coachId}"> 室內滑雪分店(非日本雪場)
+      </label>
       <button class="small secondary" onclick="addLocationOptionAdmin(${coachId})">新增選項</button>
     </div>
 
@@ -3015,7 +3104,8 @@ async function addLocationOptionAdmin(coachId) {
   const input = document.getElementById(`newLocationName-${coachId}`);
   const name = input.value.trim();
   if (!name) return;
-  const { ok, data } = await api("/admin/location-options", { method: "POST", body: JSON.stringify({ name }) });
+  const is_indoor_branch = document.getElementById(`newLocationIsIndoor-${coachId}`).checked;
+  const { ok, data } = await api("/admin/location-options", { method: "POST", body: JSON.stringify({ name, is_indoor_branch }) });
   if (ok) { input.value = ""; document.getElementById(`coachEditWrap-${coachId}`).dataset.loaded = ""; await toggleCoachEdit(coachId); await toggleCoachEdit(coachId); }
   else alert(data.error);
 }
@@ -3179,10 +3269,33 @@ function switchPage(pageName, groupName, force) {
   const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay };
   if (refreshMap[pageName]) refreshMap[pageName]();
 }
+let _profileBannerShownOnce = false;
+let _profileBannerAutoHideTimer = null;
 function updateProfileGateBanner(complete) {
   const banner = document.getElementById("profileGateBanner");
   if (!banner) return;
-  banner.style.display = complete ? "none" : "block";
+  if (complete) {
+    // 資料已補齊,不用再提醒,之後這個登入階段也不會再跳出來
+    banner.style.display = "none";
+    _profileBannerShownOnce = true;
+    return;
+  }
+  if (_profileBannerShownOnce) {
+    // 這個登入階段已經快閃提醒過一次了,之後(換頁/送出預約等)不再重複跳出
+    return;
+  }
+  _profileBannerShownOnce = true;
+  banner.style.opacity = "1";
+  banner.style.display = "block";
+  clearTimeout(_profileBannerAutoHideTimer);
+  _profileBannerAutoHideTimer = setTimeout(dismissProfileGateBanner, 8000);
+}
+function dismissProfileGateBanner() {
+  const banner = document.getElementById("profileGateBanner");
+  if (!banner) return;
+  clearTimeout(_profileBannerAutoHideTimer);
+  banner.style.opacity = "0";
+  setTimeout(() => { banner.style.display = "none"; }, 400);
 }
 
 const wizardState = {};
@@ -3598,9 +3711,30 @@ async function loadSelfQuotaStatus() {
   checkbox.disabled = !canUse;
 }
 
+let _charterCoachesLoaded = false;
+async function loadCharterCoaches() {
+  if (_charterCoachesLoaded) return;
+  _charterCoachesLoaded = true;
+  const { data } = await api("/indoor-coaches");
+  const sel = document.getElementById("charterCoach");
+  sel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
+    data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+}
+function updateCharterDesignateFeeNote() {
+  if (!pricingData) return;
+  const coach = document.getElementById("charterCoach").value;
+  const noteEl = document.getElementById("charterDesignateFeeNote");
+  if (coach) {
+    noteEl.style.display = "block";
+    noteEl.textContent = `已指定教練,這堂課將加收指定費 NT$${pricingData.charter_designate_coach_fee}(不佔用堂數包扣抵之外的額外收費,將由客服另行通知繳費方式)`;
+  } else {
+    noteEl.style.display = "none";
+  }
+}
 async function loadCharterDay() {
   const dateStr = document.getElementById("charterDatePicker").value;
   if (!dateStr) return;
+  await loadCharterCoaches();
   const { data } = await api(`/indoor/day/${dateStr}`);
   buildHourGrid(document.getElementById("charterHourGrid"), dateStr, data.indoor_sessions, bookWithExistingCharterPass);
   document.getElementById("charterPassCard").style.display = "block";
@@ -3611,9 +3745,42 @@ async function refreshMyCharterPasses() {
   const headcount_type = getWizardHeadcount("charter");
   const matching = data.charter_passes.filter(p => p.headcount_type === headcount_type && p.remaining > 0);
   const el = document.getElementById("myCharterPasses");
-  el.innerHTML = matching.length
-    ? matching.map(p => `<div class="list-item">1對${p.headcount_type}・${p.package_size}堂包:剩餘 ${p.remaining} 堂</div>`).join("")
-    : `<div class="list-item">目前沒有可用的堂數包(1對${headcount_type}),請先購買</div>`;
+  if (!matching.length) {
+    el.innerHTML = `<div class="list-item">目前沒有可用的堂數包(1對${headcount_type}),請先購買</div>`;
+    return;
+  }
+  el.innerHTML = matching.map(p => {
+    let actionsHtml;
+    if (p.pending_request_id) {
+      const label = p.pending_request_type === "cancel"
+        ? "取消申請審核中"
+        : `換方案申請審核中(希望改成${p.pending_requested_package_size}堂)`;
+      actionsHtml = `<span class="status-tag warn">${label}</span>`;
+    } else {
+      actionsHtml = `<button class="small secondary" onclick="requestCancelCharterPass(${p.id})">取消</button>
+        <button class="small secondary" onclick="requestResizeCharterPass(${p.id})">更改方案</button>`;
+    }
+    return `<div class="hour-row"><div>1對${p.headcount_type}・${p.package_size}堂包:剩餘 ${p.remaining} 堂</div><div>${actionsHtml}</div></div>`;
+  }).join("");
+}
+async function requestCancelCharterPass(passId) {
+  if (!confirm("確定要送出取消申請嗎?退款與否將由客服後台審核後決定,送出後請耐心等候通知。")) return;
+  const { ok, data } = await api(`/members/${currentMemberId}/charter-passes/${passId}/request`, {
+    method: "POST", body: JSON.stringify({ request_type: "cancel" })
+  });
+  if (ok) { alert("已送出取消申請,請等候客服處理"); refreshMyCharterPasses(); }
+  else alert(data.error);
+}
+async function requestResizeCharterPass(passId) {
+  const sizeStr = prompt("請輸入希望改成的堂數包大小(例如10或20):");
+  if (!sizeStr) return;
+  const requested_package_size = parseInt(sizeStr);
+  if (!requested_package_size || requested_package_size <= 0) { alert("請輸入有效的堂數"); return; }
+  const { ok, data } = await api(`/members/${currentMemberId}/charter-passes/${passId}/request`, {
+    method: "POST", body: JSON.stringify({ request_type: "resize", requested_package_size })
+  });
+  if (ok) { alert("已送出更改方案申請,實際差額與生效時間將由客服後台審核後與你聯繫"); refreshMyCharterPasses(); }
+  else alert(data.error);
 }
 async function purchaseCharterPass() {
   const headcount_type = getWizardHeadcount("charter");
@@ -3628,6 +3795,7 @@ async function bookWithExistingCharterPass(dateStr, hour) {
   const headcount_type = getWizardHeadcount("charter");
   const equipment_type = getWizardEquipment("charter");
   const participants = getWizardParticipants("charter");
+  const coach_id = document.getElementById("charterCoach").value;
   const { data: member } = await api(`/members/${currentMemberId}`);
   const pass = member.charter_passes.find(p => p.headcount_type === headcount_type && p.remaining > 0);
   if (!pass) { alert(`你目前沒有可用的堂數包(1對${headcount_type}),請先在上方購買`); return; }
@@ -3637,10 +3805,12 @@ async function bookWithExistingCharterPass(dateStr, hour) {
     body: JSON.stringify({
       member_id: currentMemberId, booking_date: dateStr, start_hour: hour,
       charter_pass_id: pass.id, equipment_type, participants,
+      coach_id: coach_id ? parseInt(coach_id) : null,
     })
   });
   if (ok) {
-    alert(`預約成功!這是第 ${data.lesson_number}/${data.package_size} 堂,剩餘 ${data.remaining} 堂(已用堂數包付款,無需再付費)`);
+    const feeNote = data.designate_fee ? `,已指定教練並加收指定費NT$${data.designate_fee}(客服將另行通知繳費方式)` : "";
+    alert(`預約成功!這是第 ${data.lesson_number}/${data.package_size} 堂,剩餘 ${data.remaining} 堂(已用堂數包付款,無需再付費)${feeNote}`);
     invalidateAllMachineCalendars(); loadAccountOverview();
   } else {
     alert(data.error);

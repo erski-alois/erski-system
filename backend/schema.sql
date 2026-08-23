@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS indoor_sessions (
         'pending_payment','open','confirmed','needs_manual_review','cancelled'
     )) DEFAULT 'pending_payment',
     charter_package_size INTEGER,
+    designate_fee INTEGER NOT NULL DEFAULT 0,  -- 會員自選教練時加收的指定費(比照日本滑雪機制,金額來自pricing_config,目前只記錄金額,實際收款由客服後台手動處理)
     attendance_status TEXT CHECK(attendance_status IN ('pending','completed','no_show')) DEFAULT 'pending',
     lesson_notes TEXT,               -- 教練評估/教學內容/異常記錄
     checked_in_at TEXT,
@@ -127,6 +128,21 @@ CREATE TABLE IF NOT EXISTS charter_passes (
     package_size INTEGER NOT NULL,
     headcount_type INTEGER NOT NULL,
     remaining INTEGER NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- 會員對已購買的包機堂數包提出「取消」或「換堂數包大小」申請,退不退款、
+-- 換多少堂由客服後台審核決定(不自動執行金流),對應規則書的相關要求。
+CREATE TABLE IF NOT EXISTS charter_pass_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    charter_pass_id INTEGER NOT NULL REFERENCES charter_passes(id),
+    member_id INTEGER NOT NULL REFERENCES members(id),
+    request_type TEXT CHECK(request_type IN ('cancel','resize')) NOT NULL,
+    requested_package_size INTEGER,   -- 只有resize才有值,會員希望改成的新堂數包大小
+    note TEXT,
+    status TEXT CHECK(status IN ('pending','approved','rejected')) NOT NULL DEFAULT 'pending',
+    handled_by_staff_id INTEGER REFERENCES staff(id),
+    handled_at TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -458,7 +474,8 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
 -- 教練駐在地選項清單(可由主管新增選項)
 CREATE TABLE IF NOT EXISTS coach_location_options (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL
+    name TEXT UNIQUE NOT NULL,
+    is_indoor_branch BOOLEAN NOT NULL DEFAULT 0  -- 是否為室內滑雪分店(true)或日本雪場(false),決定前台包機「指定教練」下拉選單要抓哪些教練
 );
 
 -- 教練駐在地(教練與駐在地選項的關聯,可複選)
@@ -543,7 +560,13 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT CHECK(status IN ('pending', 'paid', 'refunded', 'cancelled')) DEFAULT 'pending',
     ref_type TEXT,          -- 對應到哪一種權益/預約(如 charter_pass、indoor_session)
     ref_id INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (datetime('now')),
+    -- 2026-08新增:退款金額達NT$5,000以上時的雙重核准機制(見規則書)。
+    -- 同一時間一筆訂單最多只有一筆待核准的退款申請;送出申請的主管不能自己核准。
+    pending_refund_amount INTEGER,            -- 待核准的退款金額,NULL表示目前沒有待審核申請
+    pending_refund_reason TEXT,               -- 申請退款時填寫的原因
+    pending_refund_requested_by INTEGER REFERENCES staff(id),  -- 送出申請的員工
+    pending_refund_requested_at TEXT
 );
 
 -- 堂數/權益異動明細帳:每一次購買、圈存、解除圈存、正式扣除、退回、人工調整都留一筆紀錄,
@@ -607,8 +630,9 @@ INSERT INTO ski_resorts (region_id, code, name)
 
 -- 白馬、其他雪場:雪場清單由後台自行新增,先不建立示範資料
 
--- 教練駐在地選項種子資料
-INSERT INTO coach_location_options (name) VALUES ('藏王'), ('鬼首'), ('北海道'), ('高雄'), ('其他');
+-- 教練駐在地選項種子資料(高雄是室內滑雪分店,其餘是日本雪場)
+INSERT INTO coach_location_options (name, is_indoor_branch) VALUES
+ ('藏王', 0), ('鬼首', 0), ('北海道', 0), ('高雄', 1), ('其他', 0);
 
 -- 教練能力選項種子資料(中英並列顯示)
 INSERT INTO coach_capability_options (name) VALUES
@@ -624,6 +648,7 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
  ('japan_full_day_price', '{"1":15000,"2":16500,"3":18000,"4":19500}', '日本教練課全日價格(依人數1~4人)'),
  ('japan_half_day_price', '{"1":11000,"2":12000,"3":13000,"4":14000}', '日本教練課半日價格(依人數1~4人)'),
  ('japan_coach_designate_fee', '1000', '日本教練課指定教練加收費用'),
+ ('charter_coach_designate_fee', '500', '室內滑雪包機指定教練加收費用'),
  ('group_class_min', '2', '團課最低成班人數'),
  ('group_class_max', '4', '團課最大人數(額滿截止報名)'),
  ('plan_fee', '{"A":{"enrollment_fee":2500,"monthly":1500,"annual":18000},"B":{"enrollment_fee":3500,"monthly":2500,"annual":30000}}', 'A/B方案入會費(一次性)/月費/年繳(=月費x12,一次繳完12個月)'),

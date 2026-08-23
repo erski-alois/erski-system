@@ -303,9 +303,17 @@ def admin_partner_report(partner_id):
     orders_detail = []
     if member_ids:
         placeholders = ",".join("?" * len(member_ids))
+        # 2026-08確認:分潤只算「這位被推薦會員的第一筆已付款訂單」,不是這位會員
+        # 之後所有消費都持續算分潤(常見於「介紹新客戶」型的一次性推薦獎勵,而非
+        # 長期抽成),所以用相關子查詢限定只取每位會員最早的一筆paid訂單。
         orders = conn.execute(
             f"""SELECT o.*, m.name AS member_name FROM orders o JOIN members m ON o.member_id = m.id
-                WHERE o.member_id IN ({placeholders}) AND o.status='paid'""",
+                WHERE o.member_id IN ({placeholders}) AND o.status='paid'
+                AND o.id = (
+                    SELECT o2.id FROM orders o2
+                    WHERE o2.member_id = o.member_id AND o2.status='paid'
+                    ORDER BY o2.created_at ASC, o2.id ASC LIMIT 1
+                )""",
             member_ids,
         ).fetchall()
         orders_detail = rows_to_dicts(orders)
@@ -319,6 +327,7 @@ def admin_partner_report(partner_id):
         "total_paid_revenue": total_revenue,
         "rebate_rate": partner["rebate_rate"],
         "rebate_amount": rebate_amount,
+        "rebate_basis": "每位推薦會員只計算第一筆已付款訂單(一次性推薦獎勵,非長期抽成);撥款需你自行手動處理,系統僅提供報表",
         "orders": orders_detail,
     })
 
@@ -386,7 +395,14 @@ def staff_login_route():
 def get_member(member_id):
     conn = get_conn()
     m = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-    passes = conn.execute("SELECT * FROM charter_passes WHERE member_id=?", (member_id,)).fetchall()
+    passes = conn.execute(
+        """SELECT cp.*, r.id AS pending_request_id, r.request_type AS pending_request_type,
+                  r.requested_package_size AS pending_requested_package_size
+           FROM charter_passes cp
+           LEFT JOIN charter_pass_requests r ON r.charter_pass_id = cp.id AND r.status='pending'
+           WHERE cp.member_id=?""",
+        (member_id,),
+    ).fetchall()
     plan = conn.execute(
         "SELECT * FROM member_plans WHERE member_id=? AND is_active=1", (member_id,)
     ).fetchone()
@@ -586,6 +602,7 @@ def get_pricing():
         "japan_full_day": pricing.get_config("japan_full_day_price"),
         "japan_half_day": pricing.get_config("japan_half_day_price"),
         "japan_designate_coach_fee": pricing.get_config("japan_coach_designate_fee"),
+        "charter_designate_coach_fee": pricing.get_config("charter_coach_designate_fee"),
         "group_class_min": pricing.get_config("group_class_min"),
         "group_class_max": pricing.get_config("group_class_max"),
         "indoor_hours": {"start": pricing.get_config("indoor_start_hour"), "last_start": pricing.get_config("indoor_last_start_hour")},
@@ -702,6 +719,58 @@ def book_charter():
             coach_id=d.get("coach_id"),
         )
         return jsonify(result), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/indoor-coaches", methods=["GET"])
+def list_indoor_coaches_public():
+    """供客戶端選擇包機課「指定教練」時使用(不需要員工權限),
+    列出後台「教練管理」裡駐在地被標記為室內滑雪分店的教練。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT DISTINCT s.id, s.name, s.display_code FROM coach_locations cl
+           JOIN coach_location_options lo ON cl.location_option_id = lo.id
+           JOIN staff s ON cl.coach_id = s.id
+           WHERE lo.is_indoor_branch = 1 AND s.is_active = 1"""
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/members/<int:member_id>/charter-passes/<int:pass_id>/request", methods=["POST"])
+@require_member_or_staff()
+def member_request_charter_pass_change(member_id, pass_id):
+    """會員對已購買的包機堂數包送出「取消」或「換堂數包大小」申請,
+    退不退款/換多少堂,由客服後台審核決定(見admin_resolve_charter_pass_request)。"""
+    d = request.json
+    try:
+        result = booking.request_charter_pass_change(
+            member_id=member_id, charter_pass_id=pass_id,
+            request_type=d["request_type"], requested_package_size=d.get("requested_package_size"),
+            note=d.get("note"),
+        )
+        return jsonify(result), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/admin/charter-pass-requests/pending", methods=["GET"])
+@require_role("cs")
+def admin_list_charter_pass_requests():
+    return jsonify(booking.list_charter_pass_requests(status="pending"))
+
+
+@app.route("/api/admin/charter-pass-requests/<int:request_id>/resolve", methods=["POST"])
+@require_role("cs")
+def admin_resolve_charter_pass_request(request_id):
+    d = request.json
+    try:
+        result = booking.resolve_charter_pass_request(
+            request_id=request_id, action=d["action"], staff_id=request.current_staff["id"],
+            new_remaining=d.get("new_remaining"), staff_note=d.get("staff_note"),
+        )
+        return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -1764,7 +1833,10 @@ def admin_create_location_option():
     d = request.json
     conn = get_conn()
     try:
-        cur = conn.execute("INSERT INTO coach_location_options (name) VALUES (?)", (d["name"],))
+        cur = conn.execute(
+            "INSERT INTO coach_location_options (name, is_indoor_branch) VALUES (?, ?)",
+            (d["name"], 1 if d.get("is_indoor_branch") else 0),
+        )
         conn.commit()
         loc_id = cur.lastrowid
     except Exception:
@@ -2141,6 +2213,45 @@ def admin_record_order_payment(order_id):
     return jsonify({"ok": True, "new_status": new_status, "paid_amount": new_paid})
 
 
+# 2026-08新增:退款金額達這個門檻(NT$5,000)以上,需要「另一位主管或老闆」二次
+# 核准才會真的執行退款,送出申請的人不能自己核准(對照規則書的雙重核准要求)。
+REFUND_DUAL_APPROVAL_THRESHOLD = 5000
+
+
+def _execute_refund(conn, order_id, order, amount, reason, executed_by_staff_id, requested_by_staff_id=None):
+    """實際執行退款(寫transactions、更新orders.refunded_amount/status、寫audit_log)。
+    金額低於雙重核准門檻時,由originating manager直接呼叫(executed_by_staff_id==本人);
+    達門檻時,由核准的第二位主管呼叫,並多帶requested_by_staff_id記錄是誰送的申請。
+    呼叫端負責conn.commit()/conn.close()。"""
+    conn.execute(
+        """INSERT INTO transactions (member_id, order_id, ref_type, ref_id, amount, payment_type, payment_method, payment_status, confirmed_by_staff_id, note)
+           VALUES (?, ?, ?, ?, ?, 'refund', 'manual_grant', 'refunded', ?, ?)""",
+        (order["member_id"], order_id, order["ref_type"], order["ref_id"], amount,
+         executed_by_staff_id, reason),
+    )
+    new_refunded = order["refunded_amount"] + amount
+    new_status = "refunded" if new_refunded >= order["paid_amount"] else order["status"]
+    conn.execute(
+        """UPDATE orders SET refunded_amount=?, status=?,
+           pending_refund_amount=NULL, pending_refund_reason=NULL,
+           pending_refund_requested_by=NULL, pending_refund_requested_at=NULL
+           WHERE id=?""",
+        (new_refunded, new_status, order_id),
+    )
+    audit_after = {"refunded_amount": new_refunded, "reason": reason}
+    if requested_by_staff_id is not None:
+        audit_after["requested_by_staff_id"] = requested_by_staff_id
+        audit_after["approved_by_staff_id"] = executed_by_staff_id
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, ?, 'order', ?, ?, ?)""",
+        (executed_by_staff_id, "refund_order" if requested_by_staff_id is None else "refund_approved", order_id,
+         json.dumps({"refunded_amount": order["refunded_amount"]}),
+         json.dumps(audit_after)),
+    )
+    return new_status, new_refunded
+
+
 @app.route("/api/admin/orders/<int:order_id>/refund", methods=["POST"])
 @require_role("manager")
 def admin_refund_order(order_id):
@@ -2155,26 +2266,110 @@ def admin_refund_order(order_id):
     if amount <= 0 or amount > max_refundable:
         conn.close()
         return jsonify({"error": f"退款金額不合理(最多可退NT${max_refundable})"}), 400
+    if order["pending_refund_amount"]:
+        conn.close()
+        return jsonify({"error": "這筆訂單已經有一筆退款申請待核准,請先處理完再申請新的"}), 400
 
+    if amount < REFUND_DUAL_APPROVAL_THRESHOLD:
+        # 小額退款:維持原本行為,manager以上可以直接執行,不用二次核准。
+        new_status, new_refunded = _execute_refund(
+            conn, order_id, order, amount, d.get("reason"), request.current_staff["id"]
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True, "status": "refunded", "new_status": new_status, "refunded_amount": new_refunded})
+
+    # 達門檻:這次操作只送出申請,不會真的退款,要等另一位主管/老闆呼叫
+    # /refund/approve才會真的執行。
     conn.execute(
-        """INSERT INTO transactions (member_id, order_id, ref_type, ref_id, amount, payment_type, payment_method, payment_status, confirmed_by_staff_id, note)
-           VALUES (?, ?, ?, ?, ?, 'refund', 'manual_grant', 'refunded', ?, ?)""",
-        (order["member_id"], order_id, order["ref_type"], order["ref_id"], amount,
-         request.current_staff["id"], d.get("reason")),
+        f"""UPDATE orders SET pending_refund_amount=?, pending_refund_reason=?,
+           pending_refund_requested_by=?, pending_refund_requested_at={NOW_SQL} WHERE id=?""",
+        (amount, d.get("reason"), request.current_staff["id"], order_id),
     )
-    new_refunded = order["refunded_amount"] + amount
-    new_status = "refunded" if new_refunded >= order["paid_amount"] else order["status"]
-    conn.execute("UPDATE orders SET refunded_amount=?, status=? WHERE id=?", (new_refunded, new_status, order_id))
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
-           VALUES (?, 'refund_order', 'order', ?, ?, ?)""",
+           VALUES (?, 'refund_requested', 'order', ?, '{}', ?)""",
         (request.current_staff["id"], order_id,
-         json.dumps({"refunded_amount": order["refunded_amount"]}),
-         json.dumps({"refunded_amount": new_refunded, "reason": d.get("reason")})),
+         json.dumps({"pending_refund_amount": amount, "reason": d.get("reason")})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "ok": True, "status": "pending_approval",
+        "message": f"退款金額達NT${REFUND_DUAL_APPROVAL_THRESHOLD}以上,已送出申請,需由另一位主管或老闆核准後才會實際退款",
+    })
+
+
+@app.route("/api/admin/orders/<int:order_id>/refund/approve", methods=["POST"])
+@require_role("manager")
+def admin_approve_refund(order_id):
+    conn = get_conn()
+    order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order:
+        conn.close()
+        return jsonify({"error": "找不到此訂單"}), 404
+    if not order["pending_refund_amount"]:
+        conn.close()
+        return jsonify({"error": "這筆訂單目前沒有待核准的退款申請"}), 400
+    if order["pending_refund_requested_by"] == request.current_staff["id"]:
+        conn.close()
+        return jsonify({"error": "不能核准自己送出的退款申請,需要另一位主管或老闆核准"}), 403
+
+    new_status, new_refunded = _execute_refund(
+        conn, order_id, order, order["pending_refund_amount"], order["pending_refund_reason"],
+        request.current_staff["id"], requested_by_staff_id=order["pending_refund_requested_by"],
     )
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "new_status": new_status, "refunded_amount": new_refunded})
+
+
+@app.route("/api/admin/orders/<int:order_id>/refund/reject", methods=["POST"])
+@require_role("manager")
+def admin_reject_refund(order_id):
+    d = request.json or {}
+    conn = get_conn()
+    order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not order:
+        conn.close()
+        return jsonify({"error": "找不到此訂單"}), 404
+    if not order["pending_refund_amount"]:
+        conn.close()
+        return jsonify({"error": "這筆訂單目前沒有待核准的退款申請"}), 400
+    conn.execute(
+        """UPDATE orders SET pending_refund_amount=NULL, pending_refund_reason=NULL,
+           pending_refund_requested_by=NULL, pending_refund_requested_at=NULL WHERE id=?""",
+        (order_id,),
+    )
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'refund_rejected', 'order', ?, ?, ?)""",
+        (request.current_staff["id"], order_id,
+         json.dumps({"pending_refund_amount": order["pending_refund_amount"],
+                     "requested_by_staff_id": order["pending_refund_requested_by"]}),
+         json.dumps({"rejection_note": d.get("note")})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/orders/refunds/pending", methods=["GET"])
+@require_role("manager")
+def admin_list_pending_refunds():
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT o.id AS order_id, o.member_id, m.name AS member_name, o.order_type,
+                  o.pending_refund_amount, o.pending_refund_reason, o.pending_refund_requested_at,
+                  o.pending_refund_requested_by, s.name AS requested_by_name
+           FROM orders o
+           JOIN members m ON o.member_id = m.id
+           LEFT JOIN staff s ON o.pending_refund_requested_by = s.id
+           WHERE o.pending_refund_amount IS NOT NULL
+           ORDER BY o.pending_refund_requested_at"""
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
 
 
 import csv

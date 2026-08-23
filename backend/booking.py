@@ -6,6 +6,7 @@
 跳台體驗是獨立資源,不受此限制。
 """
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from db import get_conn, rows_to_dicts, NOW_SQL
@@ -353,12 +354,16 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
         conn.close()
         raise ValueError("此時段機台已被其他課程佔用,請選擇其他時段")
 
+    # 會員自選教練時,比照日本教練課機制加收一筆指定費(目前只記錄金額,
+    # 不接自動收款,收費由客服後台依這筆紀錄手動處理)。
+    designate_fee = pricing.get_config("charter_coach_designate_fee", 0) if coach_id else 0
+
     cur = conn.execute(
         """INSERT INTO indoor_sessions
            (booking_date, start_hour, duration_minutes, category, coach_id, max_capacity,
-            status, charter_package_size)
-           VALUES (?, ?, 50, 'charter', ?, ?, 'confirmed', ?)""",
-        (booking_date, start_hour, coach_id, cpass["headcount_type"], cpass["package_size"]),
+            status, charter_package_size, designate_fee)
+           VALUES (?, ?, 50, 'charter', ?, ?, 'confirmed', ?, ?)""",
+        (booking_date, start_hour, coach_id, cpass["headcount_type"], cpass["package_size"], designate_fee),
     )
     session_id = cur.lastrowid
     cur2 = conn.execute(
@@ -384,7 +389,106 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
         "lesson_number": lesson_number,
         "package_size": cpass["package_size"],
         "remaining": remaining_after,
+        "designate_fee": designate_fee,
     }
+
+
+def request_charter_pass_change(member_id, charter_pass_id, request_type, requested_package_size=None, note=None):
+    """會員對已購買的包機堂數包送出「取消」或「換堂數包大小」申請。
+    不自動執行任何金流/堂數異動,退不退款、換多少堂由客服後台審核決定,
+    這裡只負責記一筆待審核申請,並擋掉同一張堂數包已經有一筆待審核申請的情況。"""
+    if request_type not in ("cancel", "resize"):
+        raise ValueError("申請類型錯誤")
+    if request_type == "resize" and not requested_package_size:
+        raise ValueError("換堂數包大小時,需指定希望改成的堂數")
+    conn = get_conn()
+    cpass = conn.execute("SELECT * FROM charter_passes WHERE id=?", (charter_pass_id,)).fetchone()
+    if not cpass or cpass["member_id"] != member_id:
+        conn.close()
+        raise ValueError("找不到此會員的包機堂數包")
+    existing = conn.execute(
+        "SELECT id FROM charter_pass_requests WHERE charter_pass_id=? AND status='pending'",
+        (charter_pass_id,),
+    ).fetchone()
+    if existing:
+        conn.close()
+        raise ValueError("這張堂數包已經有一筆申請正在等待客服處理,請耐心等候")
+    cur = conn.execute(
+        """INSERT INTO charter_pass_requests (charter_pass_id, member_id, request_type, requested_package_size, note)
+           VALUES (?, ?, ?, ?, ?)""",
+        (charter_pass_id, member_id, request_type, requested_package_size, note),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM charter_pass_requests WHERE id=?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def list_charter_pass_requests(status="pending"):
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT r.*, m.name AS member_name, m.phone AS member_phone,
+                  cp.package_size AS current_package_size, cp.remaining AS current_remaining,
+                  cp.headcount_type AS current_headcount_type
+           FROM charter_pass_requests r
+           JOIN members m ON r.member_id = m.id
+           JOIN charter_passes cp ON r.charter_pass_id = cp.id
+           WHERE r.status = ? ORDER BY r.created_at""",
+        (status,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def resolve_charter_pass_request(request_id, action, staff_id, new_remaining=None, staff_note=None):
+    """客服審核會員的取消/換方案申請。
+    action='approve'時:
+      - request_type='cancel' -> 把該堂數包remaining歸零(視為作廢,不自動退款,
+        實際退款由客服另外走既有訂單退款流程處理)。
+      - request_type='resize' -> 依客服輸入的new_remaining直接設定新的剩餘堂數
+        (差額如何補款/退款由客服自行掌握,不自動算價,原本package_size也同步
+        改成申請時希望的新堂數,方便日後查詢對照)。
+    action='reject'時:只標記申請被拒絕,不異動堂數包。"""
+    if action not in ("approve", "reject"):
+        raise ValueError("處理方式錯誤")
+    conn = get_conn()
+    req = conn.execute("SELECT * FROM charter_pass_requests WHERE id=?", (request_id,)).fetchone()
+    if not req:
+        conn.close()
+        raise ValueError("找不到這筆申請")
+    if req["status"] != "pending":
+        conn.close()
+        raise ValueError("這筆申請已經被處理過了")
+    now = _now_tw().isoformat(sep=" ", timespec="seconds")
+    if action == "approve":
+        if req["request_type"] == "cancel":
+            conn.execute("UPDATE charter_passes SET remaining = 0 WHERE id=?", (req["charter_pass_id"],))
+        else:  # resize
+            if new_remaining is None:
+                conn.close()
+                raise ValueError("核准換方案時,請填入這張堂數包最終剩餘堂數")
+            conn.execute(
+                "UPDATE charter_passes SET package_size=?, remaining=? WHERE id=?",
+                (req["requested_package_size"], new_remaining, req["charter_pass_id"]),
+            )
+        conn.execute(
+            "UPDATE charter_pass_requests SET status='approved', handled_by_staff_id=?, handled_at=?, note=? WHERE id=?",
+            (staff_id, now, staff_note or req["note"], request_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE charter_pass_requests SET status='rejected', handled_by_staff_id=?, handled_at=?, note=? WHERE id=?",
+            (staff_id, now, staff_note or req["note"], request_id),
+        )
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'resolve_charter_pass_request', 'charter_pass_request', ?, ?, ?)""",
+        (staff_id, request_id, json.dumps({"status": "pending"}),
+         json.dumps({"status": "approved" if action == "approve" else "rejected"})),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------
