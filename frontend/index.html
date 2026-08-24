@@ -161,12 +161,21 @@
         overflow-x: auto; font-size: 11px; max-height: 160px; }
   .row { display: flex; gap: 8px; }
   .row > * { flex: 1; }
+  /* 「出生年月日」跟「性別」原本並排一列,裡面的年/月/日又是另一層.row,
+     在窄螢幕(手機)上會被壓縮成兩層一半寬度,3個select擠在一起導致文字被
+     裁切、跟下拉箭頭疊在一起(2026-08-24手機視覺檢查抓到)。這裡讓「性別」
+     在窄螢幕上換到下一行,「出生年月日」整列都能用滿版寬度排3個select。 */
+  @media (max-width: 480px) {
+    .row-birthdate-gender { flex-direction: column; }
+  }
   .list-item { padding: 8px 0; border-bottom: 1px solid #eef1f5; font-size: 13px; }
 
   .coach-team-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:16px; }
   .coach-card { display:flex; flex-direction:column; align-items:center; text-align:center;
                 padding:14px; border:1px solid #e2e6ea; border-radius:10px; }
   .coach-card img { width:88px; height:88px; object-fit:cover; border-radius:50%; background:#eee; margin-bottom:8px; }
+  .coach-avatar-placeholder { width:88px; height:88px; border-radius:50%; background:#eee; margin-bottom:8px;
+                               display:flex; align-items:center; justify-content:center; font-size:28px; color:#aab2bd; }
   .coach-cert-badges { display:flex; flex-wrap:wrap; justify-content:center; gap:4px; margin:6px 0; }
   .coach-cert-badge { font-size:11px; background:#f0f2f5; color:#5a6472; padding:2px 8px; border-radius:10px; white-space:nowrap; }
   @media (max-width: 720px) {
@@ -653,7 +662,7 @@
           <p class="note">請填寫完整,方便教練依你的程度安排課程。</p>
 
           <label>姓名</label><input id="pName">
-          <div class="row">
+          <div class="row row-birthdate-gender">
             <div>
               <label>出生年月日</label>
               <div class="row">
@@ -4177,7 +4186,7 @@ async function loadCoachTeam() {
   const certTypeLabel = { ski: "Ski", snowboard: "Snowboard", other: "" };
   el.innerHTML = `<div class="coach-team-grid">` + data.map(c => `
     <div class="coach-card">
-      <img src="${c.promo_photo || ''}" alt="${c.name}">
+      ${c.promo_photo ? `<img src="${c.promo_photo}" alt="${c.name}">` : `<div class="coach-avatar-placeholder">${(c.name || "").slice(0, 1)}</div>`}
       <b>${c.name}</b>
       ${c.rank ? `<p class="note">${c.rank}</p>` : ""}
       ${c.capabilities && c.capabilities.length ? `
