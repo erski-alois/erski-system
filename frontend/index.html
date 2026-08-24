@@ -658,6 +658,11 @@
           <div id="accountOverview"></div>
         </div>
         <div class="card">
+          <h3>通知</h3>
+          <p class="note">訂課/購買成功、方案審核結果等系統訊息,最多顯示最近50筆。</p>
+          <div id="notificationListWrap"></div>
+        </div>
+        <div class="card">
           <h3>我的資料</h3>
           <p class="note">請填寫完整,方便教練依你的程度安排課程。</p>
 
@@ -3553,6 +3558,25 @@ async function selectCalendarDay(key, pickerId, wrapId, dateStr) {
 
 // ---------------- 共用:範圍選擇大日曆(日本教練課起訖日期) ----------------
 const rangeCalendarState = { year: null, month: null, start: null, end: null };
+const japanMonthDataCache = {};  // "雪場id-YYYY-MM" -> {日期: 當天已訂課筆數}
+
+// 跟submitJapanTrip()送出時解析resort_id用的邏輯完全一致:有的分區要另外選雪場,
+// 有的分區本身就只對應單一雪場。
+function getCurrentJapanResortId() {
+  if (!currentJapanRegion) return null;
+  if (currentJapanRegion.requires_resort_selection) {
+    const v = document.getElementById("japanResort").value;
+    return v ? parseInt(v) : null;
+  }
+  return currentJapanRegion.resorts[0] ? currentJapanRegion.resorts[0].id : null;
+}
+
+// 取消/重新訂課後,或換了雪場,要清掉快取重新抓,不然橘點畫面不會更新
+// (跟invalidateAllMachineCalendars()對室內滑雪日曆的處理是同一個概念)。
+function invalidateJapanCalendar() {
+  Object.keys(japanMonthDataCache).forEach(k => delete japanMonthDataCache[k]);
+  renderJapanRangeCalendar();
+}
 
 async function renderJapanRangeCalendar() {
   const now = new Date();
@@ -3561,6 +3585,18 @@ async function renderJapanRangeCalendar() {
   const todayStr = now.toISOString().slice(0,10);
   const firstDow = new Date(year, month - 1, 1).getDay();
   const daysInMonth = new Date(year, month, 0).getDate();
+
+  const resortId = getCurrentJapanResortId();
+  let monthData = {};
+  if (resortId) {
+    const ym = `${year}-${String(month).padStart(2,"0")}`;
+    const cacheKey = `${resortId}-${ym}`;
+    if (!japanMonthDataCache[cacheKey]) {
+      const { data } = await api(`/resorts/${resortId}/month/${ym}`);
+      japanMonthDataCache[cacheKey] = data || {};
+    }
+    monthData = japanMonthDataCache[cacheKey];
+  }
 
   let cells = "";
   for (let i = 0; i < firstDow; i++) cells += `<div class="cal-day empty"></div>`;
@@ -3574,9 +3610,12 @@ async function renderJapanRangeCalendar() {
     const isEnd = dateStr === e;
     const inRange = s && e && dateStr > s && dateStr < e;
     const disabled = isPast || !inSeason;
+    const hasBooking = monthData[dateStr];
     const cls = ["cal-day", disabled ? "past" : "", isToday ? "today" : "",
                  (isStart || isEnd) ? "selected" : "", inRange ? "in-range" : ""].filter(Boolean).join(" ");
-    cells += `<div class="${cls}" ${disabled ? "" : `onclick="onJapanRangeDayClick('${dateStr}')"`}>${d}</div>`;
+    cells += `<div class="${cls}" ${disabled ? "" : `onclick="onJapanRangeDayClick('${dateStr}')"`}>
+      ${d}${hasBooking ? `<span class="cal-dot"></span>` : ""}
+    </div>`;
   }
 
   document.getElementById("japanCalendarWrap").innerHTML = `
@@ -3590,6 +3629,7 @@ async function renderJapanRangeCalendar() {
       <div class="cal-dow">三</div><div class="cal-dow">四</div><div class="cal-dow">五</div><div class="cal-dow">六</div>
       ${cells}
     </div>
+    ${resortId ? `<p class="note" style="margin-top:6px;">橘點代表這個雪場當天已有會員訂課(不代表已經額滿,實際能不能訂以送出後系統確認為準)。</p>` : ""}
   `;
 }
 function changeJapanRangeMonth(delta) {
@@ -4042,6 +4082,8 @@ async function openJapanRegion(regionId) {
 async function onJapanResortChange() {
   const resortId = document.getElementById("japanResort").value;
   const coachSel = document.getElementById("japanCoach");
+  // 換了雪場,日曆橘點要跟著換成這個雪場的訂課狀況,不能沿用上一個雪場快取的資料。
+  await renderJapanRangeCalendar();
   if (!currentJapanRegion.allow_designate_coach) {
     coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
     updateJapanPrice();
@@ -4155,7 +4197,7 @@ async function submitJapanTrip() {
     document.getElementById("japanRangeNote").innerHTML = "";
     rangeCalendarState.start = null;
     rangeCalendarState.end = null;
-    renderJapanRangeCalendar();
+    invalidateJapanCalendar();
     requestPayment(data.first_pay_amount, "japan_booking", data.booking_ids[0]);
     loadAccountOverview();
   } else {
@@ -4227,9 +4269,13 @@ async function cancelBooking(kind, refId) {
   else if (kind === "jump") path = `/booking/jump/${refId}/cancel`;
   else path = `/booking/japan/${refId}/cancel`;
   const { ok, data } = await api(path, { method: "POST" });
-  // 取消體驗課/包機/自主練習/團課/跳台後,大日曆上代表當天有預約的橘點要立即消失,
-  // 不能只刷新會員中心的清單卻讓日曆繼續顯示已經取消的舊快取。
-  if (ok) { alert("已取消"); loadAccountOverview(); if (kind === "indoor" || kind === "jump") invalidateAllMachineCalendars(); }
+  // 取消體驗課/包機/自主練習/團課/跳台/日本教練課後,大日曆上代表當天有預約的橘點要
+  // 立即消失,不能只刷新會員中心的清單卻讓日曆繼續顯示已經取消的舊快取。
+  if (ok) {
+    alert("已取消"); loadAccountOverview();
+    if (kind === "indoor" || kind === "jump") invalidateAllMachineCalendars();
+    else if (kind === "japan") invalidateJapanCalendar();
+  }
   else alert(data.error);
 }
 
@@ -4377,6 +4423,25 @@ async function loadAccountOverview() {
     refStatus.innerHTML = "";
     refInputWrap.style.display = "block";
   }
+
+  loadNotificationList();
+}
+
+// 站內通知列表:訂課/購買成功、方案審核結果等系統訊息(目前只會顯示在會員登入後
+// 的會員中心,還沒有真的透過LINE/Email/簡訊主動發送到會員的手機或信箱)。
+// 每次帳戶總覽刷新(訂課/購買/取消完成後都會呼叫loadAccountOverview)都會一併重新
+// 抓最新通知,不用另外處理更新時機。
+async function loadNotificationList() {
+  const el = document.getElementById("notificationListWrap");
+  if (!el || !currentMemberId) return;
+  const { ok, data } = await api(`/members/${currentMemberId}/notifications`);
+  if (!ok || !data.length) {
+    el.innerHTML = `<div class="list-item">目前沒有通知</div>`;
+    return;
+  }
+  el.innerHTML = data.map(n =>
+    `<div class="list-item">${n.content}<br><span class="note">${n.created_at}</span></div>`
+  ).join("");
 }
 async function changeMyPassword() {
   const current_password = document.getElementById("pCurrentPassword").value;

@@ -856,6 +856,22 @@ def list_japan_regions():
     return jsonify(result)
 
 
+@app.route("/api/resorts/<int:resort_id>/month/<year_month>", methods=["GET"])
+def resort_month_view(resort_id, year_month):
+    """year_month格式YYYY-MM,回傳該雪場當月每天「是否已有會員訂課」,供日本滑雪預約的
+    日曆畫橘點用(跟室內滑雪/api/indoor/month同樣的概念):不代表已經額滿,只是提示當天
+    已經有其他預約,實際能不能訂要看送出後系統依駐在教練數判斷的結果。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT booking_date, COUNT(*) AS cnt FROM japan_bookings
+           WHERE resort_id=? AND booking_date LIKE ? AND status != 'cancelled'
+           GROUP BY booking_date""",
+        (resort_id, f"{year_month}-%"),
+    ).fetchall()
+    conn.close()
+    return jsonify({r["booking_date"]: r["cnt"] for r in rows})
+
+
 @app.route("/api/resorts", methods=["GET"])
 def list_resorts():
     conn = get_conn()
@@ -1365,6 +1381,59 @@ def book_japan():
 # ------------------------------------------------------------------
 # 付款
 # ------------------------------------------------------------------
+_INDOOR_CATEGORY_LABEL = {"trial": "體驗課", "charter": "包機", "self_practice": "自主練習", "group_class": "團課"}
+
+
+def _log_purchase_notification(conn, member_id, ref_type, ref_id):
+    """付款確認成功時呼叫,把「已收到您的訂課/購買」這類訊息記錄成通知,讓會員登入
+    會員中心就看得到(2026-08-24新增:之前這幾種購買/訂課完成後完全沒有留下任何
+    通知紀錄,會員自己也無從查詢)。查不到對應資料時靜默略過,不影響付款本身。"""
+    try:
+        if ref_type == "charter_order":
+            row = conn.execute(
+                "SELECT package_size FROM charter_passes WHERE id=?", (ref_id,)
+            ).fetchone()
+            if row:
+                booking.log_notification(
+                    conn, member_id, "purchase_confirmed",
+                    f"已收到您購買的包機{row['package_size']}堂堂數包,款項確認完成,堂數已入帳,可以開始訂課。",
+                )
+        elif ref_type == "indoor_session":
+            row = conn.execute(
+                "SELECT category, booking_date, start_hour FROM indoor_sessions WHERE id=?", (ref_id,)
+            ).fetchone()
+            if row:
+                label = _INDOOR_CATEGORY_LABEL.get(row["category"], "課程")
+                booking.log_notification(
+                    conn, member_id, "booking_confirmed",
+                    f"已收到您的{label}預約,{row['booking_date']} {row['start_hour']}:00,款項確認完成。",
+                )
+        elif ref_type == "jump_booking":
+            row = conn.execute(
+                "SELECT booking_date, start_time FROM jump_bookings WHERE id=?", (ref_id,)
+            ).fetchone()
+            if row:
+                booking.log_notification(
+                    conn, member_id, "booking_confirmed",
+                    f"已收到您的跳台預約,{row['booking_date']} {row['start_time']},款項確認完成。",
+                )
+        elif ref_type == "japan_booking":
+            row = conn.execute(
+                "SELECT resort_id, booking_date FROM japan_bookings WHERE id=?", (ref_id,)
+            ).fetchone()
+            if row:
+                resort = conn.execute(
+                    "SELECT name FROM ski_resorts WHERE id=?", (row["resort_id"],)
+                ).fetchone()
+                resort_name = resort["name"] if resort else ""
+                booking.log_notification(
+                    conn, member_id, "booking_confirmed",
+                    f"已收到您的日本滑雪預約({resort_name} {row['booking_date']}),行程訂金確認完成。",
+                )
+    except Exception:
+        pass  # 通知記錄失敗不該讓付款這個更重要的動作跟著失敗
+
+
 @app.route("/api/payments/create", methods=["POST"])
 def create_payment():
     from payments import active_provider
@@ -1387,8 +1456,10 @@ def create_payment():
         tx_id = cur.lastrowid
         if result["status"] == "confirmed" and d.get("ref_type") == "charter_order":
             booking.finalize_charter_purchase(d["ref_id"], conn=conn)
+            _log_purchase_notification(conn, member_id, d.get("ref_type"), d.get("ref_id"))
         elif result["status"] == "confirmed" and d.get("ref_type") in ("indoor_session", "jump_booking", "japan_booking"):
             booking.mark_order_paid(d["ref_type"], d["ref_id"], conn=conn, payment_method=d["payment_method"])
+            _log_purchase_notification(conn, member_id, d.get("ref_type"), d.get("ref_id"))
         conn.commit()
     except Exception:
         conn.rollback()

@@ -101,8 +101,12 @@ def _check_continuous_hours(conn, member_id, booking_date, start_hour, duration_
         )
 
 
-def _log_notification(conn, member_id, notify_type, content, channel="system"):
-    """記錄一筆通知(目前為模擬,尚未真正串接LINE/Email/簡訊發送)。"""
+def log_notification(conn, member_id, notify_type, content, channel="system"):
+    """記錄一筆通知。2026-08-24起,這筆記錄會即時顯示在會員中心的「通知」列表
+    (前端呼叫GET /api/members/<id>/notifications),所以會員登入後看得到；但
+    channel目前一律是'system'、status一律是'simulated',還沒有真的透過LINE/
+    Email/簡訊主動發送到會員的手機或信箱(那部分要等申請好對應的第三方服務帳號,
+    才能把這裡的channel/status接上真正的發送邏輯,呼叫端不用改)。"""
     conn.execute(
         """INSERT INTO notifications (member_id, channel, notify_type, content, status)
            VALUES (?, ?, ?, ?, 'simulated')""",
@@ -137,7 +141,7 @@ def check_and_auto_cancel_group_classes():
                 "UPDATE indoor_session_members SET status='cancelled' WHERE session_id=?", (gc["id"],)
             )
             for m in members:
-                _log_notification(
+                log_notification(
                     conn, m["member_id"], "group_class_cancelled",
                     f"{gc['booking_date']} {gc['start_hour']}:00 團課因開課前24小時仍未滿{pricing.GROUP_CLASS_MIN}人,已自動取消",
                 )
@@ -390,6 +394,12 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
            VALUES (?, 'charter_pass', ?, 'reserve', -1, 'indoor_session_member', ?, ?)""",
         (member_id, charter_pass_id, cur2.lastrowid, f"預約 {booking_date} {start_hour}:00 包機課,圈存1堂"),
     )
+    # 用堂數包扣抵訂課,直接是'confirmed'狀態、不會另外走一次付款流程,所以這裡直接記
+    # 通知,不然這種扣堂數訂課的會員完全不會有任何通知紀錄。
+    log_notification(
+        conn, member_id, "booking_confirmed",
+        f"已收到您的包機預約,{booking_date} {start_hour}:00(扣抵堂數包,剩餘{cpass['remaining'] - 1}堂)。",
+    )
     conn.commit()
     row = conn.execute("SELECT * FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
     remaining_after = cpass["remaining"] - 1
@@ -546,6 +556,13 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
                VALUES (?, 'self_practice', ?, 'pending', 'indoor_session', ?)""",
             (member_id, price, session_id),
         )
+    else:
+        # 用方案額度預約(不用付款),不會經過/api/payments/create那個流程,所以這裡直接
+        # 記通知,不然這種免費預約的會員完全不會有任何通知紀錄。
+        log_notification(
+            conn, member_id, "booking_confirmed",
+            f"已收到您的自主練習預約,{booking_date} {start_hour}:00(使用方案額度,免另外付款)。",
+        )
     conn.commit()
     row = conn.execute("SELECT * FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
     conn.close()
@@ -628,11 +645,11 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
                 (session_id,),
             ).fetchall()
             for e in enrolled:
-                _log_notification(conn, e["member_id"], "group_class_confirmed",
+                log_notification(conn, e["member_id"], "group_class_confirmed",
                                    f"{booking_date} {start_hour}:00 團課已成班,將如期開課")
 
     if is_waitlist:
-        _log_notification(conn, member_id, "group_class_waitlisted",
+        log_notification(conn, member_id, "group_class_waitlisted",
                            f"{booking_date} {start_hour}:00 團課已滿4人,已為你加入候補名單")
 
     conn.commit()
@@ -738,7 +755,7 @@ def review_plan_application(application_id, staff_id, approve, reason=None):
             (new_status, staff_id, application_id),
         )
 
-        _log_notification(
+        log_notification(
             conn, app_row["member_id"],
             "plan_application_approved" if approve else "plan_application_rejected",
             f"你申請的方案{app_row['plan_name']}已{'核准,方案已生效' if approve else '被拒絕' + (f'({reason})' if reason else '')}",
@@ -1413,7 +1430,7 @@ def cancel_indoor_booking(member_ref_id, is_staff=False):
                 conn.execute(
                     "UPDATE indoor_session_members SET status='enrolled' WHERE id=?", (waitlisted["id"],)
                 )
-                _log_notification(
+                log_notification(
                     conn, waitlisted["member_id"], "waitlist_promoted",
                     f"{row['booking_date']} 團課候補遞補成功,已確認為正式名額,請留意上課時間",
                 )
