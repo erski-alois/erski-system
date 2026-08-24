@@ -2545,7 +2545,9 @@ async function resolveSessionConflict(sessionId) {
 async function cancelSessionAsStaff(sessionId) {
   if (!confirm("確定要取消這個場次嗎?(將取消所有報名此場次的會員)")) return;
   const { ok, data } = await api(`/admin/sessions/${sessionId}/cancel`, { method: "POST" });
-  if (ok) { alert(`已取消,共${data.cancelled_count}筆預約`); renderPendingActions(); }
+  // 後台這裡取消場次,跟會員自己取消一樣,也要清掉大日曆的快取,
+  // 不然橘點會繼續顯示這個已經被取消的場次(這是8/27橘點不消失這個回報的實際原因)。
+  if (ok) { alert(`已取消,共${data.cancelled_count}筆預約`); renderPendingActions(); invalidateAllMachineCalendars(); }
 }
 
 // ---------------- 團課教練指派(客服以上) ----------------
