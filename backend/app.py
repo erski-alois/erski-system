@@ -10,6 +10,7 @@ import authtoken
 import booking
 import pricing
 import payroll
+import config
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
@@ -1803,7 +1804,7 @@ def admin_create_staff():
         """INSERT INTO staff (work_id, name, display_code, phone, birthday, password_hash, role, branch)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (d["work_id"], d["name"], d.get("display_code"), d.get("phone"), d["birthday"],
-         auth.hash_password(password), d["role"], d["branch"]),
+         auth.new_password_hash(password), d["role"], d["branch"]),
     )
     staff_id = cur.lastrowid
     conn.execute(
@@ -1818,7 +1819,14 @@ def admin_create_staff():
 
 @app.route("/api/auth/demo-staff", methods=["GET"])
 def demo_staff_list():
-    # 僅供本地端示範快速登入使用,正式上線需移除此端點
+    """僅供本機/測試環境的示範快速登入用(登入頁「員工登入」一鍵按鈕的資料來源)。
+    2026-08-24修正:這支API完全沒有驗證身分,卻直接把示範員工的工號跟明碼密碼
+    (含老闆帳號)回傳給任何人,正式站(ERSKI_ENV=production)上等於任何訪客都能
+    一鍵用老闆身分登入後台——這是一個嚴重的資安漏洞。修法:只有在非正式環境
+    才回傳這份清單,正式環境一律回傳空陣列(前端的一鍵登入按鈕列會直接是空的,
+    不影響用工號/密碼手動登入)。"""
+    if config.IS_PRODUCTION:
+        return jsonify([])
     from db import DEMO_STAFF
     return jsonify([
         {"work_id": w, "name": n, "role": r, "password": bday.replace("-", "")[2:8]}
@@ -2560,7 +2568,7 @@ def admin_import_coaches():
                 """INSERT INTO staff (work_id, name, phone, birthday, password_hash, role, branch)
                    VALUES (?, ?, ?, ?, ?, 'coach', ?)""",
                 (work_id, name, (row.get("phone") or "").strip() or None, birthday,
-                 auth.hash_password(password), (row.get("branch") or "").strip() or "高雄"),
+                 auth.new_password_hash(password), (row.get("branch") or "").strip() or "高雄"),
             )
             created.append({"row": i, "staff_id": cur.lastrowid, "name": name, "default_password": password})
         except Exception as e:
