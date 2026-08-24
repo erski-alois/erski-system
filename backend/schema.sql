@@ -128,6 +128,8 @@ CREATE TABLE IF NOT EXISTS charter_passes (
     package_size INTEGER NOT NULL,
     headcount_type INTEGER NOT NULL,
     remaining INTEGER NOT NULL,
+    equipment_type TEXT,   -- 購買當下選擇的滑行項目(ski/snowboard),之後用這張堂數包訂課一律鎖定此項目;
+                           -- 此功能上線前已購買的舊堂數包這欄是NULL,維持原本可自由選擇滑行項目的行為
     created_at TEXT DEFAULT (datetime('now'))
 );
 

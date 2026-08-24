@@ -1785,7 +1785,9 @@ async function loadTeamCalendar() {
 
   for (let d = 1; d <= lastDate; d++) {
     const dateStr = `${year}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    const entries = (data.days[dateStr] || []).filter(e => e.status !== "working" || e.session_count > 0);
+    const dayData = data.days[dateStr] || { entries: [], unassigned_japan: [] };
+    const entries = (dayData.entries || []).filter(e => e.status !== "working" || e.session_count > 0);
+    const unassigned = dayData.unassigned_japan || [];
     html += `<div class="team-cal-day clickable-card" onclick="openJapanQuickCreate('${dateStr}')">
       <div class="team-cal-daynum">${d}</div>
       ${entries.map(e => {
@@ -1793,8 +1795,10 @@ async function loadTeamCalendar() {
           const cls = e.status === "business_trip" ? "trip" : "leave";
           return `<div class="team-cal-entry ${cls}">${e.coach_name}・${SCHEDULE_STATUS_LABEL[e.status]||e.status}</div>`;
         }
-        return `<div class="team-cal-entry session">${e.coach_name}・${e.session_count}堂課</div>`;
+        const japanNote = e.japan_resort_name ? `(日本:${e.japan_resort_name})` : "";
+        return `<div class="team-cal-entry session">${e.coach_name}・${e.session_count}堂課${japanNote}</div>`;
       }).join("")}
+      ${unassigned.map(u => `<div class="team-cal-entry session">未指定教練・日本${u.resort_name}・${u.count}組</div>`).join("")}
     </div>`;
   }
   html += `</div>`;
@@ -2185,7 +2189,7 @@ async function toggleMemberDetail(memberId) {
            ・包機${m.quota_status.charter_used}/${m.quota_status.charter_total}` : ""}</div>`
       : `<div class="list-item">尚未取得團課資格</div>`}
     ${m.charter_passes && m.charter_passes.length
-      ? m.charter_passes.map(p => `<div class="list-item">包機堂數包(${p.package_size}堂):剩餘${p.remaining}堂</div>`).join("")
+      ? m.charter_passes.map(p => `<div class="list-item">包機堂數包(${p.package_size}堂・${_equipLabel(p.equipment_type)}):剩餘${p.remaining}堂</div>`).join("")
       : ""}
 
     <div class="sub-section-title">最近預約(最多顯示10筆)</div>
@@ -3527,10 +3531,13 @@ function changeCalendarMonth(key, pickerId, wrapId, delta) {
   renderCalendar(key, pickerId, wrapId, window._calendarCallbacks[key]);
 }
 
-function selectCalendarDay(key, pickerId, wrapId, dateStr) {
+async function selectCalendarDay(key, pickerId, wrapId, dateStr) {
   document.getElementById(pickerId).value = dateStr;
   renderCalendar(key, pickerId, wrapId, window._calendarCallbacks[key]);
-  if (window._calendarCallbacks[key]) window._calendarCallbacks[key]();
+  if (window._calendarCallbacks[key]) await window._calendarCallbacks[key]();
+  // 選好日期後直接把畫面捲動到下方的時段格子,不用使用者自己往下滑找
+  const hourGridEl = document.getElementById(`${key}HourGrid`);
+  if (hourGridEl) hourGridEl.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // ---------------- 共用:範圍選擇大日曆(日本教練課起訖日期) ----------------
@@ -3610,6 +3617,7 @@ function invalidateAllMachineCalendars() {
   invalidateCalendar("charter", "charterDatePicker", "charterCalendarWrap", loadCharterDay);
   invalidateCalendar("self", "selfDatePicker", "selfCalendarWrap", loadSelfDay);
   invalidateCalendar("group", "groupDatePicker", "groupCalendarWrap", loadGroupDay);
+  invalidateCalendar("jump", "jumpDatePicker", "jumpCalendarWrap", loadJumpDay);
 }
 
 function buildHourGrid(gridEl, dateStr, sessions, onBookClick) {
@@ -3740,6 +3748,11 @@ async function loadCharterDay() {
   document.getElementById("charterPassCard").style.display = "block";
   await refreshMyCharterPasses();
 }
+function _equipLabel(equipment_type) {
+  if (equipment_type === "ski") return "雙板";
+  if (equipment_type === "snowboard") return "單板";
+  return "未標示滑行項目(舊資料)";
+}
 async function refreshMyCharterPasses() {
   const { data } = await api(`/members/${currentMemberId}`);
   const headcount_type = getWizardHeadcount("charter");
@@ -3760,7 +3773,7 @@ async function refreshMyCharterPasses() {
       actionsHtml = `<button class="small secondary" onclick="requestCancelCharterPass(${p.id})">取消</button>
         <button class="small secondary" onclick="requestResizeCharterPass(${p.id})">更改方案</button>`;
     }
-    return `<div class="hour-row"><div>1對${p.headcount_type}・${p.package_size}堂包:剩餘 ${p.remaining} 堂</div><div>${actionsHtml}</div></div>`;
+    return `<div class="hour-row"><div>1對${p.headcount_type}・${_equipLabel(p.equipment_type)}・${p.package_size}堂包:剩餘 ${p.remaining} 堂</div><div>${actionsHtml}</div></div>`;
   }).join("");
 }
 async function requestCancelCharterPass(passId) {
@@ -3784,9 +3797,11 @@ async function requestResizeCharterPass(passId) {
 }
 async function purchaseCharterPass() {
   const headcount_type = getWizardHeadcount("charter");
+  const equipment_type = getWizardEquipment("charter");
   const package_size = parseInt(document.getElementById("pkgSize").value);
+  if (!confirm(`確定要購買1對${headcount_type}・${_equipLabel(equipment_type)}・${package_size}堂包嗎?這張堂數包之後訂課會鎖定使用「${_equipLabel(equipment_type)}」,如需更改滑行項目請洽客服。`)) return;
   const { data: purchase } = await api("/charter/purchase", {
-    method: "POST", body: JSON.stringify({ member_id: currentMemberId, package_size, headcount_type })
+    method: "POST", body: JSON.stringify({ member_id: currentMemberId, package_size, headcount_type, equipment_type })
   });
   requestPayment(purchase.price, "charter_order", purchase.order_id);
   await refreshMyCharterPasses();
@@ -3797,8 +3812,11 @@ async function bookWithExistingCharterPass(dateStr, hour) {
   const participants = getWizardParticipants("charter");
   const coach_id = document.getElementById("charterCoach").value;
   const { data: member } = await api(`/members/${currentMemberId}`);
-  const pass = member.charter_passes.find(p => p.headcount_type === headcount_type && p.remaining > 0);
-  if (!pass) { alert(`你目前沒有可用的堂數包(1對${headcount_type}),請先在上方購買`); return; }
+  // 訂課要用的堂數包必須「滑行項目」跟現在選的一致(鎖定購買當下的項目);
+  // 只有此功能上線前購買、equipment_type還是舊資料(null)的堂數包才不受限制,任何滑行項目都能用。
+  const pass = member.charter_passes.find(p => p.headcount_type === headcount_type && p.remaining > 0 && p.equipment_type === equipment_type)
+    || member.charter_passes.find(p => p.headcount_type === headcount_type && p.remaining > 0 && !p.equipment_type);
+  if (!pass) { alert(`你目前沒有可用的堂數包(1對${headcount_type}・${_equipLabel(equipment_type)}),請先在上方購買,或確認上方「滑行項目」是否選對`); return; }
 
   const { ok, data } = await api("/booking/charter", {
     method: "POST",
@@ -4191,7 +4209,9 @@ async function cancelBooking(kind, refId) {
   else if (kind === "jump") path = `/booking/jump/${refId}/cancel`;
   else path = `/booking/japan/${refId}/cancel`;
   const { ok, data } = await api(path, { method: "POST" });
-  if (ok) { alert("已取消"); loadAccountOverview(); }
+  // 取消體驗課/包機/自主練習/團課/跳台後,大日曆上代表當天有預約的橘點要立即消失,
+  // 不能只刷新會員中心的清單卻讓日曆繼續顯示已經取消的舊快取。
+  if (ok) { alert("已取消"); loadAccountOverview(); if (kind === "indoor" || kind === "jump") invalidateAllMachineCalendars(); }
   else alert(data.error);
 }
 
@@ -4236,7 +4256,8 @@ async function confirmRescheduleModal() {
   const { ok, data } = await api(path, { method: "POST", body: JSON.stringify(body) });
   document.getElementById("rescheduleOverlay").style.display = "none";
   _pendingReschedule = null;
-  if (ok) { alert("修改成功"); loadAccountOverview(); }
+  // 修改日期/時段後,原日期跟新日期在大日曆上的狀態都要更新,同樣需要清掉快取重畫。
+  if (ok) { alert("修改成功"); loadAccountOverview(); invalidateAllMachineCalendars(); }
   else alert(data.error);
 }
 async function loadAccountOverview() {
@@ -4277,7 +4298,7 @@ async function loadAccountOverview() {
     }
   }
   if (data.charter_passes.length) {
-    html += data.charter_passes.map(p => `<div class="list-item">包機堂數包(1對${p.headcount_type}・${p.package_size}堂):剩餘 ${p.remaining} 堂</div>`).join("");
+    html += data.charter_passes.map(p => `<div class="list-item">包機堂數包(1對${p.headcount_type}・${_equipLabel(p.equipment_type)}・${p.package_size}堂):剩餘 ${p.remaining} 堂</div>`).join("");
   } else {
     html += `<div class="list-item">尚無包機堂數包</div>`;
   }

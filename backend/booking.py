@@ -252,14 +252,18 @@ def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=No
 # ------------------------------------------------------------------
 # 包機課(堂數包購買 + 使用堂數預約)
 # ------------------------------------------------------------------
-def purchase_charter_pass(member_id, package_size, headcount_type):
-    """建立堂數包購買訂單。remaining 先為0,付款成功後由 finalize_charter_purchase 正式產生權益。"""
+def purchase_charter_pass(member_id, package_size, headcount_type, equipment_type=None):
+    """建立堂數包購買訂單。remaining 先為0,付款成功後由 finalize_charter_purchase 正式產生權益。
+    equipment_type('ski'或'snowboard')會記錄在這張堂數包上,之後用這張堂數包訂課時一律鎖定
+    使用這個滑行項目,不再讓會員每次訂課時任意更改(避免同一張堂數包混用在不同滑行項目)。"""
+    if equipment_type not in ("ski", "snowboard"):
+        raise ValueError("請選擇滑行項目(雙板或單板)")
     price = pricing.compute_charter_price(package_size, headcount_type)
     conn = get_conn()
     cur = conn.execute(
-        """INSERT INTO charter_passes (member_id, package_size, headcount_type, remaining)
-           VALUES (?, ?, ?, 0)""",
-        (member_id, package_size, headcount_type),
+        """INSERT INTO charter_passes (member_id, package_size, headcount_type, remaining, equipment_type)
+           VALUES (?, ?, ?, 0, ?)""",
+        (member_id, package_size, headcount_type, equipment_type),
     )
     pass_id = cur.lastrowid
     order_cur = conn.execute(
@@ -348,6 +352,13 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
         conn.close()
         raise ValueError("包機堂數已用完,請重新購買")
 
+    # 滑行項目鎖定:這張堂數包如果有記錄購買當時選擇的滑行項目(equipment_type不是NULL),
+    # 訂課一律用這張堂數包記錄的項目,不採用前端傳來的值,避免同一張堂數包被混用在
+    # 不同滑行項目上。此功能上線前已購買、還沒有記錄滑行項目的舊堂數包(值是NULL),
+    # 維持原本可自由選擇滑行項目的行為。
+    if cpass["equipment_type"]:
+        equipment_type = cpass["equipment_type"]
+
     _check_continuous_hours(conn, member_id, booking_date, start_hour, 50)
 
     if _has_conflict(conn, booking_date, start_hour, 50):
@@ -390,6 +401,7 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
         "package_size": cpass["package_size"],
         "remaining": remaining_after,
         "designate_fee": designate_fee,
+        "equipment_type": equipment_type,
     }
 
 
@@ -1008,6 +1020,17 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
         raise ValueError("付款方式僅接受 full 或 deposit")
     conn = get_conn()
 
+    # 同一天不能在兩個不同雪場訂課(同一位會員人不可能同時分身在兩個雪場上課)。
+    # 先檢查這次一次送出的整批日期彼此之間有沒有互相衝突,
+    # 再檢查跟這位會員名下既有(尚未取消)的日本教練課預約是否衝突。
+    dates_in_this_request = {}
+    for b in bookings:
+        prev_resort = dates_in_this_request.get(b["date"])
+        if prev_resort is not None and prev_resort != b["resort_id"]:
+            conn.close()
+            raise ValueError(f"{b['date']} 已經選擇了另一個雪場,同一天無法在兩個不同雪場訂課")
+        dates_in_this_request[b["date"]] = b["resort_id"]
+
     for b in bookings:
         try:
             pricing.validate_japan_season(b["date"])
@@ -1015,6 +1038,20 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
         except ValueError as e:
             conn.close()
             raise e
+
+        existing_other_resort = conn.execute(
+            f"""SELECT jb.*, r.name AS resort_name FROM japan_bookings jb
+                LEFT JOIN ski_resorts r ON jb.resort_id = r.id
+                WHERE jb.member_id=? AND jb.booking_date=? AND jb.resort_id != ?
+                AND jb.status IN ({",".join("?"*len(JAPAN_ACTIVE_STATUSES))})""",
+            (member_id, b["date"], b["resort_id"], *JAPAN_ACTIVE_STATUSES),
+        ).fetchone()
+        if existing_other_resort:
+            conn.close()
+            raise ValueError(
+                f"{b['date']} 你已經在「{existing_other_resort['resort_name']}」訂課,"
+                f"同一天無法在其他雪場訂課,請選擇其他日期或先取消原本的預約"
+            )
 
         if b.get("coach_id"):
             # 指定教練:確認當天有上班

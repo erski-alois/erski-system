@@ -698,7 +698,8 @@ def purchase_charter():
     d = request.json
     try:
         result = booking.purchase_charter_pass(
-            member_id=member_id, package_size=d["package_size"], headcount_type=d["headcount_type"]
+            member_id=member_id, package_size=d["package_size"], headcount_type=d["headcount_type"],
+            equipment_type=d.get("equipment_type"),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1292,15 +1293,34 @@ def admin_team_calendar():
     for r in session_rows:
         session_map[(r["coach_id"], r["booking_date"])] = session_map.get((r["coach_id"], r["booking_date"]), 0) + r["c"]
 
+    # 日本教練課:指定教練的,記錄該教練那天去了哪個雪場(一位教練同一天只會有一組,見book_japan_multi_day);
+    # 沒有指定教練的(由後台/系統分派),另外依雪場+日期分組,顯示在該天的「未指定教練」清單。
     japan_rows = conn.execute(
-        """SELECT coach_id, booking_date, COUNT(*) c FROM japan_bookings
-           WHERE status != 'cancelled' AND coach_id IS NOT NULL
-             AND booking_date >= ? AND booking_date <= ?
-           GROUP BY coach_id, booking_date""",
+        """SELECT jb.coach_id, jb.booking_date, r.name AS resort_name FROM japan_bookings jb
+           LEFT JOIN ski_resorts r ON jb.resort_id = r.id
+           WHERE jb.status != 'cancelled' AND jb.coach_id IS NOT NULL
+             AND jb.booking_date >= ? AND jb.booking_date <= ?""",
         (date_from, date_to),
     ).fetchall()
+    japan_resort_map = {}
     for r in japan_rows:
-        session_map[(r["coach_id"], r["booking_date"])] = session_map.get((r["coach_id"], r["booking_date"]), 0) + r["c"]
+        key = (r["coach_id"], r["booking_date"])
+        session_map[key] = session_map.get(key, 0) + 1
+        japan_resort_map[key] = r["resort_name"]
+
+    unassigned_japan_rows = conn.execute(
+        """SELECT jb.booking_date, r.name AS resort_name, COUNT(*) c FROM japan_bookings jb
+           LEFT JOIN ski_resorts r ON jb.resort_id = r.id
+           WHERE jb.status != 'cancelled' AND jb.coach_id IS NULL
+             AND jb.booking_date >= ? AND jb.booking_date <= ?
+           GROUP BY jb.booking_date, r.name""",
+        (date_from, date_to),
+    ).fetchall()
+    unassigned_japan_map = {}
+    for r in unassigned_japan_rows:
+        unassigned_japan_map.setdefault(r["booking_date"], []).append(
+            {"resort_name": r["resort_name"], "count": r["c"]}
+        )
 
     conn.close()
 
@@ -1316,8 +1336,9 @@ def admin_team_calendar():
                 "coach_id": c["id"], "coach_name": c["name"],
                 "status": status, "reason": reason,
                 "session_count": session_map.get((c["id"], date_str), 0),
+                "japan_resort_name": japan_resort_map.get((c["id"], date_str)),
             })
-        days[date_str] = entries
+        days[date_str] = {"entries": entries, "unassigned_japan": unassigned_japan_map.get(date_str, [])}
 
     return jsonify({"month": month, "coaches": rows_to_dicts(coaches), "days": days})
 
