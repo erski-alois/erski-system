@@ -89,6 +89,13 @@ def serve_frontend():
     return resp
 
 
+@app.route("/coach")
+def serve_frontend_coach_entry():
+    """教練專屬頁面的獨立網址(可以直接分享/加入書籤給教練,不用先經過會員首頁)。
+    還是同一份index.html(單頁應用程式),前端JS會偵測網址是/coach、自動直接開啟教練登入畫面。"""
+    return serve_frontend()
+
+
 @app.route("/manifest.json")
 def serve_manifest():
     return send_from_directory(FRONTEND_DIR, "manifest.json", mimetype="application/manifest+json")

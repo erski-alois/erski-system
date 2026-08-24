@@ -363,7 +363,8 @@
           <div class="form-footer-note">
             還不是會員？ <a onclick="alert('示範用途:此為模擬畫面,請直接用登入方式體驗')">立即註冊</a>
           </div>
-          <a class="staff-link-jp" onclick="openStaffLogin()">員工後台登入 →</a>
+          <a class="staff-link-jp" onclick="openCoachLogin()">🎿 教練登入(教練專屬頁面) →</a>
+          <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(客服/主管/老闆) →</a>
 
           <div id="memberCreateForm" style="display:none; text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">
             <h3 style="font-size:14px;">建立會員資料</h3>
@@ -443,10 +444,60 @@
   </div>
 </div>
 
+<!-- 教練專屬登入頁面:跟上面的員工後台登入(給客服/主管/老闆用)完全分開,不共用同一個登入畫面,
+     教練不需要先經過「員工後台」才能找到自己的頁面。可以直接用網址 /coach 進來(見app.py的路由)。 -->
+<div id="coachLoginScreen" style="display:none; padding:14px;">
+  <div class="card" id="coachLoginFormCard" style="max-width:420px; margin:0 auto;">
+    <a class="back" onclick="closeCoachLogin()">← 返回</a>
+    <h3>教練登入</h3>
+    <p class="note">這裡是教練專屬的頁面,跟員工後台管理(客服/主管/老闆用)是分開的。用你的工號＋密碼登入,登入後直接進入你自己的專屬頁面。</p>
+    <label>工號</label><input id="coachLoginWorkId">
+    <label>密碼</label><input id="coachLoginPw" type="password">
+    <button onclick="coachLoginSubmit()">登入</button>
+    <div id="coachLoginStatus" style="margin-top:10px;"></div>
+  </div>
+
+  <div id="coachAppScreen" style="display:none;">
+    <div class="admin-shell">
+      <div class="admin-sidebar" id="coachSidebarNav">
+        <div class="admin-sidebar-brand">
+          <div class="admin-sidebar-brand-logo">ER</div>
+          <div>
+            <div class="admin-sidebar-brand-name">ERSKI</div>
+            <div class="admin-sidebar-brand-sub">教練專屬頁面</div>
+          </div>
+        </div>
+      </div>
+      <div class="admin-main-wrap">
+        <div class="admin-topbar">
+          <div class="admin-topbar-search">🎿&nbsp; 教練專屬頁面</div>
+          <div class="admin-topbar-right">
+            <span id="coachTopbarDate"></span>
+            <div class="admin-topbar-user">
+              <div class="admin-topbar-avatar" id="coachTopbarAvatar"></div>
+              <div>
+                <div style="font-weight:700; color:#12161F;" id="coachTopbarName"></div>
+                <div style="font-size:11px;" id="coachTopbarRole">教練</div>
+              </div>
+            </div>
+            <a onclick="coachLogout()" style="cursor:pointer; color:#2563eb; white-space:nowrap;">登出</a>
+          </div>
+        </div>
+        <div class="admin-main">
+          <div id="coachPanelBody"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="mainScreen" style="display:none;">
   <header style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
     <h1 style="margin:0;">ERSKI 滑雪急診室 <span class="sub" id="memberBanner"></span></h1>
-    <a onclick="openStaffLogin()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">🔒 後台管理</a>
+    <span style="display:flex; gap:14px; align-items:center;">
+      <a onclick="openCoachLogin()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">🎿 教練登入</a>
+      <a onclick="openStaffLogin()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">🔒 後台管理</a>
+    </span>
   </header>
 
   <div id="mainLayout">
@@ -1065,6 +1116,78 @@ function closeStaffLogin() {
     document.getElementById("mainScreen").style.display = "block";
   } else {
     document.getElementById("loginScreen").style.display = "block";
+  }
+}
+
+// ------------------------------------------------------------------
+// 教練專屬登入頁面(獨立於上面的員工後台登入,不共用同一個畫面/同一個入口)
+// ------------------------------------------------------------------
+let coachStandaloneMode = false;
+
+function openCoachLogin() {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("mainScreen").style.display = "none";
+  document.getElementById("staffLoginScreen").style.display = "none";
+  document.getElementById("coachLoginScreen").style.display = "block";
+  document.getElementById("coachLoginFormCard").style.display = "block";
+  document.getElementById("coachAppScreen").style.display = "none";
+}
+function closeCoachLogin() {
+  document.getElementById("coachLoginScreen").style.display = "none";
+  if (currentMemberId) {
+    document.getElementById("mainScreen").style.display = "block";
+  } else {
+    document.getElementById("loginScreen").style.display = "block";
+  }
+}
+async function coachLoginSubmit() {
+  const work_id = document.getElementById("coachLoginWorkId").value;
+  const password = document.getElementById("coachLoginPw").value;
+  const { ok, data } = await api("/auth/staff-login", {
+    method: "POST", body: JSON.stringify({ work_id, password })
+  });
+  if (!ok) {
+    document.getElementById("coachLoginStatus").innerHTML = `<span class="status-tag warn">${data.error}</span>`;
+    return;
+  }
+  if (data.role !== "coach") {
+    document.getElementById("coachLoginStatus").innerHTML =
+      `<span class="status-tag warn">此頁面僅供教練使用。您的帳號角色是「${({boss:"老闆",manager:"主管",cs:"客服"})[data.role] || data.role}」,請改由「員工後台管理登入」進入。</span>`;
+    return;
+  }
+  coachStandaloneMode = true;
+  currentStaffId = work_id;
+  currentStaffToken = data.token;
+  document.getElementById("coachLoginFormCard").style.display = "none";
+  document.getElementById("coachAppScreen").style.display = "block";
+  setCoachTopbar(data);
+  await renderCoachOwnPanel(data, "coachPanelBody");
+}
+function setCoachTopbar(staff) {
+  const now = new Date();
+  document.getElementById("coachTopbarDate").textContent =
+    `${now.getFullYear()} 年 ${now.getMonth()+1} 月 ${now.getDate()} 日`;
+  const displayName = staff.name || document.getElementById("coachTopbarName").textContent || "";
+  document.getElementById("coachTopbarAvatar").textContent = displayName.slice(0,1);
+  document.getElementById("coachTopbarName").textContent = displayName;
+}
+function coachLogout() {
+  coachStandaloneMode = false;
+  currentStaffId = null;
+  currentStaffToken = null;
+  document.getElementById("coachLoginPw").value = "";
+  document.getElementById("coachLoginStatus").innerHTML = "";
+  document.getElementById("coachAppScreen").style.display = "none";
+  document.getElementById("coachLoginFormCard").style.display = "block";
+}
+// 上傳/刪除證照檔案、新增能力選項、送出請假這幾個動作完成後要重新整理教練的畫面,
+// 但教練畫面現在有兩個可能的進入方式(獨立的/coach頁面 或 舊有的員工後台登入),
+// 這支函式負責依照目前是哪一種模式,呼叫對應的重新整理方式,避免兩邊各寫一份。
+function refreshCoachPanel(coachId) {
+  if (coachStandaloneMode) {
+    renderCoachOwnPanel({ id: coachId, role: "coach" }, "coachPanelBody");
+  } else {
+    renderStaffPanel({ id: coachId, role: "coach" });
   }
 }
 async function loadDemoStaffButtons() {
@@ -2253,8 +2376,8 @@ async function saveMemberProfileAdmin(memberId) {
   }
 }
 
-async function renderCoachOwnPanel(staff) {
-  const body = document.getElementById("staffPanelBody");
+async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
+  const body = document.getElementById(bodyElId);
   const { data: mySchedule } = await api("/admin/coach/my-schedule");
   const { data: myBookings } = await api("/admin/coach/my-bookings");
   const { data: myHistory } = await api("/admin/coach/my-history");
@@ -2434,7 +2557,7 @@ async function addCapabilityOptionSelf(coachId) {
   const name = input.value.trim();
   if (!name) return;
   const { ok, data } = await api("/admin/capability-options", { method: "POST", body: JSON.stringify({ name }) });
-  if (ok) { input.value = ""; renderStaffPanel({ id: coachId, role: "coach" }); }
+  if (ok) { input.value = ""; refreshCoachPanel(coachId); }
   else alert(data.error);
 }
 async function saveCoachOwnBasicInfo(coachId) {
@@ -2531,12 +2654,12 @@ async function uploadCoachCertFiles(coachId, category) {
       body: JSON.stringify({ category, file_name: file.name, mime_type: file.type, file_data }),
     });
   }
-  renderStaffPanel({ id: coachId, role: "coach" });
+  refreshCoachPanel(coachId);
 }
 
 async function deleteCoachCertFile(coachId, fileId) {
   await api(`/admin/coaches/${coachId}/certificate-files/${fileId}`, { method: "DELETE" });
-  renderStaffPanel({ id: coachId, role: "coach" });
+  refreshCoachPanel(coachId);
 }
 
 function renderCoachPayrollSectionHtml(myPayroll) {
@@ -2607,7 +2730,10 @@ async function submitCoachLeave(coachId) {
   });
   document.getElementById("coachLeaveStatusMsg").innerHTML = ok
     ? `<span class="status-tag ok">已送出</span>` : `<span class="status-tag warn">${data.error || "送出失敗"}</span>`;
-  if (ok) renderStaffPanel({ id: coachId, name: document.getElementById("staffPanelTitle").textContent, role: "coach" });
+  // 2026-08修正:這裡原本讀取一個不存在的#staffPanelTitle元素當作姓名來源,
+  // 會導致送出請假後畫面重新整理直接噴錯、卡住,已改用refreshCoachPanel統一處理
+  // (裡面已經有姓名缺漏時沿用畫面上原本姓名的保險機制)。
+  if (ok) refreshCoachPanel(coachId);
 }
 
 // ---------------- 主管/老闆專屬:雪場管理 + 教練團隊管理 ----------------
@@ -4720,6 +4846,12 @@ if ("serviceWorker" in navigator) {
       console.log("Service Worker 註冊失敗:", err);
     });
   });
+}
+
+// 教練專屬頁面可以直接用網址 /coach 進來(不用先經過會員首頁再找入口),
+// 網址是/coach的話,頁面一載入就直接開啟教練登入畫面。
+if (window.location.pathname.replace(/\/$/, "") === "/coach") {
+  openCoachLogin();
 }
 </script>
 </body>
