@@ -2444,6 +2444,13 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
     <button class="small" onclick="saveCoachOwnBasicInfo(${staff.id})">儲存基本資料</button>
     <div id="coachSelfBasicStatus" style="margin-top:6px;"></div>
 
+    <h3 style="margin-top:14px; font-size:14px;">帳號安全(變更密碼)</h3>
+    <label>目前密碼</label><input type="password" id="coachSelfCurrentPw">
+    <label>新密碼(至少6碼)</label><input type="password" id="coachSelfNewPw">
+    <label>再輸入一次新密碼</label><input type="password" id="coachSelfNewPwConfirm">
+    <button class="small" onclick="changeCoachOwnPassword(${staff.id})">變更密碼</button>
+    <div id="coachSelfPwStatus" style="margin-top:6px;"></div>
+
     <h3 style="margin-top:14px; font-size:14px;">我的教練介紹(對外顯示於教練團隊頁面)</h3>
     <label>職稱</label>
     <select id="coachSelfRank">
@@ -2578,8 +2585,37 @@ async function saveCoachOwnBasicInfo(coachId) {
     method: "PUT",
     body: JSON.stringify({ name, nickname, id_number, address, phone, email, line_id, instagram, facebook, birthday }),
   });
+  // 2026-08修正:這裡原本顯示「若更改生日,登入密碼也會跟著變成新生日的六碼」,但實際上
+  // 改生日並不會真的改密碼(密碼是獨立存在資料庫裡的雜湊值),這句話會誤導人。密碼變更
+  // 現在請改用下面新增的「帳號安全(變更密碼)」區塊。
   document.getElementById("coachSelfBasicStatus").innerHTML = ok
-    ? `<span class="status-tag ok">已儲存(若更改生日,登入密碼也會跟著變成新生日的六碼)</span>` : `<span class="status-tag warn">儲存失敗</span>`;
+    ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">儲存失敗</span>`;
+}
+async function changeCoachOwnPassword(coachId) {
+  const current_password = document.getElementById("coachSelfCurrentPw").value;
+  const new_password = document.getElementById("coachSelfNewPw").value;
+  const confirm_password = document.getElementById("coachSelfNewPwConfirm").value;
+  const statusEl = document.getElementById("coachSelfPwStatus");
+  if (!current_password || !new_password) {
+    statusEl.innerHTML = `<span class="status-tag warn">請填寫目前密碼與新密碼</span>`;
+    return;
+  }
+  if (new_password !== confirm_password) {
+    statusEl.innerHTML = `<span class="status-tag warn">兩次輸入的新密碼不一致</span>`;
+    return;
+  }
+  const { ok, data } = await api(`/admin/staff/${coachId}/password`, {
+    method: "PUT",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+  if (ok) {
+    document.getElementById("coachSelfCurrentPw").value = "";
+    document.getElementById("coachSelfNewPw").value = "";
+    document.getElementById("coachSelfNewPwConfirm").value = "";
+    statusEl.innerHTML = `<span class="status-tag ok">密碼已變更,下次登入請用新密碼</span>`;
+  } else {
+    statusEl.innerHTML = `<span class="status-tag warn">${data.error || "變更失敗"}</span>`;
+  }
 }
 async function saveCoachOwnIntroSection(coachId) {
   const rank = document.getElementById("coachSelfRank").value;
@@ -3295,6 +3331,14 @@ async function toggleCoachEdit(coachId) {
     <button class="small" onclick="saveCoachBasicInfoAdmin(${coachId})">更新基本資料</button>
     <div id="coachBasicSaveStatus-${coachId}" style="margin-top:6px;"></div>
 
+    <h4 style="margin-top:14px; font-size:13px;">重設密碼(教練忘記密碼時使用,不需要輸入舊密碼)</h4>
+    <div class="row">
+      <input id="coachResetPw-${coachId}" placeholder="新密碼(至少6碼)" value="${(basicInfo.birthday || "").replace(/-/g, "").slice(2, 8)}">
+      <button class="small secondary" onclick="resetCoachPasswordAdmin(${coachId})">重設密碼</button>
+    </div>
+    <p class="note">預設帶入該教練目前生日的六碼(YYMMDD),可以直接送出、或改成其他密碼。重設後請另外通知教練新密碼。</p>
+    <div id="coachResetPwStatus-${coachId}" style="margin-top:6px;"></div>
+
     <h4 style="margin-top:14px; font-size:13px;">我的教練介紹(對外顯示於教練團隊頁面)</h4>
     <label>職稱</label>
     <select id="coachRank-${coachId}">
@@ -3450,6 +3494,16 @@ async function saveCoachBasicInfoAdmin(coachId) {
   document.getElementById(`coachBasicSaveStatus-${coachId}`).innerHTML = (ok1 && ok2)
     ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">儲存失敗</span>`;
   if (ok1) { loadCoachTeam(); await renderCoachManageTools(); }
+}
+async function resetCoachPasswordAdmin(coachId) {
+  const new_password = document.getElementById(`coachResetPw-${coachId}`).value;
+  const statusEl = document.getElementById(`coachResetPwStatus-${coachId}`);
+  const { ok, data } = await api(`/admin/staff/${coachId}/password`, {
+    method: "PUT", body: JSON.stringify({ new_password }),
+  });
+  statusEl.innerHTML = ok
+    ? `<span class="status-tag ok">密碼已重設,請另外通知教練新密碼</span>`
+    : `<span class="status-tag warn">${data.error || "重設失敗"}</span>`;
 }
 async function saveCoachDetailsAdmin(coachId) {
   const contract_type = document.getElementById(`coachContract-${coachId}`).value || null;

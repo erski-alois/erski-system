@@ -1944,6 +1944,39 @@ def admin_update_coach_basic_info(coach_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/staff/<int:staff_id>/password", methods=["PUT"])
+@require_role("coach")
+def admin_set_staff_password(staff_id):
+    """員工(含教練)變更/重設登入密碼。
+    - 本人變更自己的密碼:一定要帶對的current_password才會成功(自助變更密碼,不管是教練
+      在/coach專屬頁面、或客服/主管/老闆在員工後台,都是走這支)。
+    - 主管以上「代其他員工」重設密碼(例如員工忘記密碼):不需要帶current_password,
+      用在後台「教練管理」的「重設密碼」按鈕。
+    2026-08新增:之前系統完全沒有任何變更/重設密碼的功能,教練畫面上「若更改生日,登入密碼
+    也會跟著變成新生日的六碼」這句提示文字其實是錯的(改生日不會真的改密碼)——這支API連同
+    前端「變更密碼」畫面就是補上這個缺口,順便把那句誤導的提示文字改掉。"""
+    is_self = request.current_staff["id"] == staff_id
+    is_manager_up = ROLE_RANK.get(request.current_staff["role"], 0) >= ROLE_RANK["manager"]
+    if not is_self and not is_manager_up:
+        return jsonify({"error": "權限不足"}), 403
+    d = request.json
+    new_password = d.get("new_password")
+    require_current = is_self  # 本人一律要驗證目前密碼;主管代他人重設則不用
+    try:
+        auth.set_staff_password(staff_id, new_password, d.get("current_password"), require_current=require_current)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'change_staff_password', 'staff', ?, '{}', '{}')""",
+        (request.current_staff["id"], staff_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/location-options", methods=["GET"])
 @require_role("coach")
 def admin_list_location_options():

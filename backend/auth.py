@@ -108,6 +108,32 @@ def set_member_password(member_id: int, new_password: str, current_password: str
     conn.close()
 
 
+def set_staff_password(staff_id: int, new_password: str, current_password: str = None, require_current: bool = True):
+    """
+    設定/變更員工(含教練)登入密碼。require_current=True(本人變更自己的密碼)時,一定要先
+    驗證目前密碼正確才能改;require_current=False(主管以上代其他員工重設,例如員工忘記密碼)
+    則不需要驗證目前密碼——呼叫端(app.py)負責判斷這兩種情況分別對應到誰在操作,這支函式
+    本身不做權限判斷。
+    """
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("找不到此員工")
+    if require_current:
+        if not current_password or not verify_password(row["password_hash"], current_password):
+            conn.close()
+            raise ValueError("目前密碼不正確")
+    if not new_password or len(new_password) < 6:
+        conn.close()
+        raise ValueError("新密碼至少需要6碼")
+    conn.execute(
+        "UPDATE staff SET password_hash=? WHERE id=?", (new_password_hash(new_password), staff_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def staff_login(work_id: str, password: str):
     conn = get_conn()
     row = conn.execute("SELECT * FROM staff WHERE work_id=?", (work_id,)).fetchone()
