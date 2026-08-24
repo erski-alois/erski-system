@@ -1102,8 +1102,13 @@ async function renderStaffPanel(staff) {
   const now = new Date();
   document.getElementById("adminTopbarDate").textContent =
     `${now.getFullYear()} 年 ${now.getMonth()+1} 月 ${now.getDate()} 日`;
-  document.getElementById("adminTopbarAvatar").textContent = staff.name.slice(0,1);
-  document.getElementById("adminTopbarName").textContent = staff.name;
+  // 2026-08修正:教練自助後台有幾個動作(新增能力選項/上傳或刪除證照檔案)重新整理面板時,
+  // 傳進來的staff物件只有{id, role},沒有name,原本這裡直接staff.name.slice(0,1)會噴錯
+  // (Cannot read properties of undefined),導致整個面板重新整理失敗、UI卡住。改成staff.name
+  // 缺漏時,沿用畫面上原本已經顯示的姓名,行為不變、只是不會再噴錯。
+  const displayName = staff.name || document.getElementById("adminTopbarName").textContent || "";
+  document.getElementById("adminTopbarAvatar").textContent = displayName.slice(0,1);
+  document.getElementById("adminTopbarName").textContent = displayName;
   const roleLabel = { boss: "最高管理者", manager: "主管", cs: "客服", coach: "教練" };
   document.getElementById("adminTopbarRole").textContent = roleLabel[staff.role] || staff.role;
 
@@ -2252,10 +2257,13 @@ async function renderCoachOwnPanel(staff) {
   const body = document.getElementById("staffPanelBody");
   const { data: mySchedule } = await api("/admin/coach/my-schedule");
   const { data: myBookings } = await api("/admin/coach/my-bookings");
+  const { data: myHistory } = await api("/admin/coach/my-history");
+  const { data: myPayroll } = await api("/admin/coach/my-payroll");
   const { data: basicInfo } = await api(`/admin/coaches/${staff.id}/basic-info`);
   const { data: details } = await api(`/admin/coaches/${staff.id}/details`);
   const { data: capabilityOptions } = await api("/admin/capability-options");
   const { data: locationOptions } = await api("/admin/location-options");
+  const { data: certFiles } = await api(`/admin/coaches/${staff.id}/certificate-files`);
 
   const statusLabel = { working: "上班", personal_leave: "事假", sick_leave: "病假", annual_leave: "特休", business_trip: "出差" };
   const upcomingLeave = mySchedule.filter(s => s.status !== "working");
@@ -2266,6 +2274,11 @@ async function renderCoachOwnPanel(staff) {
     ${myBookings.length
       ? myBookings.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}</div>`).join("")
       : `<div class="list-item">目前沒有已排定的課程</div>`}
+
+    <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
+    ${myHistory.length
+      ? myHistory.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}${b.status === "cancelled" ? "<span class=\"note\">(已取消)</span>" : ""}</div>`).join("")
+      : `<div class="list-item">目前沒有上課歷史紀錄</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">我的請假紀錄</h3>
     ${upcomingLeave.length
@@ -2290,6 +2303,7 @@ async function renderCoachOwnPanel(staff) {
 
     <h3 style="margin-top:14px; font-size:14px;">我的基本資料</h3>
     <label>姓名</label><input id="coachSelfName" value="${(basicInfo.name || "").replace(/"/g,'&quot;')}">
+    <label>暱稱</label><input id="coachSelfNickname" value="${(basicInfo.nickname || "").replace(/"/g,'&quot;')}">
     <label>身分證字號</label><input id="coachSelfIdNumber" value="${(basicInfo.id_number || "").replace(/"/g,'&quot;')}">
     <label>出生年月日</label>
     <div class="row">
@@ -2299,6 +2313,10 @@ async function renderCoachOwnPanel(staff) {
     </div>
     <label>地址</label><input id="coachSelfAddress" value="${(basicInfo.address || "").replace(/"/g,'&quot;')}">
     <label>電話</label><input id="coachSelfPhone" value="${(basicInfo.phone || "").replace(/"/g,'&quot;')}">
+    <label>Email</label><input id="coachSelfEmail" value="${(basicInfo.email || "").replace(/"/g,'&quot;')}">
+    <label>LINE</label><input id="coachSelfLine" value="${(basicInfo.line_id || "").replace(/"/g,'&quot;')}">
+    <label>Instagram</label><input id="coachSelfIG" value="${(basicInfo.instagram || "").replace(/"/g,'&quot;')}">
+    <label>Facebook</label><input id="coachSelfFB" value="${(basicInfo.facebook || "").replace(/"/g,'&quot;')}">
     <p class="note" style="margin-top:6px;">年資:${details.years_of_service != null ? details.years_of_service+"年" : "尚未設定"}・合約年:${details.contract_year || "尚未設定"}(以上兩項由主管設定,此處唯讀)</p>
     <button class="small" onclick="saveCoachOwnBasicInfo(${staff.id})">儲存基本資料</button>
     <div id="coachSelfBasicStatus" style="margin-top:6px;"></div>
@@ -2324,7 +2342,24 @@ async function renderCoachOwnPanel(staff) {
       <button class="small secondary" onclick="addCapabilityOptionSelf(${staff.id})">新增選項</button>
     </div>
 
-    <label style="margin-top:8px;">資歷</label>
+    <label style="margin-top:8px;">滑行項目</label>
+    <select id="coachSelfDiscipline">
+      <option value="">未選擇</option>
+      <option value="ski" ${details.discipline==="ski"?"selected":""}>Ski(雙板)</option>
+      <option value="snowboard" ${details.discipline==="snowboard"?"selected":""}>Snowboard(單板)</option>
+      <option value="both" ${details.discipline==="both"?"selected":""}>雙板+單板</option>
+    </select>
+
+    <label style="margin-top:8px;">滑行專長</label>
+    <input id="coachSelfSpecialty" value="${(details.specialty || "").replace(/"/g, '&quot;')}" placeholder="例如:Freestyle、Carving、地形公園">
+
+    <label style="margin-top:8px;">雪齡</label>
+    <div class="row">
+      <input type="number" min="0" id="coachSelfSnowYears" style="max-width:120px;" value="${details.snow_years != null ? details.snow_years : ""}">
+      <span style="align-self:center;">年</span>
+    </div>
+
+    <label style="margin-top:8px;">教學年資(資歷)</label>
     <div class="row">
       <select id="coachSelfResumeYears" style="max-width:120px;">
         <option value="">選擇年數</option>
@@ -2333,13 +2368,23 @@ async function renderCoachOwnPanel(staff) {
       <span style="align-self:center;">年</span>
     </div>
 
-    <label style="margin-top:8px;">經歷</label>
+    <label style="margin-top:8px;">教學經歷</label>
     <input id="coachSelfExperience" value="${(details.experience || "").replace(/"/g, '&quot;')}" placeholder="曾任職雪場/單位等敘述">
 
-    <label style="margin-top:8px;">自我介紹/給學員的一句話</label>
-    <input id="coachSelfIntro" value="${(details.self_intro || "").replace(/"/g, '&quot;')}">
+    <label style="margin-top:8px;">其他相關經歷</label>
+    <input id="coachSelfOtherExperience" value="${(details.other_experience || "").replace(/"/g, '&quot;')}" placeholder="例如:相關運動背景、比賽經歷等">
 
-    <label style="margin-top:8px;">宣傳照</label>
+    <label style="margin-top:8px;">自我介紹(30字以內)</label>
+    <input id="coachSelfBioIntro" maxlength="30" value="${(details.bio_intro || "").replace(/"/g, '&quot;')}">
+
+    <label style="margin-top:8px;">給學員一句話(30字以內)</label>
+    <input id="coachSelfMessageToStudents" maxlength="30" value="${(details.message_to_students || "").replace(/"/g, '&quot;')}">
+
+    <label style="margin-top:8px;">代表教練一句話(30字以內)</label>
+    <input id="coachSelfMotto" maxlength="30" value="${(details.coach_motto || "").replace(/"/g, '&quot;')}">
+    ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${details.self_intro.replace(/</g,"&lt;")}</p>` : ""}
+
+    <label style="margin-top:8px;">照片上傳(宣傳照,對外顯示於教練團隊頁面)</label>
     <input type="file" accept="image/*" id="coachSelfPromoFile">
 
     <p class="note" style="margin-top:8px;">駐在地(教練分配):${locNames.join("、") || "尚未指派"}・合約類型:${CONTRACT_TYPE_LABEL[details.contract_type] || "尚未設定"}(以上由主管設定,此處唯讀)</p>
@@ -2352,6 +2397,14 @@ async function renderCoachOwnPanel(staff) {
 
     <button style="margin-top:10px;" onclick="saveCoachOwnIntroSection(${staff.id})">儲存我的教練介紹</button>
     <div id="coachSelfDetailsStatus" style="margin-top:6px;"></div>
+
+    <h3 style="margin-top:14px; font-size:14px;">證照檔案上傳(可上傳多張圖片或PDF)</h3>
+    ${coachCertFileSectionHtml(staff.id, "ski_license", "滑雪證照上傳", certFiles)}
+    ${coachCertFileSectionHtml(staff.id, "related_license", "相關證照上傳", certFiles)}
+    ${coachCertFileSectionHtml(staff.id, "other_license", "其他證照上傳", certFiles)}
+
+    <h3 style="margin-top:14px; font-size:14px;">我的薪資</h3>
+    ${renderCoachPayrollSectionHtml(myPayroll)}
   `;
   populateBirthDateSelects("coachSelfBirthYear", "coachSelfBirthMonth", "coachSelfBirthDay");
   if (basicInfo.birthday) {
@@ -2386,14 +2439,22 @@ async function addCapabilityOptionSelf(coachId) {
 }
 async function saveCoachOwnBasicInfo(coachId) {
   const name = document.getElementById("coachSelfName").value;
+  const nickname = document.getElementById("coachSelfNickname").value;
   const id_number = document.getElementById("coachSelfIdNumber").value;
   const address = document.getElementById("coachSelfAddress").value;
   const phone = document.getElementById("coachSelfPhone").value;
+  const email = document.getElementById("coachSelfEmail").value;
+  const line_id = document.getElementById("coachSelfLine").value;
+  const instagram = document.getElementById("coachSelfIG").value;
+  const facebook = document.getElementById("coachSelfFB").value;
   const by = document.getElementById("coachSelfBirthYear").value;
   const bm = document.getElementById("coachSelfBirthMonth").value;
   const bd = document.getElementById("coachSelfBirthDay").value;
   const birthday = (by && bm && bd) ? `${by}-${String(bm).padStart(2,"0")}-${String(bd).padStart(2,"0")}` : null;
-  const { ok } = await api(`/admin/coaches/${coachId}/basic-info`, { method: "PUT", body: JSON.stringify({ name, id_number, address, phone, birthday }) });
+  const { ok } = await api(`/admin/coaches/${coachId}/basic-info`, {
+    method: "PUT",
+    body: JSON.stringify({ name, nickname, id_number, address, phone, email, line_id, instagram, facebook, birthday }),
+  });
   document.getElementById("coachSelfBasicStatus").innerHTML = ok
     ? `<span class="status-tag ok">已儲存(若更改生日,登入密碼也會跟著變成新生日的六碼)</span>` : `<span class="status-tag warn">儲存失敗</span>`;
 }
@@ -2410,15 +2471,116 @@ async function saveCoachOwnIntroSection(coachId) {
   });
   const resume = document.getElementById("coachSelfResumeYears").value;
   const experience = document.getElementById("coachSelfExperience").value;
-  const self_intro = document.getElementById("coachSelfIntro").value;
+  const discipline = document.getElementById("coachSelfDiscipline").value;
+  const specialty = document.getElementById("coachSelfSpecialty").value;
+  const snowYearsRaw = document.getElementById("coachSelfSnowYears").value;
+  const snow_years = snowYearsRaw === "" ? null : parseInt(snowYearsRaw);
+  const other_experience = document.getElementById("coachSelfOtherExperience").value;
+  const bio_intro = document.getElementById("coachSelfBioIntro").value.slice(0, 30);
+  const message_to_students = document.getElementById("coachSelfMessageToStudents").value.slice(0, 30);
+  const coach_motto = document.getElementById("coachSelfMotto").value.slice(0, 30);
   const promo_photo = await fileToBase64(document.getElementById("coachSelfPromoFile"));
-  const payload = { self_intro, experience, resume };
+  const payload = {
+    experience, resume, discipline, specialty, snow_years, other_experience,
+    bio_intro, message_to_students, coach_motto,
+  };
   if (promo_photo) payload.promo_photo = promo_photo;
   const { ok: ok2 } = await api(`/admin/coaches/${coachId}/profile`, { method: "PUT", body: JSON.stringify(payload) });
 
   document.getElementById("coachSelfDetailsStatus").innerHTML = (ok1 && ok2)
     ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">部分儲存失敗,請重試</span>`;
   loadCoachTeam();
+}
+
+const _CERT_FILE_CATEGORY_INPUT_ID = { ski_license: "coachCertUpload-ski_license", related_license: "coachCertUpload-related_license", other_license: "coachCertUpload-other_license" };
+
+function coachCertFileSectionHtml(coachId, category, label, certFiles) {
+  const files = (certFiles || []).filter(f => f.category === category);
+  const inputId = _CERT_FILE_CATEGORY_INPUT_ID[category];
+  return `
+    <div style="margin-top:10px;">
+      <label>${label}</label>
+      <div id="coachCertFileList-${category}">
+        ${files.length
+          ? files.map(f => `<div class="list-item">${(f.file_name || "檔案").replace(/</g,"&lt;")}<button class="small secondary" style="margin-left:8px;" onclick="deleteCoachCertFile(${coachId}, ${f.id})">刪除</button></div>`).join("")
+          : `<div class="list-item note">尚未上傳</div>`}
+      </div>
+      <input type="file" accept="image/*,application/pdf" multiple id="${inputId}">
+      <button class="small secondary" onclick="uploadCoachCertFiles(${coachId}, '${category}')">上傳</button>
+    </div>`;
+}
+
+function _readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadCoachCertFiles(coachId, category) {
+  const inputId = _CERT_FILE_CATEGORY_INPUT_ID[category];
+  const input = document.getElementById(inputId);
+  const files = input && input.files ? Array.from(input.files) : [];
+  if (!files.length) return;
+  for (const file of files) {
+    const file_data = await _readFileAsDataUrl(file);
+    await api(`/admin/coaches/${coachId}/certificate-files`, {
+      method: "POST",
+      body: JSON.stringify({ category, file_name: file.name, mime_type: file.type, file_data }),
+    });
+  }
+  renderStaffPanel({ id: coachId, role: "coach" });
+}
+
+async function deleteCoachCertFile(coachId, fileId) {
+  await api(`/admin/coaches/${coachId}/certificate-files/${fileId}`, { method: "DELETE" });
+  renderStaffPanel({ id: coachId, role: "coach" });
+}
+
+function renderCoachPayrollSectionHtml(myPayroll) {
+  if (!myPayroll || !myPayroll.length) {
+    return `<div class="list-item note">尚未有薪資紀錄(需由主管於後台產生後才會顯示)</div>`;
+  }
+  return myPayroll.map(r => `
+    <div class="list-item" style="display:block;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <b>${r.period}</b>
+        <button class="small secondary" onclick="downloadCoachMyPayslip(${r.id})">下載薪資單PDF</button>
+      </div>
+      <table style="width:100%; margin-top:6px; font-size:12px;">
+        <tr><td>基本薪資</td><td style="text-align:right;">NT$ ${r.base_salary.toLocaleString()}</td></tr>
+        <tr><td>堂課(包機/自主練習/團課/日本教練課)</td><td style="text-align:right;">${r.group_class_hours}小時・NT$ ${r.group_class_amount.toLocaleString()}</td></tr>
+        <tr><td>體驗課</td><td style="text-align:right;">${r.trial_hours}小時・NT$ ${r.trial_amount.toLocaleString()}</td></tr>
+        <tr><td>助教</td><td style="text-align:right;">${r.assistant_hours}小時・NT$ ${r.assistant_amount.toLocaleString()}</td></tr>
+        <tr><td>加班獎金</td><td style="text-align:right;">NT$ ${r.overtime_bonus.toLocaleString()}</td></tr>
+        <tr><td>其他補貼${r.other_subsidy_note ? "("+r.other_subsidy_note+")" : ""}</td><td style="text-align:right;">NT$ ${r.other_subsidy.toLocaleString()}</td></tr>
+        <tr><td>日本出差補助</td><td style="text-align:right;">NT$ ${r.japan_travel_subsidy.toLocaleString()}</td></tr>
+        <tr><td>日本交通補助</td><td style="text-align:right;">NT$ ${r.japan_transportation_subsidy.toLocaleString()}</td></tr>
+        <tr><td>請假扣款(請假${r.leave_days}天)</td><td style="text-align:right;">-NT$ ${r.leave_deduction.toLocaleString()}</td></tr>
+        <tr><td>勞保自付額</td><td style="text-align:right;">-NT$ ${r.labor_insurance.toLocaleString()}</td></tr>
+        <tr><td>健保自付額</td><td style="text-align:right;">-NT$ ${r.health_insurance.toLocaleString()}</td></tr>
+        <tr style="font-weight:bold;"><td>實際所得</td><td style="text-align:right;">NT$ ${r.net_pay.toLocaleString()}</td></tr>
+      </table>
+      ${r.notes ? `<p class="note" style="margin-top:4px;">備註:${r.notes.replace(/</g,"&lt;")}</p>` : ""}
+    </div>`).join("");
+}
+
+async function downloadCoachMyPayslip(recordId) {
+  const headers = {};
+  if (currentStaffToken) headers["X-Staff-Token"] = currentStaffToken;
+  const res = await fetch(`${BASE}/admin/coach/my-payroll/${recordId}/payslip.pdf`, { headers });
+  if (!res.ok) { alert("下載失敗"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  a.download = match ? decodeURIComponent(match[1]) : "薪資單.pdf";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 

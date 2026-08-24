@@ -1147,6 +1147,17 @@ def coach_my_bookings():
     return jsonify(rows)
 
 
+@app.route("/api/admin/coach/my-history", methods=["GET"])
+@require_role("coach")
+def coach_my_history():
+    """教練查詢自己「已上過」的課程歷史(今天以前,不含今天;今天以後的排課在my-bookings)。
+    跟my-bookings共用同一支booking.get_all_bookings(),只是把date_from/date_to反過來用。"""
+    today = booking.today_tw().isoformat()
+    rows = booking.get_all_bookings(coach_id=request.current_staff["id"], date_to=today)
+    rows = [r for r in rows if r["date"] != today]
+    return jsonify(rows)
+
+
 @app.route("/api/admin/coach/my-schedule", methods=["GET"])
 @require_role("coach")
 def coach_my_schedule():
@@ -1873,7 +1884,8 @@ def admin_get_coach_basic_info(coach_id):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     row = conn.execute(
-        "SELECT id, work_id, name, display_code, phone, birthday, id_number, address, branch FROM staff WHERE id=?", (coach_id,)
+        "SELECT id, work_id, name, display_code, phone, birthday, id_number, address, branch, "
+        "nickname, email, line_id, instagram, facebook FROM staff WHERE id=?", (coach_id,)
     ).fetchone()
     conn.close()
     if not row:
@@ -1899,11 +1911,18 @@ def admin_update_coach_basic_info(coach_id):
     if not is_manager_up:
         display_code = before["display_code"]  # 顯示代號仍限主管以上異動
     conn.execute(
-        "UPDATE staff SET name=?, display_code=?, phone=?, birthday=?, id_number=?, address=?, branch=? WHERE id=?",
+        "UPDATE staff SET name=?, display_code=?, phone=?, birthday=?, id_number=?, address=?, branch=?, "
+        "nickname=?, email=?, line_id=?, instagram=?, facebook=? WHERE id=?",
         (d.get("name") or before["name"], display_code,
          d.get("phone") or before["phone"], d.get("birthday") or before["birthday"],
          d.get("id_number") or before["id_number"], d.get("address") or before["address"],
-         d.get("branch") or before["branch"], coach_id),
+         d.get("branch") or before["branch"],
+         d.get("nickname") if "nickname" in d else before["nickname"],
+         d.get("email") if "email" in d else before["email"],
+         d.get("line_id") if "line_id" in d else before["line_id"],
+         d.get("instagram") if "instagram" in d else before["instagram"],
+         d.get("facebook") if "facebook" in d else before["facebook"],
+         coach_id),
     )
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
@@ -1956,8 +1975,12 @@ def admin_list_capability_options():
 
 
 @app.route("/api/admin/capability-options", methods=["POST"])
-@require_role("manager")
+@require_role("coach")
 def admin_create_capability_option():
+    # 2026-08修正:前端教練自助後台的「新增能力選項」按鈕(addCapabilityOptionSelf)本來就是
+    # 設計給教練自己用的,但這支API原本被限制成manager以上才能呼叫,教練點下去只會收到
+    # 403,按鈕形同壞掉。這是一組公用的能力選項清單(不含機密資料,新增選項不影響任何
+    # 已存在的資料),開放給教練也能新增選項跟現有前端設計一致。
     d = request.json
     conn = get_conn()
     try:
@@ -1999,6 +2022,13 @@ def admin_get_coach_details(coach_id):
         "self_intro": profile["self_intro"] if profile else None,
         "years_of_service": profile["years_of_service"] if profile else None,
         "contract_year": profile["contract_year"] if profile else None,
+        "discipline": profile["discipline"] if profile else None,
+        "specialty": profile["specialty"] if profile else None,
+        "snow_years": profile["snow_years"] if profile else None,
+        "other_experience": profile["other_experience"] if profile else None,
+        "bio_intro": profile["bio_intro"] if profile else None,
+        "message_to_students": profile["message_to_students"] if profile else None,
+        "coach_motto": profile["coach_motto"] if profile else None,
         "capability_option_ids": [r["capability_option_id"] for r in capabilities],
         "certifications": rows_to_dicts(certifications),
         "location_option_ids": [r["location_option_id"] for r in locations],
@@ -2124,24 +2154,101 @@ def admin_update_coach_profile(coach_id):
     if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
         return jsonify({"error": "權限不足"}), 403
     d = request.json
+    # 自我介紹/給學員一句話/代表教練一句話,前端已限制30字,這裡再做一次後端保險(避免繞過前端直接打API)
+    bio_intro = (d.get("bio_intro") or "")[:30] or None if "bio_intro" in d else None
+    message_to_students = (d.get("message_to_students") or "")[:30] or None if "message_to_students" in d else None
+    coach_motto = (d.get("coach_motto") or "")[:30] or None if "coach_motto" in d else None
     conn = get_conn()
     conn.execute(
-        f"""INSERT INTO coach_profiles (coach_id, promo_photo, id_photo, self_intro, resume, experience, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, {NOW_SQL})
+        f"""INSERT INTO coach_profiles (coach_id, promo_photo, id_photo, self_intro, resume, experience,
+           discipline, specialty, snow_years, other_experience, bio_intro, message_to_students, coach_motto, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL})
            ON CONFLICT(coach_id) DO UPDATE SET
              promo_photo=COALESCE(excluded.promo_photo, coach_profiles.promo_photo),
              id_photo=COALESCE(excluded.id_photo, coach_profiles.id_photo),
              self_intro=COALESCE(excluded.self_intro, coach_profiles.self_intro),
              resume=COALESCE(excluded.resume, coach_profiles.resume),
              experience=COALESCE(excluded.experience, coach_profiles.experience),
+             discipline=COALESCE(excluded.discipline, coach_profiles.discipline),
+             specialty=COALESCE(excluded.specialty, coach_profiles.specialty),
+             snow_years=COALESCE(excluded.snow_years, coach_profiles.snow_years),
+             other_experience=COALESCE(excluded.other_experience, coach_profiles.other_experience),
+             bio_intro=COALESCE(excluded.bio_intro, coach_profiles.bio_intro),
+             message_to_students=COALESCE(excluded.message_to_students, coach_profiles.message_to_students),
+             coach_motto=COALESCE(excluded.coach_motto, coach_profiles.coach_motto),
              updated_at={NOW_SQL}""",
-        (coach_id, d.get("promo_photo"), d.get("id_photo"), d.get("self_intro"), d.get("resume"), d.get("experience")),
+        (coach_id, d.get("promo_photo"), d.get("id_photo"), d.get("self_intro"), d.get("resume"), d.get("experience"),
+         d.get("discipline"), d.get("specialty"), d.get("snow_years"), d.get("other_experience"),
+         bio_intro, message_to_students, coach_motto),
     )
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
            VALUES (?, 'update_coach_profile', 'coach', ?, '{}', ?)""",
         (request.current_staff["id"], coach_id, json.dumps({"self_intro": d.get("self_intro")})),
     )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+_CERT_FILE_CATEGORIES = ("ski_license", "related_license", "other_license")
+
+
+@app.route("/api/admin/coaches/<int:coach_id>/certificate-files", methods=["GET"])
+@require_role("coach")
+def admin_list_coach_certificate_files(coach_id):
+    """滑雪證照/相關證照/其他證照的檔案清單(每一類可多筆,圖片或PDF)。權限比照/profile。"""
+    is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
+    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+        return jsonify({"error": "權限不足"}), 403
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM coach_certificate_files WHERE coach_id=? ORDER BY category, uploaded_at",
+        (coach_id,),
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/coaches/<int:coach_id>/certificate-files", methods=["POST"])
+@require_role("coach")
+def admin_upload_coach_certificate_file(coach_id):
+    is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
+    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+        return jsonify({"error": "權限不足"}), 403
+    d = request.json
+    category = d.get("category")
+    file_data = d.get("file_data")
+    if category not in _CERT_FILE_CATEGORIES:
+        return jsonify({"error": "證照類別不正確"}), 400
+    if not file_data:
+        return jsonify({"error": "缺少檔案內容"}), 400
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO coach_certificate_files (coach_id, category, file_name, mime_type, file_data) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (coach_id, category, d.get("file_name"), d.get("mime_type"), file_data),
+    )
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/admin/coaches/<int:coach_id>/certificate-files/<int:file_id>", methods=["DELETE"])
+@require_role("coach")
+def admin_delete_coach_certificate_file(coach_id, file_id):
+    is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
+    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+        return jsonify({"error": "權限不足"}), 403
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM coach_certificate_files WHERE id=? AND coach_id=?", (file_id, coach_id)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "找不到此檔案"}), 404
+    conn.execute("DELETE FROM coach_certificate_files WHERE id=?", (file_id,))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -2691,6 +2798,50 @@ def admin_update_insurance_brackets():
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/coach/my-payroll", methods=["GET"])
+@require_role("coach")
+def coach_my_payroll():
+    """教練查詢自己的薪資紀錄(所有已產生過的月份,最新在前)。薪資紀錄仍然要由主管以上先在
+    後台「薪資管理」產生/重新計算過,這裡只負責讀取——不開放教練自己產生,原因是產生流程
+    會重算金額並可能覆蓋人工調整過的加班獎金/補貼等欄位,應由主管掌控時機。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM coach_payroll_records WHERE coach_id=? ORDER BY period DESC",
+        (request.current_staff["id"],),
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/coach/my-payroll/<int:record_id>/payslip.pdf", methods=["GET"])
+@require_role("coach")
+def coach_my_payslip(record_id):
+    """教練下載自己的薪資單PDF,先確認這筆紀錄真的是自己的才產生,避免猜id看到別人的薪資。"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM coach_payroll_records WHERE id=? AND coach_id=?",
+        (record_id, request.current_staff["id"]),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "找不到此筆薪資紀錄"}), 404
+    import tempfile
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            output_path = tmp.name
+        payroll.generate_payslip_pdf(record_id, output_path)
+        conn = get_conn()
+        r = conn.execute(
+            "SELECT pr.period, st.name FROM coach_payroll_records pr JOIN staff st ON pr.coach_id=st.id WHERE pr.id=?",
+            (record_id,),
+        ).fetchone()
+        conn.close()
+        filename = f"薪資單_{r['name']}_{r['period']}.pdf" if r else "薪資單.pdf"
+        return send_file(output_path, as_attachment=True, download_name=filename, mimetype="application/pdf")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/api/admin/payroll", methods=["GET"])

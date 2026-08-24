@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS staff (
     birthday TEXT NOT NULL,
     id_number TEXT,                     -- 身分證字號
     address TEXT,                       -- 地址
+    nickname TEXT,                      -- 暱稱
+    email TEXT,                         -- email(純聯絡資訊用,不是登入帳號,無UNIQUE限制)
+    line_id TEXT,                       -- LINE(純聯絡資訊用,跟members.line_user_id那種OAuth登入識別欄位不同)
+    instagram TEXT,                     -- IG
+    facebook TEXT,                      -- FB
     password_hash TEXT NOT NULL,
     role TEXT CHECK(role IN ('coach','cs','manager','boss')) NOT NULL,
     branch TEXT NOT NULL,
@@ -394,14 +399,21 @@ CREATE TABLE IF NOT EXISTS coach_profiles (
     coach_id INTEGER UNIQUE NOT NULL REFERENCES staff(id),
     promo_photo TEXT,      -- base64 圖片資料
     id_photo TEXT,         -- base64 圖片資料(證件照,內部使用)
-    self_intro TEXT,
+    self_intro TEXT,       -- 舊版「自我介紹/給學員的一句話」合併欄位,2026-08新增下面三個獨立欄位後保留不動、不搬移資料
     contract_type TEXT CHECK(contract_type IN ('japan_short_term','taiwan_full_time','taiwan_part_time','contract_unit')),
     rank TEXT,             -- 職稱:主管/訓練官/教練
     hourly_rate INTEGER,   -- 教練時薪/鐘點費率(用於估算授課費用)
-    resume TEXT,           -- 資歷(年資數字,例如"12",顯示為"12年")
-    experience TEXT,       -- 經歷(曾任職雪場/單位等敘述)
+    resume TEXT,           -- 資歷/教學年資(年資數字,例如"12",顯示為"12年")
+    experience TEXT,       -- 經歷/教學經歷(曾任職雪場/單位等敘述)
     years_of_service INTEGER,  -- 年資(由管理者填寫,人事用途,與上面對外顯示的resume分開)
     contract_year TEXT,        -- 合約年(由管理者填寫)
+    discipline TEXT CHECK(discipline IN ('ski','snowboard','both')),  -- 滑行項目
+    specialty TEXT,             -- 滑行專長
+    snow_years INTEGER,         -- 雪齡
+    other_experience TEXT,      -- 其他相關經歷(跟上面experience「曾任職雪場/單位」分開)
+    bio_intro TEXT,             -- 自我介紹(前端限制30字內)
+    message_to_students TEXT,   -- 給學員一句話(前端限制30字內)
+    coach_motto TEXT,           -- 代表教練一句話(前端限制30字內)
     base_salary INTEGER,           -- 基本薪資(底薪,僅主管可見/設定)
     rate_group_class INTEGER,      -- 堂課時薪(包機/自主練習/團課,依實際授課時數計算)
     rate_trial INTEGER,            -- 體驗課時薪
@@ -473,6 +485,18 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
     cert_type TEXT CHECK(cert_type IN ('ski','snowboard','other')) NOT NULL,
     cert_name TEXT,
     cert_level TEXT NOT NULL
+);
+
+-- 教練證照「檔案」上傳(滑雪證照/相關證照/其他證照,每一類都可上傳多筆,圖片或PDF都收,
+-- 做法比照coach_profiles.promo_photo/id_photo,直接把檔案內容以base64存進TEXT欄位)
+CREATE TABLE IF NOT EXISTS coach_certificate_files (
+    id SERIAL PRIMARY KEY,
+    coach_id INTEGER NOT NULL REFERENCES staff(id),
+    category TEXT CHECK(category IN ('ski_license','related_license','other_license')) NOT NULL,
+    file_name TEXT,
+    mime_type TEXT,
+    file_data TEXT NOT NULL,   -- base64(含data URI前綴)
+    uploaded_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
 -- 教練駐在地選項清單(可由主管新增選項)
