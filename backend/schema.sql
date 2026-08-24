@@ -477,7 +477,7 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
 CREATE TABLE IF NOT EXISTS coach_location_options (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
-    is_indoor_branch BOOLEAN NOT NULL DEFAULT 0  -- 是否為室內滑雪分店(true)或日本雪場(false),決定前台包機「指定教練」下拉選單要抓哪些教練
+    is_indoor_branch INTEGER NOT NULL DEFAULT 0  -- 是否為室內滑雪分店(1)或日本雪場(0),決定前台包機「指定教練」下拉選單要抓哪些教練
 );
 
 -- 教練駐在地(教練與駐在地選項的關聯,可複選)

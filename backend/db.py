@@ -51,6 +51,26 @@ _HAS_RETURNING_RE = re.compile(r"\bRETURNING\b", re.IGNORECASE)
 _GROUP_CONCAT_RE = re.compile(r"GROUP_CONCAT\s*\(", re.IGNORECASE)
 
 
+def _sanitize_params(params):
+    """psycopg2會把Python的bool參數轉成SQL的true/false字面值,但這個專案裡除了個別
+    因為疏忽漏掉的情況以外，所有布林狀態欄位都刻意設計成INTEGER(0/1)存放，跟SQLite
+    的0/1語意完全一致(schema_postgres.sql開頭有註明這個慣例)。SQLite不會踩到這個問題,
+    因為Python的bool本來就是int的子類別，sqlite3套件會直接存成整數；但PostgreSQL的
+    欄位型別檢查嚴格，如果呼叫端傳進來的是原生bool而不是int，插入/更新INTEGER欄位時
+    會直接報「column ... is of type integer but expression is of type boolean」,
+    導致該次請求整個500壞掉。
+
+    2026-08-24補上:自主練習訂課(book_self_practice)這次就是踩到這個問題——裡面的
+    quota_consumed是Python bool,呼叫端忘記轉int(),本機SQLite測試完全正常，只有連
+    正式PostgreSQL才會報錯，前端又沒有把這類非預期錯誤攔下來顯示，看起來就像「點了
+    可預約完全沒反應」。與其一處一處檢查校正呼叫端漏掉的int()轉換(容易再漏)，這裡
+    直接在送進psycopg2之前，把參數裡所有原生bool一律轉成int，統一解決同一類問題。
+    """
+    if isinstance(params, (list, tuple)):
+        return type(params)(int(p) if isinstance(p, bool) else p for p in params)
+    return params
+
+
 class _PGCursorWrapper:
     """把 psycopg2 cursor 包裝成跟 sqlite3 cursor 介面相容(?, lastrowid)。"""
 
@@ -61,6 +81,7 @@ class _PGCursorWrapper:
     def execute(self, sql, params=()):
         translated = sql.replace("?", "%s")
         translated = _GROUP_CONCAT_RE.sub("STRING_AGG(", translated)
+        params = _sanitize_params(params)
         stripped_upper = translated.strip().upper()
 
         # SQLite用「BEGIN IMMEDIATE」立即取得寫入鎖，避免多個請求同時通過

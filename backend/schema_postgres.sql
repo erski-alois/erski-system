@@ -479,7 +479,9 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
 CREATE TABLE IF NOT EXISTS coach_location_options (
     id SERIAL PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
-    is_indoor_branch BOOLEAN NOT NULL DEFAULT FALSE  -- 是否為室內滑雪分店(true)或日本雪場(false),決定前台包機「指定教練」下拉選單要抓哪些教練
+    is_indoor_branch INTEGER NOT NULL DEFAULT 0  -- 是否為室內滑雪分店(1)或日本雪場(0),決定前台包機「指定教練」下拉選單要抓哪些教練
+    -- 這個欄位刻意用INTEGER而不是BOOLEAN,跟這份schema開頭註明的「BOOLEAN一律轉INTEGER」慣例一致
+    -- (上線後才發現這裡一開始誤用了BOOLEAN,已用alembic migration 012f894f8407修正,見該檔案說明)
 );
 
 -- 教練駐在地(教練與駐在地選項的關聯,可複選)
@@ -637,7 +639,7 @@ INSERT INTO ski_resorts (region_id, code, name)
 -- 教練駐在地選項種子資料
 -- 教練駐在地選項種子資料(高雄是室內滑雪分店,其餘是日本雪場)
 INSERT INTO coach_location_options (name, is_indoor_branch) VALUES
- ('藏王', FALSE), ('鬼首', FALSE), ('北海道', FALSE), ('高雄', TRUE), ('其他', FALSE);
+ ('藏王', 0), ('鬼首', 0), ('北海道', 0), ('高雄', 1), ('其他', 0);
 
 -- 教練能力選項種子資料(中英並列顯示)
 INSERT INTO coach_capability_options (name) VALUES

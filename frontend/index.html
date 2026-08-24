@@ -3650,7 +3650,14 @@ function buildHourGrid(gridEl, dateStr, sessions, onBookClick) {
     } else {
       const btn = document.createElement("button");
       btn.className = "small"; btn.textContent = "可預約";
-      btn.onclick = () => onBookClick(dateStr, h);
+      // 用Promise.resolve()包住,不管onBookClick是同步拋錯還是非同步reject,
+      // 都會被這裡攔到並跳出alert,不會變成完全沒反應的靜默失敗(方便排查「點了沒反應」這類回報)。
+      btn.onclick = () => {
+        Promise.resolve().then(() => onBookClick(dateStr, h)).catch(err => {
+          console.error("訂課發生錯誤:", err);
+          alert("預約時發生非預期錯誤,請截圖這個訊息回報客服:\n" + (err && err.message ? err.message : err));
+        });
+      };
       row.appendChild(Object.assign(document.createElement("div"), { textContent: `${h}:00` }));
       const cell = document.createElement("div"); cell.appendChild(btn);
       row.appendChild(cell);
