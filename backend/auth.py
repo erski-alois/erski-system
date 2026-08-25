@@ -142,12 +142,13 @@ def staff_login(work_id: str, password: str):
         return None
     if not row["is_active"]:
         return None
-    # 2026-08:依需求「後台先不要設密碼，還原成之前主管、客服的模式」——
-    # 主管(manager)、客服(cs)角色登入先不驗證密碼,只要工號正確、帳號啟用中即可登入。
-    # 教練(coach)、老闆(boss)角色不受影響,登入仍必須輸入正確密碼。
-    if row["role"] not in ("manager", "cs"):
-        if not verify_password(row["password_hash"], password):
-            return None
+    # 2026-08:依需求「後台登入不進去，在上線之前不用再驗證」——
+    # 正式上線(對外開放給真實客戶使用)之前,後台登入先不驗證密碼,只要工號正確、
+    # 帳號是啟用中即可登入,密碼欄位打對打錯或留空都不影響,所有角色(教練/客服/
+    # 主管/老闆)皆適用。⚠️正式上線前務必把下面這段密碼驗證加回來,不然任何人只要
+    # 猜到工號就能直接登入後台,是很明顯的資安風險。
+    # if not verify_password(row["password_hash"], password):
+    #     return None
     staff = dict(row)
     staff.pop("password_hash")
     return staff
