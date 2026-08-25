@@ -142,8 +142,12 @@ def staff_login(work_id: str, password: str):
         return None
     if not row["is_active"]:
         return None
-    if not verify_password(row["password_hash"], password):
-        return None
+    # 2026-08:依需求「後台先不要設密碼，還原成之前主管、客服的模式」——
+    # 主管(manager)、客服(cs)角色登入先不驗證密碼,只要工號正確、帳號啟用中即可登入。
+    # 教練(coach)、老闆(boss)角色不受影響,登入仍必須輸入正確密碼。
+    if row["role"] not in ("manager", "cs"):
+        if not verify_password(row["password_hash"], password):
+            return None
     staff = dict(row)
     staff.pop("password_hash")
     return staff
