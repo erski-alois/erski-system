@@ -1248,7 +1248,11 @@ def admin_list_coach_schedule():
 @app.route("/api/admin/dashboard-summary", methods=["GET"])
 @require_role("cs")
 def admin_dashboard_summary():
-    """營運中心首頁彙總資料:今日課程數、報到狀況、待付款、待指派教練、設備異常。"""
+    """營運中心首頁彙總資料:今日課程數、報到狀況、當日每位教練應收尾款。
+    2026-08:依需求把「待付款訂單」改成「當日每位教練應收尾款」——只抓日本教練課
+    (訂金/尾款制)裡,今天出團、尾款還沒收的部分,依教練分組加總,方便教練當天去跟
+    學員收現金尾款時對帳;同時把原本「待指派教練」「設備異常」這兩張卡片拿掉
+    (共用班表日曆也在同一次改動合併進這個畫面,見前端)。"""
     today_str = booking.today_tw().isoformat()
     conn = get_conn()
 
@@ -1267,27 +1271,22 @@ def admin_dashboard_summary():
         "SELECT COUNT(*) c FROM indoor_sessions WHERE booking_date=? AND attendance_status='completed'", (today_str,)
     ).fetchone()["c"]
 
-    pending_payment_orders = conn.execute(
-        "SELECT COUNT(*) c, COALESCE(SUM(amount),0) total FROM orders WHERE status='pending'"
-    ).fetchone()
-
-    unassigned_group = conn.execute(
-        "SELECT COUNT(*) c FROM indoor_sessions WHERE category='group_class' AND coach_id IS NULL AND status != 'cancelled' AND booking_date >= ?",
+    coach_receivables = conn.execute(
+        """SELECT jb.coach_id, st.name AS coach_name, SUM(jb.balance_amount) AS amount, COUNT(*) AS booking_count
+           FROM japan_bookings jb
+           JOIN staff st ON jb.coach_id = st.id
+           WHERE jb.booking_date=? AND jb.status != 'cancelled'
+             AND jb.balance_paid=0 AND jb.balance_amount > 0
+           GROUP BY jb.coach_id, st.name
+           ORDER BY amount DESC""",
         (today_str,),
-    ).fetchone()["c"]
-
-    equipment_issue = conn.execute(
-        "SELECT COUNT(*) c FROM equipment_items WHERE status != 'active'"
-    ).fetchone()["c"]
+    ).fetchall()
 
     conn.close()
     return jsonify({
         "today_sessions": total_today,
         "today_checked_in": checked_in,
-        "pending_payment_count": pending_payment_orders["c"],
-        "pending_payment_total": pending_payment_orders["total"],
-        "unassigned_group_class": unassigned_group,
-        "equipment_issue_count": equipment_issue,
+        "coach_receivables_today": rows_to_dicts(coach_receivables),
     })
 
 

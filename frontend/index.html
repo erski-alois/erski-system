@@ -1248,7 +1248,7 @@ async function renderStaffPanel(staff) {
     const navGroups = [
       { title: "今日營運", items: [
         ["dashboard", "營運中心"], ["overview", "會員與訂課"], ["assist", "代客訂課"], ["pending", "待處理事項"],
-        ["checkin", "報到管理"], ["teamcalendar", "共用班表日曆"],
+        ["checkin", "報到管理"],
       ]},
       { title: "訂單與收款", items: [
         ["orders", "訂單管理"], ["japanbookings", "日本教練課訂單"],
@@ -1292,7 +1292,6 @@ async function renderStaffPanel(staff) {
       <div id="staffTab-orders" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-pending" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-checkin" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-teamcalendar" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-japanbookings" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-faq" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-equipment" class="staff-tab" style="display:none;"></div>
@@ -1314,7 +1313,6 @@ async function renderStaffPanel(staff) {
     await renderOrdersManageTab();
     await renderPendingActions();
     await renderCheckInTab();
-    await renderTeamCalendarTools();
     await renderJapanBookingsTools();
     await renderFaqManageTab();
     await renderEquipmentTab();
@@ -1352,7 +1350,6 @@ const STAFF_TAB_REFRESH = {
   orders: renderOrdersManageTab,
   pending: renderPendingActions,
   checkin: renderCheckInTab,
-  teamcalendar: renderTeamCalendarTools,
   japanbookings: renderJapanBookingsTools,
   faq: renderFaqManageTab,
   equipment: renderEquipmentTab,
@@ -1402,22 +1399,26 @@ async function renderDashboardTab() {
         <div class="admin-metric-value">${d.today_checked_in}</div>
         <div class="admin-metric-label">今日已報到</div>
       </div>
-      <div class="admin-metric-card">
-        <div class="admin-metric-icon">💰</div>
-        <div class="admin-metric-value">${d.pending_payment_count}</div>
-        <div class="admin-metric-label">待付款訂單</div>
-        <div class="admin-metric-sub">應收金額 NT$${d.pending_payment_total.toLocaleString()}</div>
+    </div>
+
+    <div class="admin-card">
+      <div class="admin-card-head">
+        <div>
+          <div class="admin-card-title">當日每位教練應收尾款</div>
+          <div class="admin-card-desc">日本教練課採訂金+尾款制,這裡列出今天出團、尾款還沒收的教練,方便對帳。</div>
+        </div>
       </div>
-      <div class="admin-metric-card">
-        <div class="admin-metric-icon">👤</div>
-        <div class="admin-metric-value">${d.unassigned_group_class}</div>
-        <div class="admin-metric-label">待指派教練</div>
-      </div>
-      <div class="admin-metric-card">
-        <div class="admin-metric-icon">⚠️</div>
-        <div class="admin-metric-value">${d.equipment_issue_count}</div>
-        <div class="admin-metric-label">設備異常</div>
-      </div>
+      ${d.coach_receivables_today && d.coach_receivables_today.length
+        ? `<table style="width:100%; margin-top:6px; font-size:13px;">
+             <tr><th style="text-align:left;">教練</th><th style="text-align:right;">應收尾款</th><th style="text-align:right;">筆數</th></tr>
+             ${d.coach_receivables_today.map(r => `
+               <tr>
+                 <td>${r.coach_name}</td>
+                 <td style="text-align:right;">NT$ ${r.amount.toLocaleString()}</td>
+                 <td style="text-align:right;">${r.booking_count}</td>
+               </tr>`).join("")}
+           </table>`
+        : `<div class="list-item">今天沒有教練有應收尾款</div>`}
     </div>
 
     <div class="admin-card">
@@ -1428,9 +1429,12 @@ async function renderDashboardTab() {
         </div>
         <button class="small secondary" onclick="switchStaffTab('pending')">查看全部 ${pendingCount} 筆 →</button>
       </div>
-      <p class="note">共用班表日曆、報到管理、訂單管理的即時狀態,已整合在左側對應分頁,點擊即可切換查看細節。</p>
+      <p class="note">報到管理、訂單管理的即時狀態,已整合在左側對應分頁,點擊即可切換查看細節;共用班表日曆合併在下方。</p>
     </div>
+
+    <div id="dashboardTeamCalendarWrap" style="margin-top:16px;"></div>
   `;
+  await renderTeamCalendarTools();
 }
 
 async function renderStaffAssistTab() {
@@ -1897,7 +1901,7 @@ async function saveJapanReferral(bookingId) {
 }
 
 async function renderTeamCalendarTools() {
-  const wrap = document.getElementById("staffTab-teamcalendar");
+  const wrap = document.getElementById("dashboardTeamCalendarWrap");
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
   wrap.innerHTML = `
@@ -1950,8 +1954,11 @@ async function loadTeamCalendar() {
 let japanQuickCreateDate = null;
 async function openJapanQuickCreate(dateStr) {
   japanQuickCreateDate = dateStr;
-  const { data: coaches } = await api("/admin/staff");
-  const coachList = coaches.filter(c => c.role === "coach");
+  // 2026-08修正:這裡原本呼叫/admin/staff抓教練清單,但該API限「主管以上」才能呼叫;
+  // 共用班表日曆本身客服也能用,客服點格子開這個表單時,教練下拉選單會因為權限不足
+  // 整個報錯而開不出來。改用不限角色的公開教練清單API(/api/coaches),本來就只會列出
+  // 在職教練,不需要再另外篩選role。
+  const { data: coachList } = await api("/coaches");
   const { data: resorts } = await api("/admin/resorts");
   const wrap = document.getElementById("japanQuickCreateWrap");
   wrap.innerHTML = `
