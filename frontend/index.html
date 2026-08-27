@@ -433,7 +433,7 @@
                 <div style="font-size:11px;" id="adminTopbarRole"></div>
               </div>
             </div>
-            <a onclick="closeStaffLogin()" style="cursor:pointer; color:#2563eb; white-space:nowrap;">回到客戶端</a>
+            <a onclick="closeStaffLogin()" style="cursor:pointer; color:#2563eb; white-space:nowrap;">登出</a>
           </div>
         </div>
         <div class="admin-main">
@@ -756,11 +756,11 @@
           <h3 style="margin-top:16px;">滑行項目</h3>
           <div class="row">
             <div><label>Snowboard 板長</label><input id="pSbLength"></div>
-            <div><label>Snowboard 鞋碼</label><input id="pSbBoot"></div>
+            <div><label>Snowboard 鞋碼(cm)</label><input id="pSbBoot"></div>
           </div>
           <div class="row">
             <div><label>Ski 板長</label><input id="pSkiLength"></div>
-            <div><label>Ski 鞋碼</label><input id="pSkiBoot"></div>
+            <div><label>Ski 鞋碼(cm)</label><input id="pSkiBoot"></div>
           </div>
 
           <label>雪機滑行程度</label>
@@ -803,6 +803,7 @@
           <div id="companionListWrap"></div>
           <button class="small secondary" onclick="showAddCompanionForm()">+ 新增同行人</button>
           <div id="addCompanionForm" style="display:none; margin-top:10px;">
+            <b id="companionFormTitle" style="font-size:13px;">新增同行人</b>
             <label>稱呼</label><input id="newCompanionName">
             <div class="row">
               <div><label>性別</label><select id="newCompanionGender"><option value="male">男</option><option value="female">女</option></select></div>
@@ -812,10 +813,11 @@
               <div><label>身高(cm)</label><input id="newCompanionHeight" type="number"></div>
               <div><label>體重(kg)</label><input id="newCompanionWeight" type="number"></div>
             </div>
-            <label>鞋子尺寸</label><input id="newCompanionShoe">
+            <label>鞋子尺寸(cm)</label><input id="newCompanionShoe">
             <label>常用滑行項目</label>
             <select id="newCompanionEquip"><option value="ski">雙板 SKI</option><option value="snowboard">單板 Snowboard</option></select>
-            <button class="small" onclick="createCompanionFromCenter()">儲存</button>
+            <button class="small" id="companionFormSaveBtn" onclick="saveCompanionFromCenter()">儲存</button>
+            <button class="small secondary" onclick="cancelCompanionForm()">取消</button>
           </div>
         </div>
 
@@ -978,7 +980,16 @@ async function api(path, opts = {}) {
   if (currentStaffToken) headers["X-Staff-Token"] = currentStaffToken;
   if (currentMemberToken) headers["X-Member-Token"] = currentMemberToken;
   const res = await fetch(BASE + path, { ...opts, headers: { ...headers, ...(opts.headers||{}) } });
-  const data = await res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    // 2026-08修正:後端萬一發生沒有攔截到的錯誤(例如伺服器丟出500,回傳的是HTML錯誤頁而不是JSON),
+    // 原本這裡res.json()解析失敗會直接throw,整個呼叫端的async函式就中斷、什麼畫面回饋都不會有
+    // (使用者會覺得「按了按鈕完全沒反應」)。改成這種情況也回傳一個統一格式的錯誤訊息,讓呼叫端
+    // 既有的「if(ok) ... else 顯示data.error」寫法都能正常顯示錯誤,而不是整個無聲失敗。
+    data = { error: `系統發生未預期的錯誤(狀態碼 ${res.status}),請稍後再試一次;如持續發生請聯絡工程協助。` };
+  }
   log(path, data);
   return { ok: res.ok, data };
 }
@@ -1111,6 +1122,19 @@ function openStaffLogin() {
   loadDemoStaffButtons();
 }
 function closeStaffLogin() {
+  // 2026-08修正:員工後台(客服/主管/老闆)原本沒有真正的「登出」——這裡原本只是把
+  // #staffLoginScreen藏起來,回到客戶端畫面,但currentStaffToken/currentStaffId
+  // 都還留在記憶體裡沒有清掉,而且畫面上這個連結原本寫的是「回到客戶端」,不是「登出」,
+  // 老闆/主管/客服會找不到登出的地方。改成:文字改為「登出」、真正把登入狀態(token/工號)
+  // 清掉、登入表單也重置成空白,下次點「員工後台管理登入」會是全新的登入畫面,
+  // 不會殘留上一個人的登入狀態。
+  currentStaffId = null;
+  currentStaffToken = null;
+  document.getElementById("staffPanel").style.display = "none";
+  document.getElementById("staffLoginFormCard").style.display = "block";
+  document.getElementById("staffWorkId").value = "";
+  document.getElementById("staffPw").value = "";
+  document.getElementById("staffLoginStatus").innerHTML = "";
   document.getElementById("staffLoginScreen").style.display = "none";
   if (currentMemberId) {
     document.getElementById("mainScreen").style.display = "block";
@@ -2276,7 +2300,13 @@ async function toggleMemberDetail(memberId) {
   const isManagerUp = window.currentStaffIsManagerUp;
   // 敏感欄位(身分證/血型/地址/緊急聯絡電話):客服只看得到清單API已遮罩過的版本,且設為唯讀,
   // 避免客服在不知情的狀況下把遮罩後的假資料存回去蓋掉真實值;主管以上才看得到/改得到真實值。
-  const m = { ...full };
+  // 2026-08修正:/api/members/<id>回傳的姓名/電話/生日等基本資料是包在full.member裡面
+  // (不是直接在最外層),原本這裡直接{...full}展開,會導致m.name/m.phone等全部是undefined,
+  // 畫面上姓名/電話欄位看起來是空的——最嚴重的是,如果這時候客服/主管沒注意到欄位是空的
+  // 就按「儲存以上資料」,會把會員真實的姓名/電話等資料整個蓋成空白,是資料遺失的風險。
+  // 改成先展開full(取得charter_passes/plan/quota_status等本來就在最外層的欄位),
+  // 再用full.member覆蓋上去(取得正確的姓名/電話/生日等基本資料)。
+  const m = { ...full, ...full.member };
   if (!isManagerUp) {
     m.id_number = listVersion.id_number;
     m.blood_type = listVersion.blood_type;
@@ -2321,9 +2351,9 @@ async function toggleMemberDetail(memberId) {
         </select>
       </div>
       <div><label>雙板長度</label><input id="memSkiLength-${memberId}" value="${(m.ski_length||"").replace(/"/g,'&quot;')}"></div>
-      <div><label>雙板靴尺寸</label><input id="memSkiBoot-${memberId}" value="${(m.ski_boot_size||"").replace(/"/g,'&quot;')}"></div>
+      <div><label>雙板靴尺寸(cm)</label><input id="memSkiBoot-${memberId}" value="${(m.ski_boot_size||"").replace(/"/g,'&quot;')}"></div>
       <div><label>單板長度</label><input id="memSnowboardLength-${memberId}" value="${(m.snowboard_length||"").replace(/"/g,'&quot;')}"></div>
-      <div><label>單板靴尺寸</label><input id="memSnowboardBoot-${memberId}" value="${(m.snowboard_boot_size||"").replace(/"/g,'&quot;')}"></div>
+      <div><label>單板靴尺寸(cm)</label><input id="memSnowboardBoot-${memberId}" value="${(m.snowboard_boot_size||"").replace(/"/g,'&quot;')}"></div>
       <div><label>雪機滑行程度</label><input id="memMachineLevel-${memberId}" value="${(m.machine_level||"").replace(/"/g,'&quot;')}"></div>
       <div><label>雪上滑行程度</label><input id="memSnowLevel-${memberId}" value="${(m.snow_level||"").replace(/"/g,'&quot;')}"></div>
     </div>
@@ -3608,10 +3638,20 @@ async function createCoachAdmin() {
     method: "POST",
     body: JSON.stringify({ name, work_id, birthday, phone, branch, role: "coach" })
   });
-  document.getElementById("newCoachStatus").innerHTML = ok
-    ? `<span class="status-tag ok">建立成功,預設密碼:${data.default_password}</span>`
-    : `<span class="status-tag warn">建立失敗</span>`;
-  if (ok) await renderCoachManageTools();
+  if (!ok) {
+    // 2026-08修正:原本失敗只顯示「建立失敗」四個字,看不出原因(例如工號重複);
+    // 現在改成把後端實際回傳的錯誤訊息顯示出來。
+    document.getElementById("newCoachStatus").innerHTML = `<span class="status-tag warn">建立失敗:${data.error || "未知錯誤"}</span>`;
+    return;
+  }
+  // 2026-08修正:原本這裡建立成功後馬上呼叫renderCoachManageTools()重繪整個分頁,
+  // 會把剛剛顯示的「建立成功,預設密碼:XXXXXX」這則訊息(裡面有主管需要記下來的預設密碼)
+  // 整個畫面連同訊息一起洗掉,主管很容易根本來不及看到/記下密碼就消失了,
+  // 誤以為「輸入完成但沒有真的新增成功」。改成重繪清單之後,再把成功訊息重新顯示一次。
+  const successMsg = `建立成功,預設密碼:${data.default_password}(請記下來告知教練,畫面重新整理後不會再顯示)`;
+  await renderCoachManageTools();
+  const statusEl = document.getElementById("newCoachStatus");
+  if (statusEl) statusEl.innerHTML = `<span class="status-tag ok">${successMsg}</span>`;
 }
 
 function toggleNavGroup(name) {
@@ -3726,7 +3766,7 @@ function renderWizardPeople(key) {
           <div class="row3">
             <select id="wiz-${key}-p${i}-gender"><option value="male">男</option><option value="female">女</option></select>
             <input id="wiz-${key}-p${i}-age" type="number" placeholder="年齡">
-            <input id="wiz-${key}-p${i}-shoe" placeholder="鞋碼">
+            <input id="wiz-${key}-p${i}-shoe" placeholder="鞋碼(cm)">
           </div>
           <div class="row3">
             <input id="wiz-${key}-p${i}-height" type="number" placeholder="身高cm">
@@ -4826,18 +4866,55 @@ function getBirthDateValue() {
 }
 function renderCompanionListInCenter() {
   const wrap = document.getElementById("companionListWrap");
+  // 2026-08修正:原本這裡只顯示稱呼/性別/年齡/滑行項目,身高/體重/鞋子尺寸雖然都有填寫、
+  // 也存進資料庫了,卻完全沒有顯示出來,使用者填完之後看不到自己填了什麼、資料看起來不完整。
+  // 改成把已填寫的欄位都列出來。同時把原本「只能刪除、不能修改」的問題一起補上:新增一個
+  // 「編輯」按鈕,重複使用同一個表單,填錯了可以直接改,不用整筆刪除重新輸入。
   wrap.innerHTML = (myCompanions.length ? myCompanions.map(c => `
     <div class="list-item">
-      ${c.name || "(未命名)"}${c.gender ? `・${c.gender === "male" ? "男" : "女"}` : ""}${c.age ? `・${c.age}歲` : ""}
-      ${c.equipment_type ? `・${c.equipment_type === "ski" ? "雙板" : "單板"}` : ""}
+      <div>
+        <b>${c.name || "(未命名)"}</b>${c.gender ? `・${c.gender === "male" ? "男" : "女"}` : ""}${c.age ? `・${c.age}歲` : ""}
+        ${c.equipment_type ? `・${c.equipment_type === "ski" ? "雙板" : "單板"}` : ""}
+      </div>
+      <div class="note">
+        ${c.height_cm ? `身高${c.height_cm}cm・` : ""}${c.weight_kg ? `體重${c.weight_kg}kg・` : ""}${c.shoe_size ? `鞋子尺寸${c.shoe_size}cm` : ""}
+      </div>
+      <button class="small secondary" onclick="editCompanionFromCenter(${c.id})">編輯</button>
       <button class="small secondary" onclick="deleteCompanionAdmin(${c.id})">刪除</button>
     </div>
   `).join("") : `<div class="list-item">尚無儲存的同行人</div>`);
 }
+let _editingCompanionId = null;
 function showAddCompanionForm() {
+  _editingCompanionId = null;
+  document.getElementById("companionFormTitle").textContent = "新增同行人";
+  document.getElementById("companionFormSaveBtn").textContent = "儲存";
+  ["newCompanionName","newCompanionAge","newCompanionHeight","newCompanionWeight","newCompanionShoe"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("newCompanionGender").value = "male";
+  document.getElementById("newCompanionEquip").value = "ski";
   document.getElementById("addCompanionForm").style.display = "block";
 }
-async function createCompanionFromCenter() {
+function editCompanionFromCenter(companionId) {
+  const c = (myCompanions || []).find(x => x.id === companionId);
+  if (!c) return;
+  _editingCompanionId = companionId;
+  document.getElementById("companionFormTitle").textContent = `編輯同行人:${c.name || "(未命名)"}`;
+  document.getElementById("companionFormSaveBtn").textContent = "儲存修改";
+  document.getElementById("newCompanionName").value = c.name || "";
+  document.getElementById("newCompanionGender").value = c.gender || "male";
+  document.getElementById("newCompanionAge").value = c.age || "";
+  document.getElementById("newCompanionHeight").value = c.height_cm || "";
+  document.getElementById("newCompanionWeight").value = c.weight_kg || "";
+  document.getElementById("newCompanionShoe").value = c.shoe_size || "";
+  document.getElementById("newCompanionEquip").value = c.equipment_type || "ski";
+  document.getElementById("addCompanionForm").style.display = "block";
+  document.getElementById("addCompanionForm").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function cancelCompanionForm() {
+  _editingCompanionId = null;
+  document.getElementById("addCompanionForm").style.display = "none";
+}
+async function saveCompanionFromCenter() {
   const payload = {
     name: document.getElementById("newCompanionName").value,
     gender: document.getElementById("newCompanionGender").value,
@@ -4847,7 +4924,12 @@ async function createCompanionFromCenter() {
     shoe_size: document.getElementById("newCompanionShoe").value,
     equipment_type: document.getElementById("newCompanionEquip").value,
   };
-  await api(`/members/${currentMemberId}/companions`, { method: "POST", body: JSON.stringify(payload) });
+  if (_editingCompanionId) {
+    await api(`/members/${currentMemberId}/companions/${_editingCompanionId}`, { method: "PUT", body: JSON.stringify(payload) });
+  } else {
+    await api(`/members/${currentMemberId}/companions`, { method: "POST", body: JSON.stringify(payload) });
+  }
+  _editingCompanionId = null;
   await loadMyCompanions();
   renderCompanionListInCenter();
   document.getElementById("addCompanionForm").style.display = "none";

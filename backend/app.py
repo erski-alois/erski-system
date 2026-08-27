@@ -1814,9 +1814,17 @@ def admin_delete_staff(staff_id):
 @app.route("/api/admin/staff", methods=["POST"])
 @require_role("manager")
 def admin_create_staff():
+    """2026-08修正:原本這裡工號重複時,INSERT會因為work_id唯一限制直接丟未攔截的例外,
+    回傳一個HTML錯誤頁而不是JSON——前端api()呼叫端解析JSON會失敗、整個新增流程無聲中斷,
+    畫面上「新增教練」完全沒有任何成功或失敗的提示,看起來就像「輸入完成但沒有真的新增」。
+    改成先檢查工號是否已存在,存在的話回傳清楚的錯誤訊息,不要讓資料庫例外整個往外丟。"""
     d = request.json
-    password = d["birthday"].replace("-", "")[2:8]
     conn = get_conn()
+    existing = conn.execute("SELECT id FROM staff WHERE work_id=?", (d["work_id"],)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({"error": f"工號「{d['work_id']}」已經有人使用,請換一個工號"}), 400
+    password = d["birthday"].replace("-", "")[2:8]
     cur = conn.execute(
         """INSERT INTO staff (work_id, name, display_code, phone, birthday, password_hash, role, branch)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
