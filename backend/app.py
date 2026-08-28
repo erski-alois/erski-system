@@ -549,12 +549,27 @@ def update_member_profile(member_id):
     updates = {k: v for k, v in d.items() if k in fields}
     if not updates:
         return jsonify({"error": "no valid fields"}), 400
+    # 2026-08:gender/primary_equipment欄位在資料庫有CHECK限制(gender只能是male/female,
+    # primary_equipment只能是ski/snowboard),但前端下拉選單原本就允許選「未填寫/未選擇」
+    # (對應空字串"")——這是正常、預期會出現的狀態(會員本來就可以先不填性別/主要滑行項目)。
+    # 空字串不符合CHECK限制,原本會讓這裡的UPDATE直接丟出未攔截的sqlite3.IntegrityError,
+    # 導致「儲存我的資料」整個500失敗,而且這個例外沒有被任何except接住,conn也沒有被
+    # close(),已經實測會導致連線/寫入鎖沒釋放、拖累後續其他人的請求(database is locked)。
+    # 修法:空字串一律當成「這個欄位還沒填」,存成NULL,不是直接把空字串寫進去。
+    for k in ("gender", "primary_equipment"):
+        if k in updates and updates[k] == "":
+            updates[k] = None
     set_clause = ", ".join(f"{k}=?" for k in updates)
     conn = get_conn()
-    conn.execute(f"UPDATE members SET {set_clause} WHERE id=?", (*updates.values(), member_id))
-    conn.commit()
-    row = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
-    conn.close()
+    try:
+        conn.execute(f"UPDATE members SET {set_clause} WHERE id=?", (*updates.values(), member_id))
+        conn.commit()
+        row = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     row_dict = dict(row)
     row_dict.pop("password_hash", None)  # 2026-08修正:原本這裡會把密碼雜湊值一起回傳給前端
     return jsonify(row_dict)

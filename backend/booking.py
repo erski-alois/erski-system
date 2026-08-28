@@ -175,6 +175,10 @@ def _check_equipment_available(conn, equipment_type, booking_date):
         (equipment_type, booking_date),
     ).fetchone()
     if row:
+        # 2026-08:呼叫端在呼叫這裡之前都已經開了conn(部分還下過BEGIN IMMEDIATE取得寫入鎖),
+        # 這裡如果只raise不先close(conn),連線/寫入鎖不會被釋放,會導致後續其他人的請求卡在
+        # "database is locked"(跟_check_continuous_hours原本的問題是同一類,一併修掉)。
+        conn.close()
         raise ValueError(f"{booking_date} 設備維修/停用中,無法預約({row['reason'] or '請洽客服確認'})")
 
 
@@ -1357,11 +1361,15 @@ INDOOR_SELF_EDIT_DAYS = 3
 JAPAN_SELF_EDIT_DAYS = 30
 
 
-def _check_edit_window(booking_date_str, min_days, is_staff):
+def _check_edit_window(conn, booking_date_str, min_days, is_staff):
     if is_staff:
         return
     days_left = (datetime.strptime(booking_date_str, "%Y-%m-%d").date() - _now_tw().date()).days
     if days_left < min_days:
+        # 2026-08:這裡呼叫時caller的conn都還是開著的(這條規則實際上會常常擋下——客戶
+        # 想取消/改期3天內的課程本來就是很常見的操作),原本raise之前沒有close(conn),
+        # 會導致連線/寫入鎖沒釋放、後續其他請求卡在"database is locked"(已實際重現過)。
+        conn.close()
         raise ValueError(f"課程開始前 {min_days} 天內無法自行修改/取消,請洽客服協助處理")
 
 
@@ -1419,7 +1427,7 @@ def cancel_indoor_booking(member_ref_id, is_staff=False):
         conn.close()
         raise ValueError("這堂課已經報到完成,無法再取消")
 
-    _check_edit_window(row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
+    _check_edit_window(conn, row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
 
     conn.execute("UPDATE indoor_session_members SET status='cancelled' WHERE id=?", (member_ref_id,))
 
@@ -1486,7 +1494,7 @@ def reschedule_indoor_booking(member_ref_id, new_date, new_hour, is_staff=False)
         conn.close()
         raise ValueError("找不到這筆預約")
 
-    _check_edit_window(row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
+    _check_edit_window(conn, row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
     _validate_hour(new_hour)
 
     conflict = _has_conflict(conn, new_date, new_hour, row["duration_minutes"], exclude_session_id=row["session_id"])
@@ -1515,7 +1523,7 @@ def cancel_jump_booking(jump_booking_id, is_staff=False):
     if row["attendance_status"] != "pending":
         conn.close()
         raise ValueError("這堂課已經報到完成,無法再取消")
-    _check_edit_window(row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
+    _check_edit_window(conn, row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
     conn.execute("UPDATE jump_bookings SET status='cancelled' WHERE id=?", (jump_booking_id,))
     conn.commit()
     conn.close()
@@ -1528,7 +1536,7 @@ def reschedule_jump_booking(jump_booking_id, new_date, new_time, is_staff=False)
     if not row:
         conn.close()
         raise ValueError("找不到這筆預約")
-    _check_edit_window(row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
+    _check_edit_window(conn, row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
     conn.execute(
         "UPDATE jump_bookings SET booking_date=?, start_time=? WHERE id=?",
         (new_date, new_time, jump_booking_id),
@@ -1550,7 +1558,7 @@ def cancel_japan_trip(group_key, is_staff=False):
         conn.close()
         raise ValueError("此行程已有天數完成報到,無法整趟取消,請洽客服協助處理個別天數")
     earliest_date = trip_rows[0]["booking_date"]
-    _check_edit_window(earliest_date, JAPAN_SELF_EDIT_DAYS, is_staff)
+    _check_edit_window(conn, earliest_date, JAPAN_SELF_EDIT_DAYS, is_staff)
     conn.execute("UPDATE japan_bookings SET status='cancelled' WHERE group_key=?", (group_key,))
     conn.commit()
     conn.close()
