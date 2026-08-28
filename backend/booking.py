@@ -96,6 +96,11 @@ def _check_continuous_hours(conn, member_id, booking_date, start_hour, duration_
         else:
             current_run = 1
     if max_run > MAX_CONTINUOUS_HOURS:
+        # 2026-08:呼叫端在呼叫這裡之前都已經下過BEGIN IMMEDIATE取得寫入鎖,如果這裡只
+        # raise不先close(conn),這個連線不會被釋放、寫入鎖也不會被放掉,會讓後續其他人的
+        # 訂課/購買請求卡在"database is locked"(已實際測試重現)。跟檔案裡其他驗證失敗時
+        # 的寫法一致,先close(conn)再raise。
+        conn.close()
         raise ValueError(
             f"同一人連續課程不得超過 {MAX_CONTINUOUS_HOURS} 小時(雙板/單板時數合併計算),請分開時段預約"
         )
@@ -177,7 +182,13 @@ def _validate_not_past(booking_date, start_hour=None):
     """禁止預約過去的日期;同一天則必須至少提前 MIN_ADVANCE_BOOKING_HOURS 小時預約(以台灣時間判斷)。"""
     now = _now_tw()
     today = now.date()
-    b_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
+    # 2026-08:日期格式錯誤(例如用"/"而非"-",或根本不是日期)時,不要把Python底層
+    # strptime的原始例外訊息(英文、技術性)直接讓呼叫端當成ValueError顯示給客戶看,
+    # 改成清楚的中文提示訊息。
+    try:
+        b_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise ValueError("日期格式錯誤,請使用「西元年-月-日」格式,例如 2026-08-30")
     if b_date < today:
         raise ValueError("不能預約過去的日期")
     if b_date == today and start_hour is not None:
@@ -224,6 +235,11 @@ def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=No
             conn.close()
             equip_label = "雙板" if equipment_type == "ski" else "單板"
             raise ValueError(f"體驗課({equip_label})每人僅限預約一次,你已經預約過了")
+
+    # 2026-08:補上跟book_charter一致的「連續課程不得超過MAX_CONTINUOUS_HOURS小時」檢查——
+    # 原本這個檢查只有book_charter有呼叫,體驗課這條路徑完全沒檢查,等於同一人可以無限
+    # 連續訂體驗課,繞過原本要防的「同一人連續上課太多小時」規則。
+    _check_continuous_hours(conn, member_id, booking_date, start_hour, 50)
 
     if _has_conflict(conn, booking_date, start_hour, 50):
         conn.close()
@@ -532,6 +548,10 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
             conn.close()
             raise ValueError("本月自主練習額度已用完或無有效方案")
         price = 0
+
+    # 2026-08:補上跟book_charter一致的「連續課程不得超過MAX_CONTINUOUS_HOURS小時」檢查——
+    # 原本自主練習這條路徑完全沒檢查,同一人可以連續分段訂好幾個小時完全不受阻。
+    _check_continuous_hours(conn, member_id, booking_date, start_hour, duration_minutes)
 
     if _has_conflict(conn, booking_date, start_hour, duration_minutes):
         conn.close()
