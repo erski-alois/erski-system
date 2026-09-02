@@ -227,18 +227,15 @@
     background-size:120px 60px; opacity:.8; }
   #loginScreen .brand-panel::after { content:""; position:absolute; left:-60px; bottom:-60px; width:320px; height:320px;
     border-radius:50%; background:radial-gradient(circle, rgba(189,70,50,.25), transparent 70%); }
-  #loginScreen .hanko { position:relative; z-index:2; width:74px; height:74px; border-radius:14px;
-    border:2px solid var(--vermillion-soft); display:flex; align-items:center; justify-content:center;
-    transform:rotate(-2deg); margin-bottom:26px; background:rgba(189,70,50,.12); }
-  #loginScreen .hanko span { font-family:"Noto Serif TC","Hiragino Mincho ProN",serif; font-weight:700;
-    font-size:22px; color:var(--vermillion-soft); letter-spacing:.05em; }
+  #loginScreen .hanko { position:relative; z-index:2; margin-bottom:26px; }
+  #loginScreen .hanko img { display:block; width:190px; max-width:60%; height:auto; }
   #loginScreen .brand-title { position:relative; z-index:2; font-size:26px; font-weight:700;
     letter-spacing:.06em; margin:0 0 6px; text-align:center; color:#f4efe2; }
   #loginScreen .brand-en { position:relative; z-index:2; font-size:11px; letter-spacing:.3em;
     color:rgba(244,239,226,.6); margin-bottom:50px; text-align:center; }
   #loginScreen .vertical-quote { position:relative; z-index:2; writing-mode:vertical-rl; text-orientation:mixed;
     font-family:"Noto Serif TC","Hiragino Mincho ProN",serif; font-size:15px; line-height:2.2; letter-spacing:.15em;
-    color:rgba(244,239,226,.82); height:220px; border-right:1px solid rgba(244,239,226,.25); padding-right:18px; margin-bottom:8px; }
+    color:rgba(244,239,226,.82); border-right:1px solid rgba(244,239,226,.25); padding-right:18px; margin-bottom:8px; }
   #loginScreen .vertical-caption { position:relative; z-index:2; font-size:10.5px; letter-spacing:.2em; color:rgba(244,239,226,.45); }
   #loginScreen .season-badge { position:relative; z-index:2; margin-top:44px; display:inline-flex; align-items:center; gap:8px;
     border:1px solid rgba(244,239,226,.3); border-radius:999px; padding:8px 18px; font-size:12px; letter-spacing:.1em; color:rgba(244,239,226,.85); }
@@ -308,10 +305,10 @@
 
     <div class="login-wrap">
       <div class="brand-panel">
-        <div class="hanko"><span>急診</span></div>
+        <div class="hanko"><img src="/assets/er-ski-logo.png" alt="ER SKI"></div>
         <div class="brand-title serif">滑雪急診室 訂課系統</div>
         <div class="brand-en">RESERVATION SYSTEM</div>
-        <div class="vertical-quote">安全に、楽しく、上達する。</div>
+        <div class="vertical-quote">舞い上がる粉雪、心を燃やす。安心のER Skiと共に。</div>
         <div class="vertical-caption">SAFETY ／ FUN ／ LEARNING</div>
         <div class="season-badge"><span class="dot"></span>日本雪季預約開放中｜12月—4月</div>
       </div>

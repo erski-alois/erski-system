@@ -119,6 +119,14 @@ def serve_icon_512():
     return send_from_directory(FRONTEND_DIR, "icon-512.png", mimetype="image/png")
 
 
+@app.route("/assets/er-ski-logo.png")
+def serve_er_ski_logo():
+    # 登入畫面品牌區塊(原本是文字印章樣式的「急診」印章,2026-09改成真正的ERSKI logo圖片)。
+    # 這個專案的靜態檔案沒有走萬用的static路由,每個檔案都個別開一支路由(跟icon-192.png/
+    # icon-512.png同樣的寫法),所以這裡也比照辦理。
+    return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "er-ski-logo.png", mimetype="image/png")
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
