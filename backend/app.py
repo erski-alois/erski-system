@@ -1467,39 +1467,256 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
         pass  # 通知記錄失敗不該讓付款這個更重要的動作跟著失敗
 
 
+def _lookup_authoritative_order(conn, ref_type, ref_id):
+    """弱點1修正(2026-08,綠界串接時一併補上):付款金額/這筆訂單到底屬於誰,
+    一律以orders表(唯一金額真相來源)為準重新查一次,不再直接信任前端傳來的
+    amount欄位,避免:
+      (a) 前端被竄改,低報amount占便宜
+      (b) 冒用別人的ref_id去繳費、把別人的訂單標記成自己付的款
+    charter_order:前端傳來的ref_id其實是orders.id本身(見purchase_charter_pass/
+    finalize_charter_purchase的呼叫慣例);其餘(indoor_session/jump_booking/
+    japan_booking)則是比照booking.mark_order_paid()同一套查法,用ref_type+ref_id
+    去orders表對應的欄位查(pending狀態、且同一組合下取最新一筆)。
+    找不到符合的訂單回傳None。"""
+    if ref_type == "charter_order":
+        return conn.execute(
+            "SELECT * FROM orders WHERE id=? AND ref_type='charter_pass'", (ref_id,)
+        ).fetchone()
+    elif ref_type in ("indoor_session", "jump_booking", "japan_booking"):
+        return conn.execute(
+            """SELECT * FROM orders WHERE ref_type=? AND ref_id=? AND status='pending'
+               ORDER BY id DESC LIMIT 1""",
+            (ref_type, ref_id),
+        ).fetchone()
+    return None
+
+
+def _ecpay_item_name_for(ref_type):
+    return {
+        "charter_order": "包機課堂數包",
+        "indoor_session": "室內滑雪課程",
+        "jump_booking": "跳台課程",
+        "japan_booking": "日本滑雪教練行程訂金",
+    }.get(ref_type, "捷可思滑雪學校訂單")
+
+
 @app.route("/api/payments/create", methods=["POST"])
 def create_payment():
-    from payments import active_provider
+    from payments import active_provider, EcpayProvider
     member_id, err = _require_member_id_from_token()
     if err:
         return err
-    d = request.json
-    result = active_provider.create_payment(
-        amount=d["amount"], payment_method=d["payment_method"], order_ref=d["order_ref"]
-    )
+    d = request.json or {}
+    ref_type = d.get("ref_type")
+    ref_id = d.get("ref_id")
+    payment_method = d.get("payment_method")
+    if not ref_type or not ref_id or not payment_method:
+        return jsonify({"error": "缺少必要欄位"}), 400
+
     conn = get_conn()
     try:
+        order = _lookup_authoritative_order(conn, ref_type, ref_id)
+        if not order:
+            return jsonify({"error": "找不到對應的訂單,或訂單狀態不允許付款"}), 404
+        if order["member_id"] != member_id:
+            # 不透露「訂單存在但不是你的」這種細節,一律用「找不到」回應,避免被拿來
+            # 枚舉別人的ref_id是否存在。
+            return jsonify({"error": "找不到對應的訂單,或訂單狀態不允許付款"}), 404
+        if order["status"] != "pending":
+            return jsonify({"error": "此訂單已完成付款或已取消,無法重複付款"}), 409
+        amount = order["amount"]  # 一律用資料庫裡的金額,忽略前端傳來的amount
+
+        # 防止「同一筆訂單被重複產生多筆導向式付款單」:如果會員先前已經按過付款、
+        # 產生了一筆同樣付款方式的pending付款單但還沒完成(例如付款頁面按到一半又
+        # 回上一頁、或忘記付、重新整理再按一次),不要再另外產生一組新的
+        # MerchantTradeNo,直接把原本那筆的付款連結回傳,避免同一筆訂單同時存在
+        # 好幾組尚未完成的綠界付款單、萬一使用者真的把好幾組都付款完成,會變成
+        # 被實際扣款好幾次(我們自己這邊的堂數/預約狀態有防重複入帳,但信用卡/
+        # ATM扣款是綠界那邊真的動用金流,我們的防呆機制救不回已經被扣的錢)。
+        existing_tx = conn.execute(
+            """SELECT * FROM transactions WHERE ref_type=? AND ref_id=? AND payment_method=?
+               AND payment_status='pending' AND provider_ref NOT LIKE 'OFFLINE-%'
+               ORDER BY id DESC LIMIT 1""",
+            (ref_type, ref_id, payment_method),
+        ).fetchone()
+        if existing_tx and isinstance(active_provider, EcpayProvider):
+            response = {
+                "transaction_id": existing_tx["id"], "status": "redirect",
+                "provider_ref": existing_tx["provider_ref"],
+                "checkout_url": f"/payments/ecpay/checkout/{existing_tx['provider_ref']}",
+            }
+            return jsonify(response), 201
+
+        result = active_provider.create_payment(
+            amount=amount, payment_method=payment_method, order_ref=d.get("order_ref") or f"ORDER-{order['id']}"
+        )
+        # transactions.payment_status這個欄位只接受pending/awaiting_backoffice_review/
+        # confirmed/refunded(見schema),'redirect'不是合法值——'redirect'只是provider
+        # 回傳給這支route自己判斷「要不要導向綠界付款頁」用的訊號,實際存進資料庫時
+        # 對應到的狀態是'pending'(等使用者去綠界完成付款、由webhook回調才會變confirmed)。
+        db_payment_status = "pending" if result["status"] == "redirect" else result["status"]
         cur = conn.execute(
             """INSERT INTO transactions
                (member_id, ref_type, ref_id, amount, payment_type, payment_method, payment_status, provider_ref)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (member_id, d.get("ref_type"), d.get("ref_id"), d["amount"],
-             d.get("payment_type", "full"), d["payment_method"], result["status"], result["provider_ref"]),
+            (member_id, ref_type, ref_id, amount,
+             d.get("payment_type", "full"), payment_method, db_payment_status, result["provider_ref"]),
         )
         tx_id = cur.lastrowid
-        if result["status"] == "confirmed" and d.get("ref_type") == "charter_order":
-            booking.finalize_charter_purchase(d["ref_id"], conn=conn)
-            _log_purchase_notification(conn, member_id, d.get("ref_type"), d.get("ref_id"))
-        elif result["status"] == "confirmed" and d.get("ref_type") in ("indoor_session", "jump_booking", "japan_booking"):
-            booking.mark_order_paid(d["ref_type"], d["ref_id"], conn=conn, payment_method=d["payment_method"])
-            _log_purchase_notification(conn, member_id, d.get("ref_type"), d.get("ref_id"))
+        if result["status"] == "confirmed" and ref_type == "charter_order":
+            booking.finalize_charter_purchase(ref_id, conn=conn)
+            _log_purchase_notification(conn, member_id, ref_type, ref_id)
+        elif result["status"] == "confirmed" and ref_type in ("indoor_session", "jump_booking", "japan_booking"):
+            booking.mark_order_paid(ref_type, ref_id, conn=conn, payment_method=payment_method)
+            _log_purchase_notification(conn, member_id, ref_type, ref_id)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-    return jsonify({"transaction_id": tx_id, **result}), 201
+
+    response = {"transaction_id": tx_id, **result}
+    if result["status"] == "redirect":
+        response["checkout_url"] = f"/payments/ecpay/checkout/{result['provider_ref']}"
+    return jsonify(response), 201
+
+
+@app.route("/api/payments/ecpay/checkout/<provider_ref>", methods=["GET"])
+def ecpay_checkout_form(provider_ref):
+    """綠界導向式付款的「中繼頁」:前端付款彈窗確認後,瀏覽器會被導向到這個網址
+    (不是fetch/XHR,是整頁導航,所以不能靠X-Member-Token這個header做身分驗證;
+    改用provider_ref本身——這是我們自己產生的高熵亂數編號,只有剛剛下單的那個人
+    的瀏覽器拿得到,等同「一次性付款連結」的信任模型)。
+    這頁本身不收付款、也不改任何狀態,只是把該筆transaction的金額組成綠界要求的
+    表單欄位、算好CheckMacValue,渲染成一個onload自動送出的HTML表單,把使用者
+    的瀏覽器帶去綠界的付款頁面。"""
+    from payments import active_provider, EcpayProvider
+    if not isinstance(active_provider, EcpayProvider):
+        return "綠界金流尚未設定", 503
+    conn = get_conn()
+    tx = conn.execute("SELECT * FROM transactions WHERE provider_ref=?", (provider_ref,)).fetchone()
+    conn.close()
+    if not tx:
+        return "找不到這筆付款單,可能連結有誤或已過期", 404
+    if tx["payment_status"] != "pending":
+        return "這筆訂單已經處理完成,不需要重複付款,請回到會員中心查看訂單狀態。", 200
+
+    base_url = request.url_root.rstrip("/")
+    html_body = active_provider.build_checkout_html(
+        merchant_trade_no=tx["provider_ref"],
+        amount=tx["amount"],
+        payment_method=tx["payment_method"],
+        item_name=_ecpay_item_name_for(tx["ref_type"]),
+        return_url=f"{base_url}/api/payments/ecpay/return",
+        payment_info_url=f"{base_url}/api/payments/ecpay/payment-info",
+        client_back_url=f"{base_url}/",
+    )
+    return Response(html_body, mimetype="text/html")
+
+
+@app.route("/api/payments/ecpay/return", methods=["POST"])
+def ecpay_return_webhook():
+    """綠界ReturnURL:伺服器對伺服器的付款結果回調(不是使用者瀏覽器導向的頁面)。
+    信用卡/網路ATM:使用者操作完成後幾秒內就會收到。
+    ATM櫃員機:要等使用者實際匯款完成才會收到(可能是好幾天後)。
+    務必先驗證CheckMacValue,不然任何人都可以自己POST一筆假的「已付款」通知過來。
+    綠界規定收到後一定要回覆「純文字」的 1|OK,否則綠界會判定失敗、重複觸發通知。"""
+    from payments import active_provider, verify_check_mac_value, EcpayProvider
+    if not isinstance(active_provider, EcpayProvider):
+        return "0|ProviderNotConfigured", 200
+    params = request.form.to_dict()
+    if not verify_check_mac_value(params, active_provider.hash_key, active_provider.hash_iv):
+        return "0|CheckMacValueError", 200
+
+    merchant_trade_no = params.get("MerchantTradeNo")
+    rtn_code = params.get("RtnCode")
+    trade_no = params.get("TradeNo")
+    conn = get_conn()
+    try:
+        tx = conn.execute("SELECT * FROM transactions WHERE provider_ref=?", (merchant_trade_no,)).fetchone()
+        if not tx:
+            return "0|MerchantTradeNoNotFound", 200
+        if tx["payment_status"] == "confirmed":
+            # 已經處理過(綠界可能因為沒收到1|OK而重送),直接回覆成功、不重複入帳,
+            # 避免重複產生堂數/重複觸發通知。
+            return "1|OK", 200
+        if rtn_code == "1":
+            # 防呆:回調帶來的金額務必跟我們原本記錄的金額一致,不一致就不處理、
+            # 留給客服人工檢查(理論上不該發生,但金額是最後一道防線)。
+            try:
+                trade_amt_matches = int(params.get("TradeAmt", -1)) == int(tx["amount"])
+            except (TypeError, ValueError):
+                trade_amt_matches = False
+            if not trade_amt_matches:
+                conn.execute(
+                    "UPDATE transactions SET note=? WHERE id=?",
+                    (f"[異常]ReturnURL回調金額({params.get('TradeAmt')})與訂單金額({tx['amount']})不符,需人工確認", tx["id"]),
+                )
+                conn.commit()
+                return "1|OK", 200
+            conn.execute(
+                "UPDATE transactions SET payment_status='confirmed', ecpay_trade_no=? WHERE id=?",
+                (trade_no, tx["id"]),
+            )
+            if tx["ref_type"] == "charter_order":
+                booking.finalize_charter_purchase(tx["ref_id"], conn=conn)
+            elif tx["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
+                booking.mark_order_paid(tx["ref_type"], tx["ref_id"], conn=conn, payment_method=tx["payment_method"])
+            _log_purchase_notification(conn, tx["member_id"], tx["ref_type"], tx["ref_id"])
+        else:
+            conn.execute(
+                "UPDATE transactions SET note=? WHERE id=?",
+                (f"[付款失敗]RtnCode={rtn_code} {params.get('RtnMsg', '')}", tx["id"]),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return "1|OK", 200
+
+
+@app.route("/api/payments/ecpay/payment-info", methods=["POST"])
+def ecpay_payment_info_webhook():
+    """綠界PaymentInfoURL:只有ATM櫃員機付款會用到,使用者送出付款單後綠界立刻
+    呼叫這支回傳虛擬帳號資訊(還不是實際付款完成,只是「取號成功」),存起來後
+    透過既有的通知機制讓會員在會員中心看到要匯到哪個帳號、期限到什麼時候。"""
+    from payments import active_provider, verify_check_mac_value, EcpayProvider
+    if not isinstance(active_provider, EcpayProvider):
+        return "0|ProviderNotConfigured", 200
+    params = request.form.to_dict()
+    if not verify_check_mac_value(params, active_provider.hash_key, active_provider.hash_iv):
+        return "0|CheckMacValueError", 200
+
+    merchant_trade_no = params.get("MerchantTradeNo")
+    conn = get_conn()
+    try:
+        tx = conn.execute("SELECT * FROM transactions WHERE provider_ref=?", (merchant_trade_no,)).fetchone()
+        if not tx:
+            return "0|MerchantTradeNoNotFound", 200
+        bank_code = params.get("BankCode", "")
+        v_account = params.get("vAccount", "")
+        expire_date = params.get("ExpireDate", "")
+        conn.execute(
+            """UPDATE transactions SET atm_bank_code=?, atm_virtual_account=?, atm_expire_date=?
+               WHERE id=?""",
+            (bank_code, v_account, expire_date, tx["id"]),
+        )
+        if bank_code and v_account:
+            booking.log_notification(
+                conn, tx["member_id"], "payment_atm_info",
+                f"請於{expire_date}前,使用ATM或網路銀行轉帳至銀行代碼{bank_code}、"
+                f"虛擬帳號{v_account},金額NT$ {tx['amount']},完成後系統會自動確認入帳。",
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return "1|OK", 200
 
 
 @app.route("/api/admin/sessions/<int:session_id>/cancel", methods=["POST"])

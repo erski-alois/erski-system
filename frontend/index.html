@@ -890,7 +890,8 @@
     <div class="price-tag" id="paymentAmountDisplay" style="font-size:16px;"></div>
     <label>付款方式</label>
     <select id="paymentMethod">
-      <option value="online_card">線上刷卡</option>
+      <option value="online_card">線上刷卡(信用卡)</option>
+      <option value="webatm">網路ATM</option>
       <option value="onsite">現場付款</option>
       <option value="bank_transfer">匯款轉帳</option>
     </select>
@@ -950,18 +951,28 @@ async function confirmPaymentModal() {
   const { ok, data } = await api("/payments/create", {
     method: "POST",
     body: JSON.stringify({
+      // amount這裡雖然還是有帶,但後端2026-08起一律改用資料庫裡訂單本身的金額,
+      // 不會採信這裡傳的值(避免被竄改),留著只是方便除錯時在rawLog對照。
       member_id: currentMemberId, amount: _pendingPayment.amount,
       payment_method, order_ref: "ORDER-" + Date.now(),
       ref_type: _pendingPayment.ref_type, ref_id: _pendingPayment.ref_id,
     })
   });
+  if (ok && data.status === "redirect") {
+    // 線上刷卡/網路ATM(綠界):不在這裡顯示結果,直接把整個瀏覽器導向綠界的
+    // 付款頁面,付款完成後由後端webhook確認,結果會在會員中心的「通知」看到。
+    document.getElementById("paymentOverlay").style.display = "none";
+    _pendingPayment = null;
+    window.location.href = BASE + data.checkout_url;
+    return;
+  }
   document.getElementById("paymentOverlay").style.display = "none";
   _pendingPayment = null;
   if (ok) {
     if (data.status === "confirmed") alert("付款完成!");
     else alert("已登記付款,待客服核對入帳後即完成確認。");
   } else {
-    alert("付款失敗,請稍後再試或洽詢客服。");
+    alert(data && data.error ? data.error : "付款失敗,請稍後再試或洽詢客服。");
   }
   loadAccountOverview();
   refreshMyCharterPasses();

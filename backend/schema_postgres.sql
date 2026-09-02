@@ -528,9 +528,13 @@ CREATE TABLE IF NOT EXISTS transactions (
     ref_id INTEGER,
     amount INTEGER NOT NULL,
     payment_type TEXT CHECK(payment_type IN ('full','deposit','balance','refund')) DEFAULT 'full',
-    payment_method TEXT CHECK(payment_method IN ('online_card','onsite','bank_transfer','manual_grant')),
+    payment_method TEXT CHECK(payment_method IN ('online_card','onsite','bank_transfer','manual_grant','webatm','atm')),
     payment_status TEXT CHECK(payment_status IN ('pending','awaiting_backoffice_review','confirmed','refunded')) DEFAULT 'pending',
-    provider_ref TEXT,
+    provider_ref TEXT,     -- 我們自己產生的訂單編號(綠界叫MerchantTradeNo)
+    ecpay_trade_no TEXT,   -- 綠界自己的交易編號(TradeNo,ReturnURL回調帶回來的)
+    atm_bank_code TEXT,          -- ATM櫃員機付款:銀行代碼
+    atm_virtual_account TEXT,    -- ATM櫃員機付款:虛擬帳號
+    atm_expire_date TEXT,        -- ATM櫃員機付款:繳費期限
     confirmed_by_staff_id INTEGER REFERENCES staff(id),
     note TEXT,
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
