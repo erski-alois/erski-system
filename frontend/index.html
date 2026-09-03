@@ -240,34 +240,40 @@
   #loginScreen .season-badge { position:relative; z-index:2; margin-top:44px; display:inline-flex; align-items:center; gap:8px;
     border:1px solid rgba(244,239,226,.3); border-radius:999px; padding:8px 18px; font-size:12px; letter-spacing:.1em; color:rgba(244,239,226,.85); }
   #loginScreen .season-badge .dot { width:6px; height:6px; border-radius:50%; background:var(--vermillion-soft); }
-  #loginScreen .form-panel { display:flex; align-items:center; justify-content:center; padding:60px 40px; }
-  #loginScreen .form-card { width:100%; max-width:380px; }
-  #loginScreen .form-eyebrow { font-size:11px; letter-spacing:.25em; color:var(--vermillion); font-weight:700; margin-bottom:10px; }
-  #loginScreen .form-title { font-size:24px; margin:0 0 8px; color:var(--ink); }
-  #loginScreen .form-sub { font-size:13px; color:#77716a; margin:0 0 36px; }
-  #loginScreen .field { margin-bottom:18px; }
-  #loginScreen .field label { display:block; font-size:12.5px; color:#5c574f; margin-bottom:7px; letter-spacing:.03em; }
-  #loginScreen .field input:not([type="checkbox"]) { width:100%; padding:12px 14px; border:1px solid var(--line);
-    border-radius:4px; background:#fff; font-size:14px; color:var(--ink); font-family:inherit; }
+  /* 2026-09:form-panel現在要垂直排列兩個區塊(會員登入表單 + 預約旅程teaser),
+     所以改成flex-direction:column,並用gap控制兩區塊間距。登入表單本身內部間距
+     也全面縮小一輪(依需求「會員登入的部份小一點」),讓它不要佔掉太多垂直高度,
+     跟右側teaser兩欄卡片的高度更接近,左側brand-panel(深色簡介欄)才不會被拉得
+     過高、顯得空洞。 */
+  #loginScreen .form-panel { display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:44px 40px; gap:26px; }
+  #loginScreen .form-card { width:100%; max-width:360px; }
+  #loginScreen .form-eyebrow { font-size:11px; letter-spacing:.25em; color:var(--vermillion); font-weight:700; margin-bottom:8px; }
+  #loginScreen .form-title { font-size:21px; margin:0 0 6px; color:var(--ink); }
+  #loginScreen .form-sub { font-size:12.5px; color:#77716a; margin:0 0 22px; }
+  #loginScreen .field { margin-bottom:13px; }
+  #loginScreen .field label { display:block; font-size:12px; color:#5c574f; margin-bottom:5px; letter-spacing:.03em; }
+  #loginScreen .field input:not([type="checkbox"]) { width:100%; padding:10px 13px; border:1px solid var(--line);
+    border-radius:4px; background:#fff; font-size:13.5px; color:var(--ink); font-family:inherit; }
   #loginScreen .field input:focus { outline:none; border-color:var(--indigo-soft); }
   #loginScreen .form-row-between { display:flex; justify-content:space-between; align-items:center;
-    font-size:12.5px; color:#77716a; margin:-4px 0 24px; }
+    font-size:12px; color:#77716a; margin:-2px 0 16px; }
   #loginScreen .form-row-between a { color:var(--indigo-soft); cursor:pointer; }
   #loginScreen .btn-primary { display:block; width:100%; text-align:center; background:var(--vermillion); color:#fff;
-    padding:13px 0; border-radius:4px; font-size:14.5px; font-weight:700; letter-spacing:.08em;
+    padding:11px 0; border-radius:4px; font-size:14px; font-weight:700; letter-spacing:.08em;
     transition:background .15s ease; border:none; cursor:pointer; margin-top:0; }
   #loginScreen .btn-primary:hover { background:#a23a29; opacity:1; }
-  #loginScreen .divider { display:flex; align-items:center; gap:14px; margin:26px 0; color:#a39d90; font-size:11.5px; letter-spacing:.1em; cursor:pointer; }
+  #loginScreen .divider { display:flex; align-items:center; gap:14px; margin:18px 0; color:#a39d90; font-size:11px; letter-spacing:.1em; cursor:pointer; }
   #loginScreen .divider::before, #loginScreen .divider::after { content:""; flex:1; height:1px; background:var(--line); }
-  #loginScreen .social-row { display:flex; gap:10px; margin-bottom:20px; }
+  #loginScreen .social-row { display:flex; gap:10px; margin-bottom:14px; }
   #loginScreen .social-btn { flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
-    border:1px solid var(--line); border-radius:4px; padding:11px 0; font-size:12.5px; color:var(--ink);
+    border:1px solid var(--line); border-radius:4px; padding:9px 0; font-size:12px; color:var(--ink);
     background:#fff; cursor:pointer; transition:border-color .15s ease; }
   #loginScreen .social-btn:hover { border-color:var(--indigo-soft); opacity:1; }
-  #loginScreen .form-footer-note { text-align:center; font-size:12.5px; color:#77716a;
-    padding-top:22px; border-top:1px solid var(--line); }
+  #loginScreen .form-footer-note { text-align:center; font-size:12px; color:#77716a;
+    padding-top:16px; border-top:1px solid var(--line); }
   #loginScreen .form-footer-note a { color:var(--vermillion); font-weight:700; cursor:pointer; }
-  #loginScreen .staff-link-jp { display:block; text-align:center; margin-top:18px; font-size:11.5px;
+  #loginScreen .staff-link-jp { display:block; text-align:center; margin-top:12px; font-size:11px;
     color:#a39d90; letter-spacing:.05em; cursor:pointer; }
   #loginScreen .staff-link-jp:hover { color:var(--indigo-soft); }
   @media (max-width:900px) {
@@ -275,24 +281,30 @@
     #loginScreen .brand-panel { padding:50px 32px; min-height:280px; }
     #loginScreen .vertical-quote { display:none; }
   }
-  #loginScreen .teaser { max-width:1080px; margin:0 auto; padding:60px 24px 70px; text-align:center; }
-  #loginScreen .teaser-eyebrow { font-size:11px; letter-spacing:.25em; color:var(--vermillion); font-weight:700; margin-bottom:12px; }
-  #loginScreen .teaser h2 { font-size:24px; margin:0 0 40px; color:var(--ink); }
-  #loginScreen .teaser-row { display:grid; grid-template-columns:1fr 1fr; gap:28px; }
+  /* 2026-09:teaser現在是form-panel底下、跟form-card並列的第二個垂直區塊(不再
+     塞在380px窄欄的表單卡片裡),所以寬度改成跟表單同寬即可跨出380px上限,兩張
+     卡片(日本雪季/高雄室內)改回左右併排(2欄),並把padding/字級/背景水印字
+     縮小一輪配合變窄的單欄卡片寬度。 */
+  #loginScreen .teaser { width:100%; max-width:460px; text-align:left; }
+  #loginScreen .teaser-eyebrow { font-size:11px; letter-spacing:.25em; color:var(--vermillion); font-weight:700; margin-bottom:8px; }
+  #loginScreen .teaser h2 { font-size:16px; margin:0 0 14px; color:var(--ink); }
+  #loginScreen .teaser-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   #loginScreen .teaser-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:10px;
-    background:#fff; padding:36px 30px; text-align:left; }
-  #loginScreen .teaser-kanji { position:absolute; right:6px; bottom:-30px; font-family:"Noto Serif TC","Hiragino Mincho ProN",serif;
-    font-size:150px; font-weight:700; color:var(--washi-deep); line-height:1; z-index:0; user-select:none; }
+    background:#fff; padding:16px 14px; text-align:left; }
+  #loginScreen .teaser-kanji { position:absolute; right:0; bottom:-14px; font-family:"Noto Serif TC","Hiragino Mincho ProN",serif;
+    font-size:56px; font-weight:700; color:var(--washi-deep); line-height:1; z-index:0; user-select:none; }
   #loginScreen .teaser-card-content { position:relative; z-index:1; }
-  #loginScreen .teaser-tag { display:inline-block; font-size:11px; letter-spacing:.15em; color:var(--indigo-soft);
-    border:1px solid var(--indigo-pale); border-radius:999px; padding:4px 12px; margin-bottom:16px; }
+  #loginScreen .teaser-tag { display:inline-block; font-size:9.5px; letter-spacing:.1em; color:var(--indigo-soft);
+    border:1px solid var(--indigo-pale); border-radius:999px; padding:3px 9px; margin-bottom:9px; }
   #loginScreen .teaser-card.indoor .teaser-tag { color:var(--vermillion); border-color:#f0d4cb; }
-  #loginScreen .teaser-card h3 { font-size:20px; margin:0 0 10px; color:var(--ink); }
-  #loginScreen .teaser-card p { font-size:13px; color:#77716a; line-height:1.8; margin:0 0 12px; max-width:280px; }
+  #loginScreen .teaser-card h3 { font-size:13.5px; margin:0 0 6px; color:var(--ink); }
+  #loginScreen .teaser-card p { font-size:11px; color:#77716a; line-height:1.6; margin:0; max-width:none; }
   #loginScreen .teaser-cta { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:700;
     color:var(--indigo); border-bottom:1px solid var(--indigo); padding-bottom:2px; cursor:pointer; }
   #loginScreen .teaser-card.indoor .teaser-cta { color:var(--vermillion); border-color:var(--vermillion); }
-  @media (max-width:760px) { #loginScreen .teaser-row { grid-template-columns:1fr; } }
+  @media (max-width:520px) {
+    #loginScreen .teaser-row { grid-template-columns:1fr; }
+  }
   #loginScreen footer.jp-footer { background:var(--indigo); color:rgba(244,239,226,.55);
     text-align:center; padding:26px 24px; font-size:12px; letter-spacing:.05em; }
 </style>
@@ -370,31 +382,31 @@
             <button onclick="createMember()">完成建立會員</button>
           </div>
         </div>
+
+        <section class="teaser">
+          <div class="teaser-eyebrow">預約您的滑雪旅程</div>
+          <h2 class="serif">登入後，選擇你的滑雪旅程</h2>
+          <div class="teaser-row">
+            <div class="teaser-card japan">
+              <div class="teaser-kanji">雪</div>
+              <div class="teaser-card-content">
+                <span class="teaser-tag">JAPAN SKI SEASON</span>
+                <h3 class="serif">日本滑雪季預約</h3>
+                <p>藏王・北海道・鬼首・白馬，多日行程整合預約，可選全額付款或 50% 訂金。</p>
+              </div>
+            </div>
+            <div class="teaser-card indoor">
+              <div class="teaser-kanji">室</div>
+              <div class="teaser-card-content">
+                <span class="teaser-tag">KAOHSIUNG INDOOR</span>
+                <h3 class="serif">高雄室內雪機課程</h3>
+                <p>私人包機課程、體驗課、團體班、自主練習時段，彈性選擇。</p>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
-
-    <section class="teaser">
-      <div class="teaser-eyebrow">預約您的滑雪旅程</div>
-      <h2 class="serif">登入後，選擇你的滑雪旅程</h2>
-      <div class="teaser-row">
-        <div class="teaser-card japan">
-          <div class="teaser-kanji">雪</div>
-          <div class="teaser-card-content">
-            <span class="teaser-tag">JAPAN SKI SEASON</span>
-            <h3 class="serif">日本滑雪季預約</h3>
-            <p>藏王・北海道・鬼首・白馬，多日行程整合預約，可選全額付款或 50% 訂金。</p>
-          </div>
-        </div>
-        <div class="teaser-card indoor">
-          <div class="teaser-kanji">室</div>
-          <div class="teaser-card-content">
-            <span class="teaser-tag">KAOHSIUNG INDOOR</span>
-            <h3 class="serif">高雄室內雪機課程</h3>
-            <p>私人包機課程、體驗課、團體班、自主練習時段，彈性選擇。</p>
-          </div>
-        </div>
-      </div>
-    </section>
 
     <footer class="jp-footer">Copyright © 2026 ERSKI滑雪急診室 訂課系統 — 保留所有權利。</footer>
   </div>
