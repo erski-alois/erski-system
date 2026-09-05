@@ -61,10 +61,16 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     rate_trial = profile["rate_trial"] if profile and profile["rate_trial"] else 0
     rate_assistant = profile["rate_assistant"] if profile and profile["rate_assistant"] else 0
 
+    # 2026-09:依你的要求「有報到完成(上下課編碼都要報到)才算薪資」,以下所有時數
+    # 計算都改成只計入 attendance_status='completed' 的場次/預約(原本只看status是否
+    # 取消,不管有沒有實際報到完成,連未到no_show的時數都會照算——已依你的指示修正)。
+    # 日本教練課的attendance_status要等上課碼+下課碼「全部」輸入完成才會自動變成
+    # completed(半天1組、全天2組都要做完),完全符合你說的「上下課編碼都要報到」。
+
     # 體驗時數
     trial_minutes = conn.execute(
         """SELECT COALESCE(SUM(duration_minutes), 0) m FROM indoor_sessions
-           WHERE coach_id=? AND category='trial' AND status != 'cancelled'
+           WHERE coach_id=? AND category='trial' AND status != 'cancelled' AND attendance_status='completed'
              AND booking_date >= ? AND booking_date <= ?""",
         (coach_id, date_from, date_to),
     ).fetchone()["m"]
@@ -75,12 +81,13 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     group_minutes = conn.execute(
         """SELECT COALESCE(SUM(duration_minutes), 0) m FROM indoor_sessions
            WHERE coach_id=? AND category IN ('charter','self_practice','group_class') AND status != 'cancelled'
+             AND attendance_status='completed'
              AND booking_date >= ? AND booking_date <= ?""",
         (coach_id, date_from, date_to),
     ).fetchone()["m"]
     japan_hours = conn.execute(
         """SELECT COALESCE(SUM(CASE WHEN day_type='full' THEN 5 ELSE 3 END), 0) h FROM japan_bookings
-           WHERE coach_id=? AND status != 'cancelled'
+           WHERE coach_id=? AND status != 'cancelled' AND attendance_status='completed'
              AND booking_date >= ? AND booking_date <= ?""",
         (coach_id, date_from, date_to),
     ).fetchone()["h"]
@@ -90,7 +97,7 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     # 助教時數
     assistant_minutes = conn.execute(
         """SELECT COALESCE(SUM(duration_minutes), 0) m FROM indoor_sessions
-           WHERE assistant_coach_id=? AND status != 'cancelled'
+           WHERE assistant_coach_id=? AND status != 'cancelled' AND attendance_status='completed'
              AND booking_date >= ? AND booking_date <= ?""",
         (coach_id, date_from, date_to),
     ).fetchone()["m"]

@@ -2123,18 +2123,30 @@ async function renderCheckInTab() {
   `).join("") : `<div class="list-item">目前沒有待報到的跳台預約</div>`;
 
   html += `<h4 style="font-size:13px; margin-top:12px;">日本教練課</h4>`;
-  html += data.japan.length ? data.japan.map(s => `
+  html += data.japan.length ? data.japan.map(s => {
+    const progress = s.attendance_code_progress || [];
+    const started = progress.some(p => p.checkin_done || p.checkout_done);
+    const progressNote = progress.length ? progress.map(p => {
+      const label = p.session_slot === "morning" ? "上午" : "下午";
+      const state = p.checkout_done ? "已下課" : p.checkin_done ? "已上課,尚未下課" : "尚未開始";
+      return `${label}:${state}`;
+    }).join("、") : "";
+    return `
     <div class="person-card">
       ${s.booking_date} ${s.day_type==="full"?"全日":"半日"} — ${s.member_name}・${s.resort_name}${s.coach_name ? `・教練:${s.coach_name}` : ""}
+      ${progressNote ? `<p class="note" style="margin:4px 0;">教練上下課碼進度:${progressNote}</p>` : ""}
+      ${started ? `<p class="note" style="margin:0; color:#b45309;">⚠️教練已經開始使用上下課碼報到,若在此手動覆蓋,教練那邊之後仍可能繼續刷入編碼但不會再改變報到結果,請先與教練確認狀況再操作。</p>` : ""}
       <input id="checkinNote-japan-${s.id}" placeholder="教學內容/異常記錄(選填)">
-      <button class="small" onclick="doCheckIn('japan', ${s.id}, 'completed')">已完成報到</button>
-      <button class="small secondary" onclick="doCheckIn('japan', ${s.id}, 'no_show')">標記未到</button>
+      <button class="small" onclick="doCheckIn('japan', ${s.id}, 'completed', ${started})">已完成報到</button>
+      <button class="small secondary" onclick="doCheckIn('japan', ${s.id}, 'no_show', ${started})">標記未到</button>
     </div>
-  `).join("") : `<div class="list-item">目前沒有待報到的日本教練課</div>`;
+  `;
+  }).join("") : `<div class="list-item">目前沒有待報到的日本教練課</div>`;
 
   wrap.innerHTML = html;
 }
-async function doCheckIn(kind, id, attendance_status) {
+async function doCheckIn(kind, id, attendance_status, hasCodeProgress) {
+  if (hasCodeProgress && !confirm("教練已經開始使用上下課碼報到,確定要在後台手動覆蓋這筆的報到結果嗎?")) return;
   const noteEl = document.getElementById(`checkinNote-${kind}-${id}`);
   const lesson_notes = noteEl ? noteEl.value : "";
   const pathMap = { indoor: `/admin/sessions/${id}/check-in`, jump: `/admin/jump-bookings/${id}/check-in`, japan: `/admin/japan-bookings/${id}/check-in` };

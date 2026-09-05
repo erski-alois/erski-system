@@ -1887,13 +1887,32 @@ def verify_attendance_code(ref_type, ref_id, code, staff_id):
     code可能是任一時段的checkin_code或checkout_code,由系統自動判斷這是「上課」還是
     「下課」動作,教練不需要自己先選擇類型。當這筆訂單所有時段的下課碼都完成輸入時,
     自動比照check_in_japan_booking把attendance_status標記為completed,教練不需要
-    再另外手動報到一次。"""
+    再另外手動報到一次。
+
+    2026-09:實測發現的漏洞修正——原本這裡完全沒有檢查這筆訂單本身的status/
+    attendance_status,導致(1)訂單已經被取消(status='cancelled')之後,舊的上課碼/
+    下課碼還是可以被拿來報到;(2)客服如果已經在後台「報到管理」手動把這筆標記為
+    completed/no_show,教練還是能繼續輸入還沒用過的編碼,造成兩邊資料不一致(編碼顯示
+    已使用,但attendance_status是客服填的、不會再被自動覆蓋)。現在統一在最前面先擋下,
+    行為對齊既有的check_in_japan_booking(同樣是「非pending狀態一律拒絕」)。"""
     if ref_type != "japan_booking":
         raise ValueError("目前僅支援日本教練課的上下課碼報到")
     code = (code or "").strip()
     if not code:
         raise ValueError("請輸入編碼")
     conn = get_conn()
+    jb = conn.execute(
+        "SELECT status, attendance_status FROM japan_bookings WHERE id=?", (ref_id,)
+    ).fetchone()
+    if not jb:
+        conn.close()
+        raise ValueError("找不到這筆日本教練課預約")
+    if jb["status"] == "cancelled":
+        conn.close()
+        raise ValueError("此堂課已取消,無法報到")
+    if jb["attendance_status"] != "pending":
+        conn.close()
+        raise ValueError("此堂課報到已經完成或已由客服後台標記,如需修改請洽客服")
     row = conn.execute(
         """SELECT * FROM attendance_codes WHERE ref_type=? AND ref_id=?
            AND (checkin_code=? OR checkout_code=?)""",
@@ -1985,9 +2004,20 @@ def get_pending_check_ins(up_to_date):
            ORDER BY j.booking_date""",
         (up_to_date,),
     ).fetchall()
+    japan_out = rows_to_dicts(japan)
+    # 2026-09新增:附上上課碼/下課碼的使用進度,讓客服在「報到管理」清單看得到教練是否已經
+    # 開始用編碼報到(避免客服在教練報到到一半時,不知情就用這裡的按鈕手動覆蓋,造成資料不一致——
+    # 詳見README「上下課碼/報到管理/薪資管理」相關章節)。
+    for row in japan_out:
+        code_rows = _fetch_attendance_codes(conn, "japan_booking", row["id"])
+        row["attendance_code_progress"] = [
+            {"session_slot": c["session_slot"], "checkin_done": bool(c["checkin_used_at"]),
+             "checkout_done": bool(c["checkout_used_at"])}
+            for c in code_rows
+        ]
     conn.close()
     return {
         "indoor": rows_to_dicts(indoor),
         "jump": rows_to_dicts(jump),
-        "japan": rows_to_dicts(japan),
+        "japan": japan_out,
     }
