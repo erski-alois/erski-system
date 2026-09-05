@@ -205,6 +205,25 @@
     #staffTabButtons button { width: auto !important; }
   }
 
+  /* 2026-09:新版後台外殼(.admin-shell/.admin-sidebar,教練專屬頁面跟客服/主管/老闆後台
+     共用同一套)原本沒有手機版規則——固定248px的側邊欄在窄螢幕(例如教練實際在雪場用手機
+     操作報到)會把中間內容區擠壓到只剩不到100px寬,導致上課碼/下課碼輸入框、文字整個
+     被切斷、必須橫向捲動才看得到,手機上幾乎無法使用(2026-09手機視覺檢查實際測出)。
+     這裡讓側邊欄在窄螢幕上改成頂部橫向細條(教練頁面本來就沒有選單按鈕,只剩品牌小條;
+     客服/主管/老闆後台的選單按鈕則換行變成像素材質類似#staffTabButtons的橫向可換行清單),
+     讓內容區永遠拿到全螢幕寬度。 */
+  @media (max-width: 720px) {
+    .admin-shell { flex-direction: column; }
+    .admin-sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center;
+                      padding: 10px 12px; gap: 2px; }
+    .admin-sidebar-brand { padding: 2px 8px 2px 2px; }
+    .admin-sidebar-section { display: none; }
+    .admin-sidebar-btn { width: auto; }
+    .admin-sidebar-footer { display: none; }
+    .admin-main { padding: 14px; }
+    .admin-topbar { padding: 10px 14px; flex-wrap: wrap; }
+  }
+
   /* ===== 日系視覺風格登入頁(限定#loginScreen範圍) ===== */
   #loginScreen {
     --washi:#faf7ef; --washi-deep:#f2ecdd; --indigo:#22344a; --indigo-soft:#3c5474;
@@ -2495,17 +2514,24 @@ function coachBookingDetailHtml(b) {
 
   b.attendance_code_status.forEach(s => {
     const slot = ATTENDANCE_SLOT_LABEL[s.session_slot] || s.session_slot;
+    // 2026-09:改成上下2行各自滿版寬度(原本是同一行並排、輸入框寫死120px,在手機窄螢幕
+    // 上會被切斷、要橫向捲動才看得到——已用瀏覽器手機尺寸實測修正)。另外加上
+    // inputmode="numeric"/pattern,手機輸入編碼時會直接跳出數字鍵盤,不用切換英數鍵盤。
     const checkinField = s.checkin_done
-      ? `<span class="status-tag ok">上課碼已完成</span>`
-      : `<label>上課碼</label><input type="text" maxlength="8" id="checkinCode-${b.booking_ref_id}-${s.session_slot}" placeholder="輸入學員的上課碼" style="width:120px;">`;
+      ? `<div style="margin-top:8px;"><span class="status-tag ok">上課碼已完成</span></div>`
+      : `<div style="margin-top:8px;"><label>上課碼</label><input type="text" inputmode="numeric" pattern="[0-9]*"
+           autocomplete="off" maxlength="8" id="checkinCode-${b.booking_ref_id}-${s.session_slot}"
+           placeholder="輸入學員的上課碼" style="max-width:200px;"></div>`;
     const checkoutField = s.checkout_done
-      ? `<span class="status-tag ok">下課碼已完成</span>`
-      : `<label style="margin-left:10px;">下課碼</label><input type="text" maxlength="8" id="checkoutCode-${b.booking_ref_id}-${s.session_slot}" placeholder="輸入學員的下課碼" style="width:120px;">`;
+      ? `<div style="margin-top:8px;"><span class="status-tag ok">下課碼已完成</span></div>`
+      : `<div style="margin-top:8px;"><label>下課碼</label><input type="text" inputmode="numeric" pattern="[0-9]*"
+           autocomplete="off" maxlength="8" id="checkoutCode-${b.booking_ref_id}-${s.session_slot}"
+           placeholder="輸入學員的下課碼" style="max-width:200px;"></div>`;
     const needsSubmit = !s.checkin_done || !s.checkout_done;
     html += `<div class="card" style="margin-top:8px; padding:10px;">
-      <b>${slot}</b><br>
-      ${checkinField}　${checkoutField}
-      ${needsSubmit ? `<button style="margin-left:10px;" onclick="submitAttendanceCodesForSlot(${b.booking_ref_id}, '${s.session_slot}')">送出</button>` : ""}
+      <b>${slot}</b>
+      ${checkinField}${checkoutField}
+      ${needsSubmit ? `<button style="margin-top:10px;" onclick="submitAttendanceCodesForSlot(${b.booking_ref_id}, '${s.session_slot}')">送出</button>` : ""}
     </div>`;
   });
   return html;
