@@ -1318,6 +1318,7 @@ async function renderStaffPanel(staff) {
       ]},
       { title: "排程與資源", items: [
         ["groupassign", "團課教練指派"], ["equipment", "設備管理"], ["faq", "FAQ管理"],
+        ["coachschedule", "教練出勤管理"],
         ...(isManagerUp ? [["resorts", "雪場管理"], ["coaches", "教練管理"]] : []),
       ]},
       ...(isManagerUp ? [{ title: "財務與分析", items: [
@@ -1359,6 +1360,7 @@ async function renderStaffPanel(staff) {
       <div id="staffTab-faq" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-equipment" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-groupassign" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-coachschedule" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-resorts" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-coaches" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-reports" class="staff-tab" style="display:none;"></div>
@@ -1380,6 +1382,7 @@ async function renderStaffPanel(staff) {
     await renderFaqManageTab();
     await renderEquipmentTab();
     await renderGroupClassAssignTools();
+    await renderCoachScheduleTools();
     if (isManagerUp) {
       await renderResortManageTools();
       await renderCoachManageTools();
@@ -1417,6 +1420,7 @@ const STAFF_TAB_REFRESH = {
   faq: renderFaqManageTab,
   equipment: renderEquipmentTab,
   groupassign: renderGroupClassAssignTools,
+  coachschedule: renderCoachScheduleTools,
   resorts: renderResortManageTools,
   coaches: renderCoachManageTools,
   reports: renderReportsTools,
@@ -3440,6 +3444,103 @@ async function assignResortCoachAdmin(resortId, regionId) {
 async function removeResortCoachAdmin(assignmentId, regionId) {
   await api(`/admin/resort-coaches/${assignmentId}`, { method: "DELETE" });
   await renderResortManageTools();
+}
+
+// ---------------- 教練出勤管理(客服/主管皆可使用,設定任一位教練的請假/出差/上班狀態) ----------------
+async function renderCoachScheduleTools() {
+  const wrap = document.getElementById("staffTab-coachschedule");
+  const { data: coaches } = await api("/coaches");
+  const now = new Date();
+  const defaultMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+
+  wrap.innerHTML = `
+    <h3 style="margin-top:16px; font-size:14px;">教練出勤管理</h3>
+    <p class="note">在這裡設定任一位教練的請假/出差/上班狀態,會直接反映在「營運中心」的共用班表日曆,以及該教練薪資計算時的請假扣款。</p>
+
+    <div class="person-card">
+      <b>設定教練出勤</b>
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>教練</label><select id="csCoachSel">${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("") || `<option value="">(尚無教練)</option>`}</select></div>
+        <div><label>日期</label><input type="date" id="csWorkDate"></div>
+        <div><label>狀態</label><select id="csStatus">
+          <option value="working">上班</option>
+          <option value="personal_leave">事假</option>
+          <option value="sick_leave">病假</option>
+          <option value="annual_leave">特休</option>
+          <option value="business_trip">出差</option>
+        </select></div>
+        <div><label>備註(選填)</label><input id="csReason" placeholder="例如:代訓、返鄉等"></div>
+      </div>
+      <button class="small" style="margin-top:8px;" onclick="submitCoachScheduleAdmin()">儲存</button>
+      <div id="csSubmitStatus" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="person-card">
+      <div class="row">
+        <div><label>查詢月份</label><input type="month" id="csListMonth" value="${defaultMonth}"></div>
+        <div><label>教練(選填,不選=全部教練)</label><select id="csListCoachFilter">
+          <option value="">全部教練</option>
+          ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+        </select></div>
+        <button class="small secondary" style="align-self:flex-end;" onclick="loadCoachScheduleList()">查詢</button>
+      </div>
+      <div id="csListWrap" style="margin-top:10px;"></div>
+    </div>
+  `;
+  document.getElementById("csWorkDate").value = new Date().toISOString().slice(0,10);
+  await loadCoachScheduleList();
+}
+
+async function loadCoachScheduleList() {
+  const month = document.getElementById("csListMonth").value;
+  const coachId = document.getElementById("csListCoachFilter").value;
+  const listWrap = document.getElementById("csListWrap");
+  if (!month) return;
+  const [year, mo] = month.split("-").map(Number);
+  const lastDay = new Date(year, mo, 0).getDate();
+  const date_from = `${year}-${String(mo).padStart(2,"0")}-01`;
+  const date_to = `${year}-${String(mo).padStart(2,"0")}-${String(lastDay).padStart(2,"0")}`;
+  let url = `/admin/coach-schedule?date_from=${date_from}&date_to=${date_to}`;
+  if (coachId) url += `&coach_id=${coachId}`;
+  const { data: rows } = await api(url);
+  const entries = (rows || []).filter(r => r.status !== "working").sort((a,b) => a.work_date.localeCompare(b.work_date));
+  listWrap.innerHTML = entries.length
+    ? entries.map(r => `
+        <div class="list-item">
+          ${r.work_date} — ${r.coach_name} — <span class="status-tag ${r.status === 'business_trip' ? 'ok' : 'warn'}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>
+          ${r.reason ? `(${r.reason.replace(/</g,"&lt;")})` : ""}
+          <button class="small secondary" style="margin-left:6px;" onclick="clearCoachScheduleEntry(${r.coach_id}, '${r.work_date}', '${(r.coach_name||"").replace(/'/g,"")}')">設回上班</button>
+        </div>`).join("")
+    : `<div class="list-item note">這個月沒有請假/出差紀錄</div>`;
+}
+
+async function submitCoachScheduleAdmin() {
+  const coach_id = parseInt(document.getElementById("csCoachSel").value);
+  const work_date = document.getElementById("csWorkDate").value;
+  const status = document.getElementById("csStatus").value;
+  const reason = document.getElementById("csReason").value;
+  const statusEl = document.getElementById("csSubmitStatus");
+  if (!coach_id || !work_date) {
+    statusEl.innerHTML = `<span class="status-tag warn">請選擇教練與日期</span>`;
+    return;
+  }
+  const { ok, data } = await api("/admin/coach-schedule", {
+    method: "POST", body: JSON.stringify({ coach_id, work_date, status, reason: reason || null })
+  });
+  statusEl.innerHTML = ok
+    ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">${data.error || "儲存失敗"}</span>`;
+  if (ok) {
+    document.getElementById("csReason").value = "";
+    await loadCoachScheduleList();
+  }
+}
+
+async function clearCoachScheduleEntry(coachId, workDate, coachName) {
+  if (!confirm(`確定要把 ${coachName} 在 ${workDate} 的狀態設回「上班」嗎?`)) return;
+  await api("/admin/coach-schedule", {
+    method: "POST", body: JSON.stringify({ coach_id: coachId, work_date: workDate, status: "working", reason: null })
+  });
+  await loadCoachScheduleList();
 }
 
 const CONTRACT_TYPE_LABEL = {
