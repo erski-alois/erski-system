@@ -1911,8 +1911,18 @@ async function loadJapanBookingsList() {
           <button class="small secondary" onclick="saveJapanReferral(${b.id})">儲存轉介單</button>
         </div>` : ""}
       <div id="jbStatus-${b.id}" style="margin-top:6px;"></div>
+      <div class="row" style="margin-top:6px;">
+        <button class="small secondary" onclick="cancelJapanBookingAdmin('${b.group_key}', ${b.id})">取消此筆預約</button>
+      </div>
     </div>
   `).join("") || `<p class="note">查無日本教練課訂單</p>`;
+}
+async function cancelJapanBookingAdmin(groupKey, bookingId) {
+  if (!confirm("確定要取消這筆日本教練課預約嗎?此動作無法復原,若該筆為多天行程會整趟一併取消。")) return;
+  const { ok, data } = await api(`/booking/japan/${groupKey}/cancel`, { method: "POST" });
+  document.getElementById(`jbStatus-${bookingId}`).innerHTML = ok
+    ? `<span class="status-tag ok">已取消</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) await loadJapanBookingsList();
 }
 async function collectJapanBalance(bookingId) {
   const method = document.getElementById(`jbBalanceMethod-${bookingId}`).value;
@@ -2435,50 +2445,104 @@ async function saveMemberProfileAdmin(memberId) {
 
 const ATTENDANCE_SLOT_LABEL = { morning: "上午", afternoon: "下午" };
 
-// 教練「我的課表」裡,日本教練課場次的上課碼/下課碼輸入區塊。
-// b.attendance_code_status 是後端 booking.get_all_bookings() 附上的狀態摘要
-// (只有是否已輸入,不含編碼原文——編碼要由學員口頭告知教練,教練頁面本身看不到答案)。
-function attendanceCodeFormHtml(coachId, b) {
-  if (b.category !== "japan" || !Array.isArray(b.attendance_code_status) || !b.attendance_code_status.length) return "";
-  if (b.attendance_status !== "pending") return "";  // 已完成報到/已標記未到,不需要再輸入
-  const parts = b.attendance_code_status.map(s => {
+// 教練「我的課表」點進單一課程後的簽到頁面,需要記得是從哪個staff/哪個畫面容器
+// 點進來的,「返回」按鈕才能正確回到原本的清單畫面(獨立/coach頁面 或 舊有的員工後台登入,
+// 兩種入口共用同一套函式,見renderCoachOwnPanel/refreshCoachPanel的既有寫法)。
+let _lastCoachStaff = null;
+let _lastCoachBodyElId = "staffPanelBody";
+let _lastCoachBookings = [];
+
+// 教練點選「我的課表」裡的某一堂課,進入簽到頁面:呈現當天課程資訊,
+// 並讓教練輸入學員提供的上課碼/下課碼(日本教練課才有此機制,見booking.py說明)。
+function coachBookingDetailHtml(b) {
+  const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
+  const resort = b.resort_name ? `${b.resort_name}・` : "";
+  const equip = b.equipment_type ? `・${b.equipment_type === "ski" ? "雙板" : "單板"}` : "";
+  const attendanceTag = b.attendance_status === "completed" ? `<span class="status-tag ok">已完成報到</span>`
+    : b.attendance_status === "no_show" ? `<span class="status-tag warn">未到</span>`
+    : `<span class="status-tag warn">尚未報到</span>`;
+
+  let html = `<a class="back" onclick="renderCoachOwnPanel(_lastCoachStaff, _lastCoachBodyElId)">← 返回我的課表</a>`;
+  html += `<h3 style="margin-top:8px; font-size:15px;">${b.date} ${b.time} — ${resort}${b.category_label}</h3>`;
+  html += `<div class="list-item">學員:${b.member_name}${b.member_phone ? `(${b.member_phone})` : ""}${b.headcount ? `・${b.headcount}人` : ""}${equip}${coach}</div>`;
+  html += `<div class="list-item">金額:NT$${b.price ?? 0}・${b.payment_label}</div>`;
+  if (b.lesson_notes) html += `<div class="list-item">教練備註:${b.lesson_notes}</div>`;
+  html += `<div class="list-item">報到狀態:${attendanceTag}</div>`;
+
+  if (b.category !== "japan") {
+    html += `<p class="note" style="margin-top:10px;">此課程類型的報到由客服後台直接標記完成/未到,不需要輸入上下課碼。</p>`;
+    return html;
+  }
+  if (!Array.isArray(b.attendance_code_status) || !b.attendance_code_status.length) {
+    html += `<p class="note" style="margin-top:10px;">這筆訂單尚未確認付款,還沒有產生上課碼/下課碼。</p>`;
+    return html;
+  }
+
+  html += `<h3 style="margin-top:14px; font-size:14px;">教練簽到</h3>`;
+  html += `<p class="note">請學員口頭提供上課碼/下課碼,分別輸入後按「送出」即可完成報到——可以先輸入上課碼、下課時再回來輸入下課碼,也可以兩個都填好後一次送出。</p>`;
+
+  b.attendance_code_status.forEach(s => {
     const slot = ATTENDANCE_SLOT_LABEL[s.session_slot] || s.session_slot;
-    const inputId = `attCode-${b.booking_ref_id}-${s.session_slot}`;
-    if (!s.checkin_done) {
-      return `${slot}尚未上課報到:
-        <input type="text" maxlength="8" id="${inputId}" placeholder="輸入學員的上課碼" style="width:120px;">
-        <button onclick="submitAttendanceCode(${coachId}, ${b.booking_ref_id}, '${s.session_slot}')">確認上課</button>`;
-    }
-    if (!s.checkout_done) {
-      return `${slot}已上課,尚未下課報到:
-        <input type="text" maxlength="8" id="${inputId}" placeholder="輸入學員的下課碼" style="width:120px;">
-        <button onclick="submitAttendanceCode(${coachId}, ${b.booking_ref_id}, '${s.session_slot}')">確認下課</button>`;
-    }
-    return `${slot}已完成報到`;
-  }).join("<br>");
-  return `<br><span class="note">${parts}</span>`;
+    const checkinField = s.checkin_done
+      ? `<span class="status-tag ok">上課碼已完成</span>`
+      : `<label>上課碼</label><input type="text" maxlength="8" id="checkinCode-${b.booking_ref_id}-${s.session_slot}" placeholder="輸入學員的上課碼" style="width:120px;">`;
+    const checkoutField = s.checkout_done
+      ? `<span class="status-tag ok">下課碼已完成</span>`
+      : `<label style="margin-left:10px;">下課碼</label><input type="text" maxlength="8" id="checkoutCode-${b.booking_ref_id}-${s.session_slot}" placeholder="輸入學員的下課碼" style="width:120px;">`;
+    const needsSubmit = !s.checkin_done || !s.checkout_done;
+    html += `<div class="card" style="margin-top:8px; padding:10px;">
+      <b>${slot}</b><br>
+      ${checkinField}　${checkoutField}
+      ${needsSubmit ? `<button style="margin-left:10px;" onclick="submitAttendanceCodesForSlot(${b.booking_ref_id}, '${s.session_slot}')">送出</button>` : ""}
+    </div>`;
+  });
+  return html;
 }
 
-async function submitAttendanceCode(coachId, refId, slot) {
-  const inputEl = document.getElementById(`attCode-${refId}-${slot}`);
-  const code = inputEl ? inputEl.value.trim() : "";
-  if (!code) { alert("請輸入編碼"); return; }
-  const { ok, data } = await api("/admin/coach/attendance-codes/verify", {
-    method: "POST",
-    body: JSON.stringify({ ref_type: "japan_booking", ref_id: refId, code }),
-  });
-  if (ok) {
-    alert(`${data.slot_label}${data.code_type_label}報到成功${data.booking_completed ? "(此堂課已全部完成報到)" : ""}`);
-    refreshCoachPanel(coachId);
-  } else {
-    alert(data.error);
+function openCoachAttendanceCheckin(refId) {
+  const b = _lastCoachBookings.find(x => x.booking_ref_id === refId);
+  const body = document.getElementById(_lastCoachBodyElId);
+  if (!b) {
+    body.innerHTML = `<a class="back" onclick="renderCoachOwnPanel(_lastCoachStaff, _lastCoachBodyElId)">← 返回我的課表</a><p class="note">找不到這筆課程資料,請返回重新整理。</p>`;
+    return;
   }
+  body.innerHTML = coachBookingDetailHtml(b);
+}
+
+// 「送出」時,把這個時段目前有填寫的上課碼/下課碼都送到後端驗證(可以只填一個,也可以
+// 兩個一起送);送完重新抓一次「我的課表」最新狀態,再重畫這個簽到頁面。
+async function submitAttendanceCodesForSlot(refId, slot) {
+  const checkinEl = document.getElementById(`checkinCode-${refId}-${slot}`);
+  const checkoutEl = document.getElementById(`checkoutCode-${refId}-${slot}`);
+  const checkinCode = checkinEl ? checkinEl.value.trim() : "";
+  const checkoutCode = checkoutEl ? checkoutEl.value.trim() : "";
+  if (!checkinCode && !checkoutCode) { alert("請至少輸入一組編碼"); return; }
+
+  const messages = [];
+  for (const code of [checkinCode, checkoutCode]) {
+    if (!code) continue;
+    const { ok, data } = await api("/admin/coach/attendance-codes/verify", {
+      method: "POST",
+      body: JSON.stringify({ ref_type: "japan_booking", ref_id: refId, code }),
+    });
+    messages.push(ok
+      ? `${data.slot_label}${data.code_type_label}報到成功${data.booking_completed ? "(此堂課已全部完成報到)" : ""}`
+      : `錯誤:${data.error}`);
+  }
+  alert(messages.join("\n"));
+
+  const { data: freshBookings } = await api("/admin/coach/my-bookings");
+  _lastCoachBookings = freshBookings;
+  openCoachAttendanceCheckin(refId);
 }
 
 async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
+  _lastCoachStaff = staff;
+  _lastCoachBodyElId = bodyElId;
   const body = document.getElementById(bodyElId);
   const { data: mySchedule } = await api("/admin/coach/my-schedule");
   const { data: myBookings } = await api("/admin/coach/my-bookings");
+  _lastCoachBookings = myBookings;
   const { data: myHistory } = await api("/admin/coach/my-history");
   const { data: myPayroll } = await api("/admin/coach/my-payroll");
   const { data: basicInfo } = await api(`/admin/coaches/${staff.id}/basic-info`);
@@ -2494,7 +2558,7 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
   body.innerHTML = `
     <h3 style="font-size:14px;">我的課表(未來)</h3>
     ${myBookings.length
-      ? myBookings.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}${attendanceCodeFormHtml(staff.id, b)}</div>`).join("")
+      ? myBookings.map(b => `<div class="list-item" style="cursor:pointer;" onclick="openCoachAttendanceCheckin(${b.booking_ref_id})">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""} <span class="note">(點選查看/簽到)</span></div>`).join("")
       : `<div class="list-item">目前沒有已排定的課程</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
@@ -4055,14 +4119,13 @@ async function renderJapanRangeCalendar() {
     const dateStr = `${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const isPast = dateStr < todayStr;
     const isToday = dateStr === todayStr;
-    const inSeason = pricingData.japan_season_months.includes(month);
     const s = rangeCalendarState.start, e = rangeCalendarState.end;
     const isStart = dateStr === s;
     const isEnd = dateStr === e;
     const inRange = s && e && dateStr > s && dateStr < e;
-    // 2026-09:暫時放行「今天」不受雪季月份限制(比照後端pricing.validate_japan_season同一次
-    // 暫時放行,方便你直接在正式環境測試教練簽到;測試完成後請告訴我,把 && !isToday 拿掉即可復原)。
-    const disabled = isPast || (!inSeason && !isToday);
+    // 2026-09:依你的要求暫時整個停用雪季月份限制(比照後端pricing.validate_japan_season),
+    // 任何月份都不會被鎖灰。等正式上線前請告訴我,我會把這裡恢復成只認12月至隔年4月。
+    const disabled = isPast;
     const hasBooking = monthData[dateStr];
     const cls = ["cal-day", disabled ? "past" : "", isToday ? "today" : "",
                  (isStart || isEnd) ? "selected" : "", inRange ? "in-range" : ""].filter(Boolean).join(" ");
@@ -4074,7 +4137,7 @@ async function renderJapanRangeCalendar() {
   document.getElementById("japanCalendarWrap").innerHTML = `
     <div class="cal-header">
       <button class="secondary small" onclick="changeJapanRangeMonth(-1)">‹</button>
-      <span class="cal-title">${year}年${month}月${pricingData.japan_season_months.includes(month) ? "" : (year === now.getFullYear() && month === now.getMonth() + 1 ? "(非雪季,僅今天暫時開放測試用)" : "(非雪季,不開放預約)")}</span>
+      <span class="cal-title">${year}年${month}月</span>
       <button class="secondary small" onclick="changeJapanRangeMonth(1)">›</button>
     </div>
     <div class="cal-grid">
@@ -4576,14 +4639,8 @@ function generateJapanDateRange() {
     dates.push(cur.toISOString().slice(0,10));
     cur.setDate(cur.getDate() + 1);
   }
-  // 2026-09:同上,「今天」這個日期暫時不受雪季月份限制,測試完成後把 && d !== todayStr2 拿掉即可復原。
-  const todayStr2 = new Date().toISOString().slice(0,10);
-  const outOfSeason = dates.filter(d => !pricingData.japan_season_months.includes(parseInt(d.split("-")[1])) && d !== todayStr2);
-  if (outOfSeason.length) {
-    note.innerHTML = `<span class="status-tag warn">${outOfSeason.join("、")} 不在雪季範圍內(每年12月至隔年4月),請重新選擇日期</span>`;
-    japanSelectedDates = [];
-    return;
-  }
+  // 2026-09:依你的要求暫時整個停用雪季月份限制(比照後端pricing.validate_japan_season),
+  // 這裡不再篩選/擋下任何月份的日期。等正式上線前請告訴我,我會把這裡恢復成只認12月至隔年4月。
   note.innerHTML = `<span class="status-tag ok">共 ${dates.length} 天:${dates[0]} ~ ${dates[dates.length-1]}</span>`;
   japanSelectedDates = dates;
   toggleJapanHalfSlot();
