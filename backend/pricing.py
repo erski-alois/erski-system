@@ -152,7 +152,14 @@ def validate_booking_window(date_str):
 
 
 def validate_japan_season(date_str):
-    """日本教練課固定每年12月至隔年4月為雪季開放預約。"""
+    """日本教練課固定每年12月至隔年4月為雪季開放預約。
+    2026-09:依你的要求暫時放行——正式環境「今天這個日期」不受雪季月份限制,方便你
+    直接在正式環境訂一筆今天的日本教練課,測試教練簽到(上課碼/下課碼)流程。
+    ⚠️這是暫時性的測試用放行,只會讓「今天」這一個日期不受季節限制,其他不在雪季
+    範圍內的日期(例如明天、後天)仍然會被擋下。測試完成後請告訴我,我會把下面這3行
+    拿掉,恢復成原本嚴格只認12月至隔年4月的規則,避免每天的「今天」都一直可以訂到。"""
+    if date_str == _now_tw().date().isoformat():
+        return
     dt = datetime.strptime(date_str, "%Y-%m-%d")
     if dt.month not in JAPAN_SEASON_MONTHS:
         raise ValueError(f"{date_str} 不在雪季範圍內(每年12月至隔年4月才開放預約)")

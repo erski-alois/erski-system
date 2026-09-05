@@ -4060,7 +4060,9 @@ async function renderJapanRangeCalendar() {
     const isStart = dateStr === s;
     const isEnd = dateStr === e;
     const inRange = s && e && dateStr > s && dateStr < e;
-    const disabled = isPast || !inSeason;
+    // 2026-09:暫時放行「今天」不受雪季月份限制(比照後端pricing.validate_japan_season同一次
+    // 暫時放行,方便你直接在正式環境測試教練簽到;測試完成後請告訴我,把 && !isToday 拿掉即可復原)。
+    const disabled = isPast || (!inSeason && !isToday);
     const hasBooking = monthData[dateStr];
     const cls = ["cal-day", disabled ? "past" : "", isToday ? "today" : "",
                  (isStart || isEnd) ? "selected" : "", inRange ? "in-range" : ""].filter(Boolean).join(" ");
@@ -4072,7 +4074,7 @@ async function renderJapanRangeCalendar() {
   document.getElementById("japanCalendarWrap").innerHTML = `
     <div class="cal-header">
       <button class="secondary small" onclick="changeJapanRangeMonth(-1)">‹</button>
-      <span class="cal-title">${year}年${month}月${pricingData.japan_season_months.includes(month) ? "" : "(非雪季,不開放預約)"}</span>
+      <span class="cal-title">${year}年${month}月${pricingData.japan_season_months.includes(month) ? "" : (year === now.getFullYear() && month === now.getMonth() + 1 ? "(非雪季,僅今天暫時開放測試用)" : "(非雪季,不開放預約)")}</span>
       <button class="secondary small" onclick="changeJapanRangeMonth(1)">›</button>
     </div>
     <div class="cal-grid">
@@ -4574,7 +4576,9 @@ function generateJapanDateRange() {
     dates.push(cur.toISOString().slice(0,10));
     cur.setDate(cur.getDate() + 1);
   }
-  const outOfSeason = dates.filter(d => !pricingData.japan_season_months.includes(parseInt(d.split("-")[1])));
+  // 2026-09:同上,「今天」這個日期暫時不受雪季月份限制,測試完成後把 && d !== todayStr2 拿掉即可復原。
+  const todayStr2 = new Date().toISOString().slice(0,10);
+  const outOfSeason = dates.filter(d => !pricingData.japan_season_months.includes(parseInt(d.split("-")[1])) && d !== todayStr2);
   if (outOfSeason.length) {
     note.innerHTML = `<span class="status-tag warn">${outOfSeason.join("、")} 不在雪季範圍內(每年12月至隔年4月),請重新選擇日期</span>`;
     japanSelectedDates = [];
