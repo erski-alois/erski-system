@@ -2433,6 +2433,48 @@ async function saveMemberProfileAdmin(memberId) {
   }
 }
 
+const ATTENDANCE_SLOT_LABEL = { morning: "上午", afternoon: "下午" };
+
+// 教練「我的課表」裡,日本教練課場次的上課碼/下課碼輸入區塊。
+// b.attendance_code_status 是後端 booking.get_all_bookings() 附上的狀態摘要
+// (只有是否已輸入,不含編碼原文——編碼要由學員口頭告知教練,教練頁面本身看不到答案)。
+function attendanceCodeFormHtml(coachId, b) {
+  if (b.category !== "japan" || !Array.isArray(b.attendance_code_status) || !b.attendance_code_status.length) return "";
+  if (b.attendance_status !== "pending") return "";  // 已完成報到/已標記未到,不需要再輸入
+  const parts = b.attendance_code_status.map(s => {
+    const slot = ATTENDANCE_SLOT_LABEL[s.session_slot] || s.session_slot;
+    const inputId = `attCode-${b.booking_ref_id}-${s.session_slot}`;
+    if (!s.checkin_done) {
+      return `${slot}尚未上課報到:
+        <input type="text" maxlength="8" id="${inputId}" placeholder="輸入學員的上課碼" style="width:120px;">
+        <button onclick="submitAttendanceCode(${coachId}, ${b.booking_ref_id}, '${s.session_slot}')">確認上課</button>`;
+    }
+    if (!s.checkout_done) {
+      return `${slot}已上課,尚未下課報到:
+        <input type="text" maxlength="8" id="${inputId}" placeholder="輸入學員的下課碼" style="width:120px;">
+        <button onclick="submitAttendanceCode(${coachId}, ${b.booking_ref_id}, '${s.session_slot}')">確認下課</button>`;
+    }
+    return `${slot}已完成報到`;
+  }).join("<br>");
+  return `<br><span class="note">${parts}</span>`;
+}
+
+async function submitAttendanceCode(coachId, refId, slot) {
+  const inputEl = document.getElementById(`attCode-${refId}-${slot}`);
+  const code = inputEl ? inputEl.value.trim() : "";
+  if (!code) { alert("請輸入編碼"); return; }
+  const { ok, data } = await api("/admin/coach/attendance-codes/verify", {
+    method: "POST",
+    body: JSON.stringify({ ref_type: "japan_booking", ref_id: refId, code }),
+  });
+  if (ok) {
+    alert(`${data.slot_label}${data.code_type_label}報到成功${data.booking_completed ? "(此堂課已全部完成報到)" : ""}`);
+    refreshCoachPanel(coachId);
+  } else {
+    alert(data.error);
+  }
+}
+
 async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
   const body = document.getElementById(bodyElId);
   const { data: mySchedule } = await api("/admin/coach/my-schedule");
@@ -2452,7 +2494,7 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
   body.innerHTML = `
     <h3 style="font-size:14px;">我的課表(未來)</h3>
     ${myBookings.length
-      ? myBookings.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}</div>`).join("")
+      ? myBookings.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}${attendanceCodeFormHtml(staff.id, b)}</div>`).join("")
       : `<div class="list-item">目前沒有已排定的課程</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
@@ -4656,6 +4698,21 @@ async function loadCoachTeam() {
   `).join("") + `</div>` || `<p class="note">尚無教練資料</p>`;
 }
 
+// 會員自己「我的預約」清單裡,日本教練課場次的上課碼/下課碼(給會員看的是編碼原文,
+// 供他們當天到現場後口頭告知教練;是否已使用只是提示,不影響會員自己的操作)。
+function memberAttendanceCodesHtml(b) {
+  if (b.category !== "japan" || !Array.isArray(b.attendance_codes) || !b.attendance_codes.length) return "";
+  const rows = b.attendance_codes.map(c => {
+    const slot = ATTENDANCE_SLOT_LABEL[c.session_slot] || c.session_slot;
+    const checkinTag = c.checkin_used_at
+      ? `<span class="status-tag ok">已完成上課報到</span>` : `<span class="status-tag warn">尚未使用</span>`;
+    const checkoutTag = c.checkout_used_at
+      ? `<span class="status-tag ok">已完成下課報到</span>` : `<span class="status-tag warn">尚未使用</span>`;
+    return `${slot} — 上課碼:<b>${c.checkin_code}</b> ${checkinTag}　下課碼:<b>${c.checkout_code}</b> ${checkoutTag}`;
+  }).join("<br>");
+  return `<br><span class="note">當天報到碼(請於現場口頭告知教練,由教練輸入完成報到):<br>${rows}</span>`;
+}
+
 function bookingRowHtml(b) {
   const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
   const resort = b.resort_name ? `${b.resort_name}・` : "";
@@ -4668,7 +4725,7 @@ function bookingRowHtml(b) {
   const noteText = b.category === "japan"
     ? "如需取消/修改請至「日本滑雪」對應分區的時段表操作"
     : "如需取消/修改請至該課程分頁的時段表操作";
-  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${b.lesson_notes}</span>` : ""}<br><span class="note">${noteText}</span></div>`;
+  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${b.lesson_notes}</span>` : ""}${memberAttendanceCodesHtml(b)}<br><span class="note">${noteText}</span></div>`;
 }
 
 async function cancelBooking(kind, refId) {

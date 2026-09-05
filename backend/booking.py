@@ -7,6 +7,7 @@
 """
 
 import json
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from db import get_conn, rows_to_dicts, NOW_SQL
@@ -323,6 +324,14 @@ def mark_order_paid(ref_type, ref_id, conn=None, payment_method=None):
                    deposit_paid_date=?, deposit_payment_method=? WHERE group_key=?""",
                 (today_tw().isoformat(), payment_method, jb["group_key"]),
             )
+            # 2026-09:整趟行程(同group_key,可能是單日或多日)確認訂金/全額付款後,
+            # 依每一天各自的day_type/half_day_slot產生對應組數的上課碼/下課碼,
+            # 詳細規則見 _create_japan_attendance_codes 的說明。
+            trip_bookings = conn.execute(
+                "SELECT id FROM japan_bookings WHERE group_key=?", (jb["group_key"],)
+            ).fetchall()
+            for tb in trip_bookings:
+                _create_japan_attendance_codes(conn, tb["id"])
     if own_conn:
         conn.commit()
         conn.close()
@@ -1223,7 +1232,11 @@ def _payment_label(payment_status, payment_method):
     return "已預約・未付款"
 
 
-def get_all_bookings(member_id=None, category=None, date_from=None, date_to=None, coach_id=None):
+def get_all_bookings(member_id=None, category=None, date_from=None, date_to=None, coach_id=None, reveal_codes=False):
+    """reveal_codes=True 時,日本教練課的每一列會多附上 attendance_codes(完整上課碼/下課碼原文)——
+    只有會員自己查詢自己的預約(get_member)才會傳True,教練/客服查詢清單(coach_my_bookings等)
+    一律維持預設False,只給 attendance_code_status(是否已輸入,不含編碼原文本身),避免教練直接從
+    畫面上看到答案,失去讓學員口頭報碼驗證的意義。"""
     conn = get_conn()
     rows = []
 
@@ -1329,7 +1342,16 @@ def get_all_bookings(member_id=None, category=None, date_from=None, date_to=None
                 ).fetchone()
                 if first_id and first_id["id"] != r["id"]:
                     pay_status, pay_method = _payment_info(conn, "japan_booking", first_id["id"])
-            rows.append({
+            code_rows = _fetch_attendance_codes(conn, "japan_booking", r["id"])
+            attendance_code_status = [
+                {
+                    "session_slot": c["session_slot"],
+                    "checkin_done": bool(c["checkin_used_at"]),
+                    "checkout_done": bool(c["checkout_used_at"]),
+                }
+                for c in code_rows
+            ]
+            row_out = {
                 "booking_ref_id": r["id"], "group_key": r["group_key"],
                 "member_id": r["member_id"], "member_name": r["member_name"],
                 "member_phone": r["member_phone"], "category": "japan",
@@ -1346,7 +1368,11 @@ def get_all_bookings(member_id=None, category=None, date_from=None, date_to=None
                 "payment_status": pay_status, "payment_method": pay_method,
                 "payment_label": _payment_label(pay_status, pay_method),
                 "attendance_status": r["attendance_status"], "lesson_notes": r["lesson_notes"],
-            })
+                "attendance_code_status": attendance_code_status,
+            }
+            if reveal_codes:
+                row_out["attendance_codes"] = code_rows
+            rows.append(row_out)
 
     conn.close()
     rows.sort(key=lambda r: r["date"], reverse=True)
@@ -1779,6 +1805,154 @@ def check_in_japan_booking(japan_booking_id, attendance_status, lesson_notes, st
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+# ============================================================
+# 上課碼/下課碼(2026-09新增):
+# 客戶訂課(日本教練課)確認付款後,系統自動產生8碼亂數的上課碼與下課碼,
+# 供教練頁面輸入學員當面/口頭提供的編碼,以完成報到管理。
+# 產生規則:
+#   - 半天課程(day_type='half'):產生1組(上課碼+下課碼),對應該筆訂單的half_day_slot。
+#   - 全天課程(day_type='full'):產生2組——上午1組、下午1組(共4碼)。
+#   - 多天課程:每一天在japan_bookings本來就是各自獨立一列(group_key相同),
+#     本函式逐筆booking呼叫,自然依每天各自的day_type各自產生對應組數,不需特別處理。
+# 目前僅套用於日本教練課(ref_type='japan_booking')——室內機台/跳台預約是以
+# 「單一時段」直接報到(check_in_indoor_session/check_in_jump_booking),沒有
+# 上午/下午的概念,故未套用;之後如需擴充,在CHECK(ref_type IN (...))與這裡
+# 各加一組對應邏輯即可。
+# ============================================================
+ATTENDANCE_CODE_LENGTH = 8
+
+
+def _generate_attendance_code(conn):
+    """產生一組8碼數字亂數,且保證跟目前資料庫裡所有既有的上課碼/下課碼都不重複
+    (避免教練輸入時,同一組編碼意外對應到不只一筆報到動作)。"""
+    for _ in range(20):
+        code = "".join(secrets.choice("0123456789") for _ in range(ATTENDANCE_CODE_LENGTH))
+        clash = conn.execute(
+            "SELECT 1 FROM attendance_codes WHERE checkin_code=? OR checkout_code=?",
+            (code, code),
+        ).fetchone()
+        if not clash:
+            return code
+    raise RuntimeError("無法產生不重複的報到編碼,請稍後再試")
+
+
+def _fetch_attendance_codes(conn, ref_type, ref_id):
+    rows = conn.execute(
+        """SELECT * FROM attendance_codes WHERE ref_type=? AND ref_id=?
+           ORDER BY CASE session_slot WHEN 'morning' THEN 0 ELSE 1 END""",
+        (ref_type, ref_id),
+    ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def get_attendance_codes(ref_type, ref_id):
+    """供app.py單筆查詢時使用(例如後台日本教練課訂單詳情),自行開關連線。"""
+    conn = get_conn()
+    result = _fetch_attendance_codes(conn, ref_type, ref_id)
+    conn.close()
+    return result
+
+
+def _create_japan_attendance_codes(conn, japan_booking_id):
+    """依規則(見上方說明)產生這筆日本教練課訂單的上課碼/下課碼。
+    若這筆訂單先前已經產生過(例如mark_order_paid被重複呼叫),不會重複產生。"""
+    existing = conn.execute(
+        "SELECT 1 FROM attendance_codes WHERE ref_type='japan_booking' AND ref_id=?",
+        (japan_booking_id,),
+    ).fetchone()
+    if existing:
+        return
+    jb = conn.execute(
+        "SELECT booking_date, day_type, half_day_slot FROM japan_bookings WHERE id=?",
+        (japan_booking_id,),
+    ).fetchone()
+    if not jb:
+        return
+    slots = [jb["half_day_slot"]] if jb["day_type"] == "half" else ["morning", "afternoon"]
+    for slot in slots:
+        checkin_code = _generate_attendance_code(conn)
+        checkout_code = _generate_attendance_code(conn)
+        conn.execute(
+            """INSERT INTO attendance_codes
+               (ref_type, ref_id, session_date, session_slot, checkin_code, checkout_code)
+               VALUES ('japan_booking', ?, ?, ?, ?, ?)""",
+            (japan_booking_id, jb["booking_date"], slot, checkin_code, checkout_code),
+        )
+
+
+def verify_attendance_code(ref_type, ref_id, code, staff_id):
+    """教練頁面輸入學員提供的上課碼或下課碼,完成報到管理。
+    code可能是任一時段的checkin_code或checkout_code,由系統自動判斷這是「上課」還是
+    「下課」動作,教練不需要自己先選擇類型。當這筆訂單所有時段的下課碼都完成輸入時,
+    自動比照check_in_japan_booking把attendance_status標記為completed,教練不需要
+    再另外手動報到一次。"""
+    if ref_type != "japan_booking":
+        raise ValueError("目前僅支援日本教練課的上下課碼報到")
+    code = (code or "").strip()
+    if not code:
+        raise ValueError("請輸入編碼")
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT * FROM attendance_codes WHERE ref_type=? AND ref_id=?
+           AND (checkin_code=? OR checkout_code=?)""",
+        (ref_type, ref_id, code, code),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("編碼錯誤,請確認學員提供的編碼是否正確")
+
+    slot_label = "上午" if row["session_slot"] == "morning" else "下午"
+    if row["checkin_code"] == code:
+        if row["checkin_used_at"]:
+            conn.close()
+            raise ValueError(f"{slot_label}的上課碼已經輸入過了")
+        conn.execute(
+            f"""UPDATE attendance_codes SET checkin_used_at={NOW_SQL},
+               checkin_verified_by_staff_id=? WHERE id=?""",
+            (staff_id, row["id"]),
+        )
+        code_type, code_type_label = "checkin", "上課"
+    else:
+        if row["checkout_used_at"]:
+            conn.close()
+            raise ValueError(f"{slot_label}的下課碼已經輸入過了")
+        if not row["checkin_used_at"]:
+            conn.close()
+            raise ValueError(f"{slot_label}尚未輸入上課碼,請先完成上課報到")
+        conn.execute(
+            f"""UPDATE attendance_codes SET checkout_used_at={NOW_SQL},
+               checkout_verified_by_staff_id=? WHERE id=?""",
+            (staff_id, row["id"]),
+        )
+        code_type, code_type_label = "checkout", "下課"
+
+    booking_completed = False
+    if code_type == "checkout":
+        remaining = conn.execute(
+            """SELECT COUNT(*) c FROM attendance_codes
+               WHERE ref_type=? AND ref_id=? AND checkout_used_at IS NULL""",
+            (ref_type, ref_id),
+        ).fetchone()["c"]
+        if remaining == 0:
+            jb = conn.execute("SELECT attendance_status FROM japan_bookings WHERE id=?", (ref_id,)).fetchone()
+            if jb and jb["attendance_status"] == "pending":
+                conn.execute(
+                    f"""UPDATE japan_bookings SET attendance_status='completed',
+                       checked_in_at={NOW_SQL}, checked_in_by_staff_id=? WHERE id=?""",
+                    (staff_id, ref_id),
+                )
+                booking_completed = True
+
+    conn.commit()
+    conn.close()
+    return {
+        "ok": True,
+        "session_slot": row["session_slot"], "slot_label": slot_label,
+        "code_type": code_type, "code_type_label": code_type_label,
+        "booking_completed": booking_completed,
+    }
 
 
 def get_pending_check_ins(up_to_date):

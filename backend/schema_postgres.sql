@@ -265,6 +265,26 @@ CREATE TABLE IF NOT EXISTS japan_bookings (
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- 上課碼/下課碼(2026-09新增):日本教練課訂單付款確認後自動產生,供教練頁面輸入
+-- 學員提供的編碼以完成報到。半天課程產生1組(session_slot對應half_day_slot);
+-- 全天課程產生2組(morning+afternoon各一組);多天課程則是每一天(各自一筆
+-- japan_bookings)各自依上述規則產生,見 booking.py 的 _create_japan_attendance_codes。
+CREATE TABLE IF NOT EXISTS attendance_codes (
+    id SERIAL PRIMARY KEY,
+    ref_type TEXT CHECK(ref_type IN ('japan_booking')) NOT NULL,
+    ref_id INTEGER NOT NULL,          -- 對應到japan_bookings.id,無外鍵約束(比照booking_participants慣例)
+    session_date TEXT NOT NULL,       -- 上課當天日期(=該筆japan_bookings.booking_date)
+    session_slot TEXT CHECK(session_slot IN ('morning','afternoon')) NOT NULL,
+    checkin_code TEXT NOT NULL,       -- 8碼亂數,全表不重複
+    checkout_code TEXT NOT NULL,      -- 8碼亂數,全表不重複
+    checkin_used_at TEXT,
+    checkin_verified_by_staff_id INTEGER REFERENCES staff(id),
+    checkout_used_at TEXT,
+    checkout_verified_by_staff_id INTEGER REFERENCES staff(id),
+    created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    UNIQUE(ref_type, ref_id, session_slot)
+);
+
 -- 每筆預約(室內/跳台/日本)每一位參與者的基本資料
 CREATE TABLE IF NOT EXISTS booking_participants (
     id SERIAL PRIMARY KEY,

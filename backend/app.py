@@ -429,7 +429,7 @@ def get_member(member_id):
     today = booking.today_tw().isoformat()
     quota = booking.get_quota_status(member_id, today)
 
-    all_bookings = booking.get_all_bookings(member_id=member_id)
+    all_bookings = booking.get_all_bookings(member_id=member_id, reveal_codes=True)
     my_bookings = [b for b in all_bookings if b["status"] != "cancelled"]
     # 保留原本 upcoming/incomplete 欄位供舊版相容(以付款狀態判斷,而非課程狀態)
     upcoming = [b for b in my_bookings if b["payment_status"] == "confirmed"]
@@ -1787,6 +1787,24 @@ def admin_check_in_japan(japan_id):
         result = booking.check_in_japan_booking(
             japan_id, d["attendance_status"], d.get("lesson_notes"), request.current_staff["id"]
         )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/admin/coach/attendance-codes/verify", methods=["POST"])
+@require_role("coach")
+def coach_verify_attendance_code():
+    """教練頁面輸入學員提供的上課碼/下課碼,完成報到(目前僅支援日本教練課,見
+    booking.verify_attendance_code 的規則說明)。"""
+    d = request.json or {}
+    ref_type = d.get("ref_type")
+    ref_id = d.get("ref_id")
+    code = d.get("code")
+    if not ref_type or not ref_id or not code:
+        return jsonify({"error": "請提供 ref_type、ref_id、code"}), 400
+    try:
+        result = booking.verify_attendance_code(ref_type, ref_id, code, request.current_staff["id"])
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -3324,7 +3342,9 @@ def admin_get_japan_booking(booking_id):
     conn.close()
     if not jb:
         return jsonify({"error": "找不到此筆日本教練課訂單"}), 404
-    return jsonify(dict(jb))
+    jb_dict = dict(jb)
+    jb_dict["attendance_codes"] = booking.get_attendance_codes("japan_booking", booking_id)
+    return jsonify(jb_dict)
 
 
 @app.route("/api/admin/profit-loss", methods=["GET"])
