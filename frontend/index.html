@@ -2719,8 +2719,7 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
     <input id="coachSelfMotto" maxlength="30" value="${(details.coach_motto || "").replace(/"/g, '&quot;')}">
     ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${details.self_intro.replace(/</g,"&lt;")}</p>` : ""}
 
-    <label style="margin-top:8px;">照片上傳(宣傳照,對外顯示於教練團隊頁面)</label>
-    <input type="file" accept="image/*" id="coachSelfPromoFile">
+    ${coachPhotoGallerySectionHtml(staff.id, "promo_photo", "宣傳照上傳(可多張,對外顯示於教練團隊頁面,最早上傳的一張會當封面照)", certFiles)}
 
     <p class="note" style="margin-top:8px;">駐在地(教練分配):${locNames.join("、") || "尚未指派"}・合約類型:${CONTRACT_TYPE_LABEL[details.contract_type] || "尚未設定"}(以上由主管設定,此處唯讀)</p>
 
@@ -2843,12 +2842,10 @@ async function saveCoachOwnIntroSection(coachId) {
   const bio_intro = document.getElementById("coachSelfBioIntro").value.slice(0, 30);
   const message_to_students = document.getElementById("coachSelfMessageToStudents").value.slice(0, 30);
   const coach_motto = document.getElementById("coachSelfMotto").value.slice(0, 30);
-  const promo_photo = await fileToBase64(document.getElementById("coachSelfPromoFile"));
   const payload = {
     experience, resume, discipline, specialty, snow_years, other_experience,
     bio_intro, message_to_students, coach_motto,
   };
-  if (promo_photo) payload.promo_photo = promo_photo;
   const { ok: ok2 } = await api(`/admin/coaches/${coachId}/profile`, { method: "PUT", body: JSON.stringify(payload) });
 
   document.getElementById("coachSelfDetailsStatus").innerHTML = (ok1 && ok2)
@@ -2901,6 +2898,59 @@ async function uploadCoachCertFiles(coachId, category) {
 async function deleteCoachCertFile(coachId, fileId) {
   await api(`/admin/coaches/${coachId}/certificate-files/${fileId}`, { method: "DELETE" });
   refreshCoachPanel(coachId);
+}
+
+// ---------------- 教練照片(宣傳照/證件照)多檔案上傳,share給教練自助頁面跟後台教練管理共用 ----------------
+// 2026-09:原本宣傳照/證件照各只能上傳單一一張(存在coach_profiles.promo_photo/id_photo),
+// 現在比照證照檔案的做法,改成可以一次選多張、各自獨立刪除,上傳/刪除都有自己的按鈕、
+// 選完檔案立刻儲存,不用等使用者再去按最下面那顆整區的大儲存鈕。
+function coachPhotoGalleryInnerHtml(coachId, category, label, files) {
+  return `
+    <label>${label}</label>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin:6px 0;">
+      ${files.length
+        ? files.map(f => `
+            <div style="width:90px;">
+              <img src="${f.file_data}" alt="${label}" style="width:90px; height:90px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:block;">
+              <button class="small secondary" style="width:100%; margin-top:2px;" onclick="deleteCoachPhotoFile(${coachId}, ${f.id}, '${category}', '${label}')">刪除</button>
+            </div>`).join("")
+        : `<div class="note">尚未上傳</div>`}
+    </div>
+    <input type="file" accept="image/*" multiple id="coachPhotoInput-${category}-${coachId}">
+    <button class="small" onclick="uploadCoachPhotoFiles(${coachId}, '${category}', '${label}')">上傳</button>
+    <div id="coachPhotoStatus-${category}-${coachId}" style="margin-top:4px;"></div>
+  `;
+}
+function coachPhotoGallerySectionHtml(coachId, category, label, certFiles) {
+  const files = (certFiles || []).filter(f => f.category === category);
+  return `<div id="coachPhotoSection-${category}-${coachId}">${coachPhotoGalleryInnerHtml(coachId, category, label, files)}</div>`;
+}
+async function refreshCoachPhotoSection(coachId, category, label) {
+  const { data: files } = await api(`/admin/coaches/${coachId}/certificate-files`);
+  const sec = document.getElementById(`coachPhotoSection-${category}-${coachId}`);
+  if (sec) sec.innerHTML = coachPhotoGalleryInnerHtml(coachId, category, label, files.filter(f => f.category === category));
+}
+async function uploadCoachPhotoFiles(coachId, category, label) {
+  const input = document.getElementById(`coachPhotoInput-${category}-${coachId}`);
+  const files = input && input.files ? Array.from(input.files) : [];
+  if (!files.length) return;
+  for (const file of files) {
+    const file_data = await _readFileAsDataUrl(file);
+    await api(`/admin/coaches/${coachId}/certificate-files`, {
+      method: "POST",
+      body: JSON.stringify({ category, file_name: file.name, mime_type: file.type, file_data }),
+    });
+  }
+  await refreshCoachPhotoSection(coachId, category, label);
+  const statusEl = document.getElementById(`coachPhotoStatus-${category}-${coachId}`);
+  if (statusEl) statusEl.innerHTML = `<span class="status-tag ok">已上傳並儲存</span>`;
+  if (category === "promo_photo") loadCoachTeam(); // 宣傳照可能會當作對外封面照,同步更新公開教練團隊列表
+}
+async function deleteCoachPhotoFile(coachId, fileId, category, label) {
+  if (!confirm("確定要刪除這張照片嗎?")) return;
+  await api(`/admin/coaches/${coachId}/certificate-files/${fileId}`, { method: "DELETE" });
+  await refreshCoachPhotoSection(coachId, category, label);
+  if (category === "promo_photo") loadCoachTeam();
 }
 
 function renderCoachPayrollSectionHtml(myPayroll) {
@@ -3608,6 +3658,7 @@ async function toggleCoachEdit(coachId) {
   const { data: details } = await api(`/admin/coaches/${coachId}/details`);
   const { data: capabilityOptions } = await api("/admin/capability-options");
   const { data: locationOptions } = await api("/admin/location-options");
+  const { data: certFiles } = await api(`/admin/coaches/${coachId}/certificate-files`);
 
   editWrap.innerHTML = `
     <label>姓名</label>
@@ -3694,10 +3745,8 @@ async function toggleCoachEdit(coachId) {
     <label style="margin-top:8px;">自我介紹/給學員的一句話</label>
     <input id="coachIntro-${coachId}" value="${(details.self_intro || "").replace(/"/g, '&quot;')}">
 
-    <label style="margin-top:8px;">宣傳照</label>
-    <input type="file" accept="image/*" id="coachPromoFile-${coachId}">
-    <label>證件照(僅供內部使用)</label>
-    <input type="file" accept="image/*" id="coachIdFile-${coachId}">
+    ${coachPhotoGallerySectionHtml(coachId, "promo_photo", "宣傳照上傳(可多張,對外顯示於教練團隊頁面,最早上傳的一張會當封面照)", certFiles)}
+    ${coachPhotoGallerySectionHtml(coachId, "id_photo", "證件照上傳(可多張,僅供內部使用)", certFiles)}
 
     <label style="margin-top:12px;">教練合約類型</label>
     <select id="coachContract-${coachId}">
@@ -3833,11 +3882,7 @@ async function saveCoachDetailsAdmin(coachId) {
   const resume = document.getElementById(`coachResumeYears-${coachId}`).value;
   const self_intro = document.getElementById(`coachIntro-${coachId}`).value;
   const experience = document.getElementById(`coachExperience-${coachId}`).value;
-  const promo_photo = await fileToBase64(document.getElementById(`coachPromoFile-${coachId}`));
-  const id_photo = await fileToBase64(document.getElementById(`coachIdFile-${coachId}`));
   const payload = { self_intro, experience, resume };
-  if (promo_photo) payload.promo_photo = promo_photo;
-  if (id_photo) payload.id_photo = id_photo;
   const { ok: ok2 } = await api(`/admin/coaches/${coachId}/profile`, { method: "PUT", body: JSON.stringify(payload) });
 
   document.getElementById(`coachDetailsStatus-${coachId}`).innerHTML = (ok1 && ok2)

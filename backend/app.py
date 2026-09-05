@@ -2122,10 +2122,20 @@ def demo_staff_list():
 # ------------------------------------------------------------------
 @app.route("/api/coaches", methods=["GET"])
 def list_coaches_public():
-    """公開:教練團隊介紹頁面(不含證件照)。"""
+    """公開:教練團隊介紹頁面(不含證件照)。
+    2026-09:宣傳照改成可多檔案上傳(存在coach_certificate_files,category='promo_photo'),
+    這裡對外只挑「最早上傳的那一張」當作封面照展示;如果教練還沒用新的多檔上傳功能重傳過,
+    就退回沿用coach_profiles.promo_photo這個舊欄位裡的資料(migration已經把舊資料複製一份
+    進coach_certificate_files,但保留這個退回機制多一層保險)。"""
     conn = get_conn()
     rows = conn.execute(
-        """SELECT s.id, s.name, s.display_code, cp.promo_photo, cp.self_intro, cp.resume, cp.experience, cp.rank
+        """SELECT s.id, s.name, s.display_code, cp.self_intro, cp.resume, cp.experience, cp.rank,
+                  COALESCE(
+                      (SELECT ccf.file_data FROM coach_certificate_files ccf
+                       WHERE ccf.coach_id = s.id AND ccf.category = 'promo_photo'
+                       ORDER BY ccf.uploaded_at ASC, ccf.id ASC LIMIT 1),
+                      cp.promo_photo
+                  ) AS promo_photo
            FROM staff s LEFT JOIN coach_profiles cp ON cp.coach_id = s.id
            WHERE s.role='coach' AND s.is_active=1"""
     ).fetchall()
@@ -2496,7 +2506,7 @@ def admin_update_coach_profile(coach_id):
     return jsonify({"ok": True})
 
 
-_CERT_FILE_CATEGORIES = ("ski_license", "related_license", "other_license")
+_CERT_FILE_CATEGORIES = ("ski_license", "related_license", "other_license", "promo_photo", "id_photo")
 
 
 @app.route("/api/admin/coaches/<int:coach_id>/certificate-files", methods=["GET"])

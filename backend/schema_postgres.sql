@@ -507,12 +507,16 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
     cert_level TEXT NOT NULL
 );
 
--- 教練證照「檔案」上傳(滑雪證照/相關證照/其他證照,每一類都可上傳多筆,圖片或PDF都收,
--- 做法比照coach_profiles.promo_photo/id_photo,直接把檔案內容以base64存進TEXT欄位)
+-- 教練檔案上傳(滑雪證照/相關證照/其他證照/宣傳照/證件照,每一類都可上傳多筆,圖片或PDF都收,
+-- 直接把檔案內容以base64存進TEXT欄位)。2026-09:原本只給三種證照類別使用,新增
+-- promo_photo(宣傳照)、id_photo(證件照,內部使用)兩個分類,讓這兩種照片也能改成
+-- 多檔案上傳(取代原本coach_profiles.promo_photo/id_photo只能各存一張的做法;那兩個
+-- 欄位保留不刪,當作舊資料備份,新版UI不再寫入)。CHECK約束的實際加寬動作由migration
+-- b7e1c4a9f603執行(ALTER TABLE重建約束),這裡的定義只是給重新建庫時參考的最新結構。
 CREATE TABLE IF NOT EXISTS coach_certificate_files (
     id SERIAL PRIMARY KEY,
     coach_id INTEGER NOT NULL REFERENCES staff(id),
-    category TEXT CHECK(category IN ('ski_license','related_license','other_license')) NOT NULL,
+    category TEXT CHECK(category IN ('ski_license','related_license','other_license','promo_photo','id_photo')) NOT NULL,
     file_name TEXT,
     mime_type TEXT,
     file_data TEXT NOT NULL,   -- base64(含data URI前綴)
