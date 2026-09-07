@@ -2123,6 +2123,10 @@ def demo_staff_list():
 @app.route("/api/coaches", methods=["GET"])
 def list_coaches_public():
     """公開:教練團隊介紹頁面(不含證件照)。
+    2026-09修正:原本這裡漏掉了教練自助頁面裡「自我介紹/給學員一句話/代表教練一句話」
+    這三個較新的欄位(bio_intro/message_to_students/coach_motto,是後來才加的,舊的
+    self_intro欄位加進來的時候還沒有這三個),導致教練在自己頁面填寫並存檔成功後,
+    公開的教練團隊頁面卻一直沒有跟著更新顯示——現在補上這三個欄位。
     2026-09:宣傳照改成可多檔案上傳(存在coach_certificate_files,category='promo_photo'),
     這裡對外只挑「最早上傳的那一張」當作封面照展示;如果教練還沒用新的多檔上傳功能重傳過,
     就退回沿用coach_profiles.promo_photo這個舊欄位裡的資料(migration已經把舊資料複製一份
@@ -2130,6 +2134,7 @@ def list_coaches_public():
     conn = get_conn()
     rows = conn.execute(
         """SELECT s.id, s.name, s.display_code, cp.self_intro, cp.resume, cp.experience, cp.rank,
+                  cp.bio_intro, cp.message_to_students, cp.coach_motto,
                   COALESCE(
                       (SELECT ccf.file_data FROM coach_certificate_files ccf
                        WHERE ccf.coach_id = s.id AND ccf.category = 'promo_photo'
@@ -2473,6 +2478,14 @@ def admin_update_coach_profile(coach_id):
     bio_intro = (d.get("bio_intro") or "")[:30] or None if "bio_intro" in d else None
     message_to_students = (d.get("message_to_students") or "")[:30] or None if "message_to_students" in d else None
     coach_motto = (d.get("coach_motto") or "")[:30] or None if "coach_motto" in d else None
+    # 2026-09修正:discipline欄位有CHECK(IN 'ski'/'snowboard'/'both')限制,但教練自助頁面
+    # 的「滑行項目」下拉選單預設是空字串(未選擇)——如果教練還沒選滑行項目就先填寫自我介紹
+    # /給學員一句話/代表教練一句話並按儲存,前端會把discipline:""一起送過來,違反這個CHECK
+    # 讓整支INSERT直接失敗、連同一次送出的bio_intro/message_to_students/coach_motto也全部
+    # 沒存到,教練會看到「部分儲存失敗」——這是造成「教練自己頁面填好資料存檔,但教練團隊
+    # 頁面一直沒更新」這個問題的根本原因之一。修法:空字串一律當成「這次沒有要改」處理,
+    # 比照上面bio_intro等欄位的做法轉成None,搭配下面COALESCE語法就會保留原本的值不去動它。
+    discipline = d.get("discipline") or None
     conn = get_conn()
     conn.execute(
         f"""INSERT INTO coach_profiles (coach_id, promo_photo, id_photo, self_intro, resume, experience,
@@ -2493,7 +2506,7 @@ def admin_update_coach_profile(coach_id):
              coach_motto=COALESCE(excluded.coach_motto, coach_profiles.coach_motto),
              updated_at={NOW_SQL}""",
         (coach_id, d.get("promo_photo"), d.get("id_photo"), d.get("self_intro"), d.get("resume"), d.get("experience"),
-         d.get("discipline"), d.get("specialty"), d.get("snow_years"), d.get("other_experience"),
+         discipline, d.get("specialty"), d.get("snow_years"), d.get("other_experience"),
          bio_intro, message_to_students, coach_motto),
     )
     conn.execute(

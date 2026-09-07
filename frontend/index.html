@@ -4937,8 +4937,10 @@ async function loadCoachTeam() {
         </div>` : ""}
       ${c.resume ? `<p class="note"><b>資歷</b>:${c.resume}年</p>` : ""}
       ${c.experience ? `<p class="note"><b>經歷</b>:${c.experience}</p>` : ""}
-      ${c.self_intro ? `<p class="note"><b>自我介紹</b>:${c.self_intro}</p>` : ""}
-      ${!c.resume && !c.experience && !c.self_intro ? `<p class="note">尚未填寫自我介紹</p>` : ""}
+      ${c.bio_intro ? `<p class="note"><b>自我介紹</b>:${c.bio_intro}</p>` : (c.self_intro ? `<p class="note"><b>自我介紹</b>:${c.self_intro}</p>` : "")}
+      ${c.message_to_students ? `<p class="note"><b>給學員的一句話</b>:${c.message_to_students}</p>` : ""}
+      ${c.coach_motto ? `<p class="note" style="font-style:italic;">「${c.coach_motto}」</p>` : ""}
+      ${!c.resume && !c.experience && !c.bio_intro && !c.self_intro && !c.message_to_students && !c.coach_motto ? `<p class="note">尚未填寫自我介紹</p>` : ""}
     </div>
   `).join("") + `</div>` || `<p class="note">尚無教練資料</p>`;
 }
