@@ -623,6 +623,9 @@ def admin_update_pricing_config(config_key):
     return jsonify({"ok": True})
 
 
+_EMPTY_BANK_ACCOUNT = {"bank_name": "", "bank_code": "", "account_number": "", "account_name": "", "note": ""}
+
+
 @app.route("/api/pricing", methods=["GET"])
 def get_pricing():
     return jsonify({
@@ -641,6 +644,17 @@ def get_pricing():
         "plan_fee": pricing.get_config("plan_fee"),
         "booking_window_days": pricing.get_config("booking_window_days"),
         "japan_season_months": sorted(pricing.JAPAN_SEASON_MONTHS),
+        # 2026-09新增:匯款帳號(室內/日本分開設定),客戶選「匯款轉帳」付款時前端要顯示這個
+        # 給客戶看。用get_config的default參數保險,就算後台還沒去填、甚至這支migration還沒
+        # 跑過,也不會整支/api/pricing直接壞掉,只是先顯示成空白帳號。
+        "bank_account_indoor": pricing.get_config("bank_account_indoor", dict(_EMPTY_BANK_ACCOUNT)),
+        "bank_account_japan": pricing.get_config("bank_account_japan", dict(_EMPTY_BANK_ACCOUNT)),
+        # 2026-09新增:線上刷卡/網路ATM是否真的有串接綠界(config.ECPAY_CONFIGURED)。
+        # 沒有串接時,MockPaymentProvider選「線上刷卡」會直接回傳confirmed(沒有真的收到錢
+        # 就標記已付款)——這是回報「付款時沒有地方可以刷卡」的根本原因之一:因為根本沒有
+        # 真的走到刷卡頁面。前端要依這個旗標決定要不要顯示「線上刷卡」「網路ATM」這兩個選項,
+        # 避免客戶選了之後訂單被誤標記為已付款、但校方實際上沒收到錢。
+        "online_card_available": config.ECPAY_CONFIGURED,
     })
 
 

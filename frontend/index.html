@@ -917,12 +917,13 @@
     <p class="note">應付金額</p>
     <div class="price-tag" id="paymentAmountDisplay" style="font-size:16px;"></div>
     <label>付款方式</label>
-    <select id="paymentMethod">
+    <select id="paymentMethod" onchange="updatePaymentMethodHint()">
       <option value="online_card">線上刷卡(信用卡)</option>
       <option value="webatm">網路ATM</option>
       <option value="onsite">現場付款</option>
       <option value="bank_transfer">匯款轉帳</option>
     </select>
+    <div id="bankTransferHint" style="display:none; margin-top:8px; padding:10px; background:#f6f7f9; border-radius:8px; font-size:13px; line-height:1.6;"></div>
     <button onclick="confirmPaymentModal()">確認付款</button>
     <button class="secondary" onclick="closePaymentModal()">稍後付款</button>
   </div>
@@ -967,15 +968,56 @@ function requestPayment(amount, ref_type, ref_id) {
   if (!amount || amount <= 0) return; // 免付費項目(例如額度內預約、團課)不跳付款
   _pendingPayment = { amount, ref_type, ref_id };
   document.getElementById("paymentAmountDisplay").textContent = `NT$ ${amount}`;
+  // 2026-09修正:線上刷卡/網路ATM如果校方還沒實際串接綠界(config.ECPAY_CONFIGURED為false),
+  // 選這兩個選項後台只會直接假裝付款完成(沒有真的收到錢),之前完全沒有地方能讓客戶輸入
+  // 卡號、也沒有真的收到款項卻顯示「付款完成」——這是「付款時沒有地方可以刷卡」這個問題的
+  // 根本原因之一。修法:依/api/pricing回傳的online_card_available旗標,沒有真的串接時就不要
+  // 顯示這兩個選項,只留「現場付款」「匯款轉帳」這兩個本來就是人工核對、不會出錯的方式。
+  const select = document.getElementById("paymentMethod");
+  const onlineCardAvailable = !!(pricingData && pricingData.online_card_available);
+  Array.from(select.options).forEach(opt => {
+    opt.hidden = (opt.value === "online_card" || opt.value === "webatm") && !onlineCardAvailable;
+  });
+  select.value = onlineCardAvailable ? "online_card" : "onsite";
+  updatePaymentMethodHint();
   document.getElementById("paymentOverlay").style.display = "flex";
 }
 function closePaymentModal() {
   document.getElementById("paymentOverlay").style.display = "none";
   _pendingPayment = null;
 }
+function bankAccountConfigForPending() {
+  if (!_pendingPayment || !pricingData) return null;
+  const key = _pendingPayment.ref_type === "japan_booking" ? "bank_account_japan" : "bank_account_indoor";
+  return pricingData[key] || null;
+}
+function bankAccountHintHtml(acc) {
+  if (!acc || !acc.account_number) {
+    return `<p class="note" style="margin:0;">校方尚未設定匯款帳號,請改選其他付款方式,或洽詢客服取得匯款資訊。</p>`;
+  }
+  return `
+    <div><b>銀行</b>:${acc.bank_name || ""}${acc.bank_code ? `(代碼 ${acc.bank_code})` : ""}</div>
+    <div><b>帳號</b>:${acc.account_number}</div>
+    <div><b>戶名</b>:${acc.account_name || ""}</div>
+    ${acc.note ? `<div class="note" style="margin-top:4px;">${acc.note}</div>` : ""}
+  `;
+}
+function updatePaymentMethodHint() {
+  const method = document.getElementById("paymentMethod").value;
+  const hint = document.getElementById("bankTransferHint");
+  if (method === "bank_transfer") {
+    hint.style.display = "block";
+    hint.innerHTML = `<p class="note" style="margin:0 0 4px;"><b>請匯款至以下帳戶,匯款後將由客服核對入帳:</b></p>` + bankAccountHintHtml(bankAccountConfigForPending());
+  } else {
+    hint.style.display = "none";
+  }
+}
 async function confirmPaymentModal() {
   if (!_pendingPayment) return;
   const payment_method = document.getElementById("paymentMethod").value;
+  // 匯款轉帳:先把帳號資訊記下來,因為送出成功後_pendingPayment會被清空,
+  // 付款完成的提示訊息還需要再顯示一次帳號給客戶對照。
+  const bankAccountForMessage = payment_method === "bank_transfer" ? bankAccountConfigForPending() : null;
   const { ok, data } = await api("/payments/create", {
     method: "POST",
     body: JSON.stringify({
@@ -997,8 +1039,17 @@ async function confirmPaymentModal() {
   document.getElementById("paymentOverlay").style.display = "none";
   _pendingPayment = null;
   if (ok) {
-    if (data.status === "confirmed") alert("付款完成!");
-    else alert("已登記付款,待客服核對入帳後即完成確認。");
+    if (data.status === "confirmed") {
+      alert("付款完成!");
+    } else if (payment_method === "bank_transfer") {
+      const acc = bankAccountForMessage;
+      const accText = acc && acc.account_number
+        ? `\n\n匯款帳戶:\n銀行:${acc.bank_name || ""}${acc.bank_code ? `(代碼${acc.bank_code})` : ""}\n帳號:${acc.account_number}\n戶名:${acc.account_name || ""}`
+        : "";
+      alert("已登記匯款轉帳,請盡快完成匯款,匯款後將由客服核對入帳。" + accText);
+    } else {
+      alert("已登記付款,待客服核對入帳後即完成確認。");
+    }
   } else {
     alert(data && data.error ? data.error : "付款失敗,請稍後再試或洽詢客服。");
   }
@@ -2178,14 +2229,43 @@ async function doCheckIn(kind, id, attendance_status, hasCodeProgress) {
   else alert(data.error);
 }
 
+const _BANK_ACCOUNT_CONFIG_KEYS = ["bank_account_indoor", "bank_account_japan"];
+const _BANK_ACCOUNT_LABELS = { bank_account_indoor: "室內雪機/包機/體驗課/跳台體驗/團課", bank_account_japan: "日本教練課" };
+
 async function renderPricingConfigTools() {
   const wrap = document.getElementById("staffTab-pricing");
   const { data: configs } = await api("/admin/pricing-config");
+  const bankConfigs = configs.filter(c => _BANK_ACCOUNT_CONFIG_KEYS.includes(c.config_key));
+  const otherConfigs = configs.filter(c => !_BANK_ACCOUNT_CONFIG_KEYS.includes(c.config_key));
 
-  let html = `<h3 style="margin-top:16px; font-size:14px;">價格設定(主管/老闆)</h3>
+  let html = `<h3 style="margin-top:16px; font-size:14px;">匯款帳號設定(主管/老闆)</h3>
+    <p class="note">客戶付款時選擇「匯款轉帳」,會直接看到這裡設定的帳號。室內雪機跟日本教練課分開設定,方便對帳。</p>`;
+
+  html += bankConfigs.map(c => {
+    let acc = {};
+    try { acc = JSON.parse(c.config_value) || {}; } catch (e) { acc = {}; }
+    const key = c.config_key;
+    return `
+    <div class="person-card">
+      <b>${_BANK_ACCOUNT_LABELS[key] || c.label || key}</b>
+      ${c.updated_at ? `<p class="note">最後更新:${c.updated_at}</p>` : ""}
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>銀行名稱</label><input id="bankName-${key}" value="${(acc.bank_name || "").replace(/"/g,'&quot;')}" placeholder="例如:中國信託"></div>
+        <div><label>銀行代碼</label><input id="bankCode-${key}" value="${(acc.bank_code || "").replace(/"/g,'&quot;')}" placeholder="例如:822"></div>
+        <div><label>帳號</label><input id="bankAccountNumber-${key}" value="${(acc.account_number || "").replace(/"/g,'&quot;')}"></div>
+        <div><label>戶名</label><input id="bankAccountName-${key}" value="${(acc.account_name || "").replace(/"/g,'&quot;')}"></div>
+      </div>
+      <label style="margin-top:8px;">備註(選填,會一起顯示給客戶,例如「匯款後請提供末五碼」)</label>
+      <input id="bankNote-${key}" value="${(acc.note || "").replace(/"/g,'&quot;')}">
+      <button class="small" style="margin-top:8px;" onclick="saveBankAccountConfig('${key}')">儲存</button>
+      <div id="bankAccountStatus-${key}" style="margin-top:6px;"></div>
+    </div>`;
+  }).join("");
+
+  html += `<h3 style="margin-top:16px; font-size:14px;">價格設定(主管/老闆)</h3>
     <p class="note">直接編輯下方JSON內容即可調整價格,儲存後立即生效(下一筆新預約就會套用新價格)。修改前建議先了解JSON格式,避免打錯字。</p>`;
 
-  html += configs.map(c => `
+  html += otherConfigs.map(c => `
     <div class="person-card">
       <b>${c.label || c.config_key}</b>
       <p class="note">鍵值:${c.config_key}${c.updated_at ? `・最後更新:${c.updated_at}` : ""}</p>
@@ -2196,6 +2276,21 @@ async function renderPricingConfigTools() {
   `).join("");
 
   wrap.innerHTML = html;
+}
+async function saveBankAccountConfig(key) {
+  const value = {
+    bank_name: document.getElementById(`bankName-${key}`).value,
+    bank_code: document.getElementById(`bankCode-${key}`).value,
+    account_number: document.getElementById(`bankAccountNumber-${key}`).value,
+    account_name: document.getElementById(`bankAccountName-${key}`).value,
+    note: document.getElementById(`bankNote-${key}`).value,
+  };
+  const { ok, data } = await api(`/admin/pricing-config/${key}`, {
+    method: "PUT", body: JSON.stringify({ config_value: value })
+  });
+  document.getElementById(`bankAccountStatus-${key}`).innerHTML = ok
+    ? `<span class="status-tag ok">已儲存,立即生效</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) { pricingData = null; await ensurePricing(); }
 }
 async function savePricingConfig(key) {
   const value = document.getElementById(`pricingVal-${key}`).value;

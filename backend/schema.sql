@@ -709,7 +709,9 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
  ('indoor_start_hour', '10', '室內滑雪機台每日開始營業時間(整點)'),
  ('indoor_last_start_hour', '20', '室內滑雪機台每日最後一堂開課時間(整點)'),
  ('min_advance_booking_hours', '2', '當天課程最少須提前幾小時預約'),
- ('booking_window_days', '30', '體驗/自主練習/團課開放未來幾天內預約');
+ ('booking_window_days', '30', '體驗/自主練習/團課開放未來幾天內預約'),
+ ('bank_account_indoor', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(室內雪機/包機/體驗課/跳台體驗/團課,匯款轉帳付款時顯示給客戶)'),
+ ('bank_account_japan', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(日本教練課,匯款轉帳付款時顯示給客戶)');
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES
