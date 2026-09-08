@@ -1545,6 +1545,27 @@ def _ecpay_item_name_for(ref_type):
     }.get(ref_type, "捷可思滑雪學校訂單")
 
 
+def _online_card_eligible(conn, ref_type, ref_id):
+    """2026-09依營運規則新增:目前只有「室內滑雪團課」開放客戶直接用信用卡
+    透過綠界即時扣款,其他項目(包機/體驗/自主練習/跳台/日本滑雪)如果客戶
+    選信用卡,一律請客戶洽詢客服協助處理,不透過綠界直接扣款——這是業主
+    刻意的營運決定(這些項目可能牽涉到客服人工核對名額/折扣/特殊安排,
+    不適合完全無人工介入就直接扣款),不是技術限制。
+
+    這裡刻意不信任前端傳來的任何「這是不是團課」的資訊,一律回頭查資料庫
+    裡這筆訂單實際對應的indoor_sessions.category欄位,做法比照這支route
+    其他地方「金額一律看資料庫,不採信前端」的原則,避免有心人繞過前端
+    限制直接呼叫API。
+
+    注意:這個限制目前只套用在「信用卡」(online_card)這個付款方式本身,
+    不影響「網路ATM」(webatm)——如果之後也要比照辦理,呼叫端記得一併調整。
+    """
+    if ref_type != "indoor_session":
+        return False
+    row = conn.execute("SELECT category FROM indoor_sessions WHERE id=?", (ref_id,)).fetchone()
+    return bool(row) and row["category"] == "group_class"
+
+
 @app.route("/api/payments/create", methods=["POST"])
 def create_payment():
     from payments import active_provider, EcpayProvider
@@ -1570,6 +1591,15 @@ def create_payment():
         if order["status"] != "pending":
             return jsonify({"error": "此訂單已完成付款或已取消,無法重複付款"}), 409
         amount = order["amount"]  # 一律用資料庫裡的金額,忽略前端傳來的amount
+
+        # 2026-09依營運規則新增:「信用卡」目前只開放室內滑雪團課直接扣款,
+        # 其他項目一律請客戶洽詢客服(見_online_card_eligible()說明)。
+        # 前端已經會依booking種類把這個選項導向不同行為,這裡是最後一道
+        # 防線,避免有人直接打API繞過前端限制。
+        if payment_method == "online_card" and not _online_card_eligible(conn, ref_type, ref_id):
+            return jsonify({
+                "error": "此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或選擇「現場付款」/「匯款轉帳」完成付款。"
+            }), 400
 
         # 防止「同一筆訂單被重複產生多筆導向式付款單」:如果會員先前已經按過付款、
         # 產生了一筆同樣付款方式的pending付款單但還沒完成(例如付款頁面按到一半又

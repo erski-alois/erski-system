@@ -964,9 +964,14 @@ let myCompanions = [];
 let myProfile = {};
 let _pendingPayment = null;
 
-function requestPayment(amount, ref_type, ref_id) {
+function requestPayment(amount, ref_type, ref_id, cardEligible) {
   if (!amount || amount <= 0) return; // 免付費項目(例如額度內預約、團課)不跳付款
-  _pendingPayment = { amount, ref_type, ref_id };
+  // 2026-09依你的要求新增:cardEligible代表「這筆訂單能不能直接用信用卡走綠界即時扣款」,
+  // 目前只有「室內滑雪團課」(joinGroupClass呼叫時傳true)是true,其他呼叫端
+  // (體驗/自主練習/包機/跳台/日本滑雪)都傳false——選信用卡會請客戶洽詢客服,
+  // 不會真的導去綠界付款頁面。這裡只是前端UI判斷用,後端create_payment()一律會
+  // 重新查資料庫確認一次,不會單純採信這裡傳的值。
+  _pendingPayment = { amount, ref_type, ref_id, cardEligible: !!cardEligible };
   document.getElementById("paymentAmountDisplay").textContent = `NT$ ${amount}`;
   // 2026-09修正:線上刷卡/網路ATM如果校方還沒實際串接綠界(config.ECPAY_CONFIGURED為false),
   // 選這兩個選項後台只會直接假裝付款完成(沒有真的收到錢),之前完全沒有地方能讓客戶輸入
@@ -978,7 +983,10 @@ function requestPayment(amount, ref_type, ref_id) {
   Array.from(select.options).forEach(opt => {
     opt.hidden = (opt.value === "online_card" || opt.value === "webatm") && !onlineCardAvailable;
   });
-  select.value = onlineCardAvailable ? "online_card" : "onsite";
+  // 只有「有開放線上刷卡」且「這筆訂單本身也開放直接刷卡(目前只有室內滑雪團課)」
+  // 兩個條件都成立時,才預設選信用卡;其他情況一律預設現場付款,信用卡選項還是
+  // 留著讓客戶可以選,但選了會看到「請洽詢客服」的提示,不會直接導去綠界。
+  select.value = (onlineCardAvailable && cardEligible) ? "online_card" : "onsite";
   updatePaymentMethodHint();
   document.getElementById("paymentOverlay").style.display = "flex";
 }
@@ -1008,6 +1016,12 @@ function updatePaymentMethodHint() {
   if (method === "bank_transfer") {
     hint.style.display = "block";
     hint.innerHTML = `<p class="note" style="margin:0 0 4px;"><b>請匯款至以下帳戶,匯款後將由客服核對入帳:</b></p>` + bankAccountHintHtml(bankAccountConfigForPending());
+  } else if (method === "online_card" && _pendingPayment && !_pendingPayment.cardEligible) {
+    // 2026-09依你的要求新增:目前只有室內滑雪團課開放直接刷卡,其他項目選信用卡
+    // 一律提醒客戶洽詢客服,不會真的導去綠界付款頁面(送出後後端也會擋下來,
+    // 這裡先在畫面上提早提醒,不用等客戶按下確認付款才知道)。
+    hint.style.display = "block";
+    hint.innerHTML = `<p class="note" style="margin:0;"><b>此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選「現場付款」/「匯款轉帳」直接完成付款。</b></p>`;
   } else {
     hint.style.display = "none";
   }
@@ -1015,6 +1029,12 @@ function updatePaymentMethodHint() {
 async function confirmPaymentModal() {
   if (!_pendingPayment) return;
   const payment_method = document.getElementById("paymentMethod").value;
+  if (payment_method === "online_card" && !_pendingPayment.cardEligible) {
+    // 提早擋下來,不用打API(後端create_payment()也會擋,這裡只是讓客戶不用多等一次
+    // 網路來回就知道要洽詢客服)。不關閉付款彈窗,讓客戶可以直接改選其他付款方式。
+    alert("此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選「現場付款」/「匯款轉帳」完成付款。");
+    return;
+  }
   // 匯款轉帳:先把帳號資訊記下來,因為送出成功後_pendingPayment會被清空,
   // 付款完成的提示訊息還需要再顯示一次帳號給客戶對照。
   const bankAccountForMessage = payment_method === "bank_transfer" ? bankAccountConfigForPending() : null;
@@ -4524,7 +4544,7 @@ async function submitTrial(dateStr, hour) {
     method: "POST",
     body: JSON.stringify({ member_id: currentMemberId, booking_date: dateStr, start_hour: hour, headcount, equipment_type, participants })
   });
-  if (ok) { requestPayment(data.price, "indoor_session", data.id); invalidateAllMachineCalendars(); loadAccountOverview(); }
+  if (ok) { requestPayment(data.price, "indoor_session", data.id, false); invalidateAllMachineCalendars(); loadAccountOverview(); }
   else alert(data.error);
 }
 
@@ -4546,7 +4566,7 @@ async function submitSelfPractice(dateStr, hour) {
     body: JSON.stringify({ member_id: currentMemberId, booking_date: dateStr, start_hour: hour, duration_minutes, headcount, equipment_type, participants, use_plan_quota })
   });
   if (ok) {
-    if (!data.quota_consumed) requestPayment(data.price, "indoor_session", data.id);
+    if (!data.quota_consumed) requestPayment(data.price, "indoor_session", data.id, false);
     else alert("已使用方案額度預約,免費完成!");
     invalidateAllMachineCalendars(); loadAccountOverview(); loadSelfQuotaStatus();
   }
@@ -4656,7 +4676,7 @@ async function purchaseCharterPass() {
   const { data: purchase } = await api("/charter/purchase", {
     method: "POST", body: JSON.stringify({ member_id: currentMemberId, package_size, headcount_type, equipment_type })
   });
-  requestPayment(purchase.price, "charter_order", purchase.order_id);
+  requestPayment(purchase.price, "charter_order", purchase.order_id, false);
   await refreshMyCharterPasses();
 }
 async function bookWithExistingCharterPass(dateStr, hour) {
@@ -4727,7 +4747,7 @@ async function submitJump(dateStr, hour) {
       start_time: `${String(hour).padStart(2,"0")}:00`, duration_minutes, equipment_type, participants,
     })
   });
-  if (ok) { requestPayment(data.price, "jump_booking", data.id); invalidateCalendar("jump","jumpDatePicker","jumpCalendarWrap",loadJumpDay); loadAccountOverview(); }
+  if (ok) { requestPayment(data.price, "jump_booking", data.id, false); invalidateCalendar("jump","jumpDatePicker","jumpCalendarWrap",loadJumpDay); loadAccountOverview(); }
   else alert(data.error);
 }
 
@@ -4827,7 +4847,7 @@ async function joinGroupClass(dateStr, hour) {
   });
   if (ok) {
     alert(`報名成功!目前 ${data.enrolled_count}/${data.min_required} 人(滿${data.min_required}開課)`);
-    requestPayment(data.price, "indoor_session", data.session_id);
+    requestPayment(data.price, "indoor_session", data.session_id, true);  // 室內滑雪團課:目前唯一開放直接刷卡的項目
     invalidateAllMachineCalendars(); loadAccountOverview();
   }
   else { alert(data.error); loadMyPlanStatus(); }
@@ -4989,7 +5009,7 @@ async function submitJapanTrip() {
     rangeCalendarState.start = null;
     rangeCalendarState.end = null;
     invalidateJapanCalendar();
-    requestPayment(data.first_pay_amount, "japan_booking", data.booking_ids[0]);
+    requestPayment(data.first_pay_amount, "japan_booking", data.booking_ids[0], false);
     loadAccountOverview();
   } else {
     alert(data.error);
