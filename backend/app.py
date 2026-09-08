@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory, Response, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 import functools
 import os
 import json
@@ -14,6 +15,28 @@ import config
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
+# 2026-09發現的問題:Render(以及大多數雲端平台)是在自己的邊緣負載平衡器
+# 終止HTTPS,再用「一般HTTP」把請求轉送進我們這支gunicorn應用程式,
+# 但同時會附上X-Forwarded-Proto: https這個標頭告訴我們「客戶端原本是用
+# https連進來的」。Flask/Werkzeug預設完全不會信任這個標頭——如果沒有
+# 額外處理,request.url_root/request.scheme拿到的一律會是內部那段轉送
+# 用的'http',不是客戶端實際使用的'https'。
+# 這支程式裡「綠界(ECPay)信用卡/網路ATM付款」的ReturnURL/PaymentInfoURL/
+# ClientBackURL,就是直接用request.url_root組出來的(見ecpay_checkout_form)。
+# 沒有這行修正的話,正式環境送給綠界的ReturnURL會是「http://app.erskischool.com/...」
+# 而不是正確的「https://app.erskischool.com/...」——這很可能正是「線上刷卡/
+# 網路ATM沒辦法正常付款」的根本原因之一:綠界對於正式特約商店的callback網址
+# 有可能要求必須是https(不同付款方式/簽約條件規定不盡相同,但用http位址
+# 絕對是不正常、不該發生的狀況),就算綠界那邊沒有直接擋掉,Render預設也會把
+# 打進來的http請求導向https(301/308轉址),而綠界的伺服器對伺服器callback
+# 多半不會、也不應該跟著3xx轉址走完整個流程,导致我們永遠收不到綠界回報
+# 「已收到款項」的webhook通知,訂單會一直卡在「等待中」,即使客戶其實已經
+# 被綠界實際扣款成功。
+# ProxyFix(x_proto=1, x_host=1)讓Werkzeug只信任「離我們最近的那一層」代理
+# (也就是Render自己的邊緣,不是任意上游都能偽造),用它回報的X-Forwarded-Proto/
+# X-Forwarded-Host重建出正確的request.url_root等於'https://app.erskischool.com/'。
+# 本機開發(沒有Render這層代理、也沒有這些標頭)完全不受影響,行為不變。
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 
 # ------------------------------------------------------------------
