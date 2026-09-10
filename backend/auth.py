@@ -4,9 +4,29 @@
 """
 
 import hashlib
+import re
 import secrets
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import get_conn
+
+# 註冊資料格式驗證(2026-09:依需求「註冊手機得防止客人輸入無效號碼及無效Email」新增)。
+# Email用最基本的「有@、@後面有網域含.」規則,不用太嚴格(嚴格的RFC5322正規表示式反而
+# 常常誤擋合法信箱),主要是擋明顯打錯/亂打的情況。
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# 手機只接受台灣手機號碼格式:09開頭、共10碼數字。輸入時允許夾雜空格或「-」
+# (例如 0912-345-678),驗證前由呼叫端先去掉這些符號。
+_TW_PHONE_RE = re.compile(r"^09\d{8}$")
+
+
+def is_valid_email(email: str) -> bool:
+    return bool(email) and bool(_EMAIL_RE.match(email.strip()))
+
+
+def is_valid_tw_phone(phone: str) -> bool:
+    if not phone:
+        return False
+    digits = re.sub(r"[\s-]", "", phone)
+    return bool(_TW_PHONE_RE.match(digits))
 
 
 def hash_password(raw: str) -> str:
@@ -60,13 +80,34 @@ def mock_oauth_login(provider: str, mock_external_id: str) -> dict:
 
 
 def create_member(data: dict) -> dict:
+    """建立新會員(正式註冊,不是demo快速登入)。姓名/手機/Email是前台註冊表單一定會
+    收集的三項基本資料,這裡統一做格式驗證,不能只靠前端檢查——前端的檢查繞得過去
+    (例如直接呼叫API),後端才是真正把關的地方。驗證不過一律丟ValueError,呼叫端
+    (app.py)接住後回傳400跟錯誤訊息給前端顯示。"""
+    name = (data.get("name") or "").strip()
+    phone = re.sub(r"[\s-]", "", data.get("phone") or "")
+    email = (data.get("email") or "").strip()
+    auth_provider = data.get("auth_provider")
+
+    if not name:
+        raise ValueError("請輸入姓名")
+    if not is_valid_tw_phone(phone):
+        raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
+    if not is_valid_email(email):
+        raise ValueError("Email格式不正確,請重新輸入")
+
     conn = get_conn()
+    existing = conn.execute("SELECT id FROM members WHERE email=?", (email,)).fetchone()
+    if existing:
+        conn.close()
+        raise ValueError("此Email已經註冊過會員,請直接使用登入方式登入,或改用其他Email註冊")
+
     cur = conn.execute(
         """INSERT INTO members (name, phone, line_user_id, email, auth_provider)
            VALUES (?, ?, ?, ?, ?)""",
         (
-            data["name"], data.get("phone"),
-            data.get("line_user_id"), data.get("email"), data["auth_provider"],
+            name, phone,
+            data.get("line_user_id"), email, auth_provider,
         ),
     )
     conn.commit()

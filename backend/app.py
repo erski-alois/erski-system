@@ -257,7 +257,10 @@ def oauth_login():
 
 @app.route("/api/auth/create-member", methods=["POST"])
 def create_member():
-    member = auth.create_member(request.json)
+    try:
+        member = auth.create_member(request.json)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     conn = get_conn()
     conn.execute(
         """INSERT INTO notifications (member_id, channel, notify_type, content, status)

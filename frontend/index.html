@@ -389,15 +389,18 @@
           <p class="hint" style="text-align:center; font-size:11.5px; color:#a39d90;">示範用途:登入方式皆為模擬,點選即完成登入。</p>
 
           <div class="form-footer-note">
-            還不是會員？ <a onclick="alert('示範用途:此為模擬畫面,請直接用登入方式體驗')">立即註冊</a>
+            還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
           </div>
           <a class="staff-link-jp" onclick="openCoachLogin()">🎿 教練登入(教練專屬頁面) →</a>
           <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(客服/主管/老闆) →</a>
 
           <div id="memberCreateForm" style="display:none; text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">
             <h3 style="font-size:14px;">建立會員資料</h3>
-            <label>姓名</label><input id="mName" value="王小明">
-            <label>電話</label><input id="mPhone" value="0912345678">
+            <p class="note" style="margin-top:-4px;">請填寫姓名、手機、Email 完成註冊,其餘個人資料(出生年月日、地址、緊急聯絡人等)註冊完成後可以到「會員中心」隨時補上。</p>
+            <label>姓名</label><input id="mName" placeholder="請輸入姓名">
+            <label>手機號碼</label><input id="mPhone" placeholder="例如:0912345678" inputmode="numeric">
+            <label>Email</label><input id="mEmail" placeholder="you@example.com" type="email">
+            <div id="memberCreateStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
             <button onclick="createMember()">完成建立會員</button>
           </div>
         </div>
@@ -897,7 +900,7 @@
         <div class="nav-flat" onclick="switchPage('faq', null)">常見問題</div>
       </div>
       <div class="nav-group">
-        <div class="nav-flat" onclick="switchPage('center', null)">會員中心</div>
+        <div class="nav-flat" id="navflat-center" onclick="switchPage('center', null)">會員中心</div>
       </div>
     </div>
   </div>
@@ -1118,6 +1121,14 @@ async function oauthLogin(provider) {
     method: "POST", body: JSON.stringify({ provider, mock_external_id })
   });
   if (data.is_new) {
+    // Google/Apple的mock external id本身就是Email格式,可以直接帶入Email欄位;
+    // LINE沒有Email,欄位留空讓使用者自己輸入(註冊還是要收集Email聯絡方式)。
+    const looksLikeEmail = isValidEmail(mock_external_id);
+    document.getElementById("mName").value = "";
+    document.getElementById("mPhone").value = "";
+    document.getElementById("mEmail").value = looksLikeEmail ? mock_external_id : "";
+    document.getElementById("mEmail").readOnly = false;
+    document.getElementById("memberCreateStatus").textContent = "";
     document.getElementById("memberCreateForm").style.display = "block";
     window._pendingProvider = provider;
     window._pendingExternalId = mock_external_id;
@@ -1144,6 +1155,13 @@ async function oauthLoginWithEmail(email) {
     method: "POST", body: JSON.stringify({ provider: "email", mock_external_id: email })
   });
   if (data.is_new) {
+    // 這個路徑是先在登入畫面輸入信箱、系統查不到才視為新會員,Email已經確定
+    // 是這次登入/註冊的識別碼,鎖起來不能再改,避免跟後面is_new判斷的信箱不一致。
+    document.getElementById("mName").value = "";
+    document.getElementById("mPhone").value = "";
+    document.getElementById("mEmail").value = email;
+    document.getElementById("mEmail").readOnly = true;
+    document.getElementById("memberCreateStatus").textContent = "";
     document.getElementById("memberCreateForm").style.display = "block";
     window._pendingProvider = "email";
     window._pendingExternalId = email;
@@ -1154,19 +1172,67 @@ async function oauthLoginWithEmail(email) {
   }
 }
 
+// 直接點「立即註冊」進來的路徑:還沒有先透過登入欄位確認過信箱是否為新會員,
+// 三個欄位(姓名/手機/Email)都是空白、可以自己填,送出時才交給後端做is_new判斷
+// (Email重複的話,create-member那支API會回傳錯誤訊息,而不是靜默覆蓋既有會員)。
+function openRegisterForm() {
+  document.getElementById("mName").value = "";
+  document.getElementById("mPhone").value = "";
+  document.getElementById("mEmail").value = "";
+  document.getElementById("mEmail").readOnly = false;
+  document.getElementById("memberCreateStatus").textContent = "";
+  window._pendingProvider = "email";
+  window._pendingExternalId = null;
+  const form = document.getElementById("memberCreateForm");
+  form.style.display = "block";
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// 台灣手機號碼格式驗證:允許使用者輸入時夾雜空格或「-」(例如 0912-345-678),
+// 驗證前先去掉這些符號,只認可「09開頭、共10碼數字」這個最常見的手機格式;
+// 市話/國際格式目前不開放註冊用,因為簡訊/電話聯繫都是用台灣手機號碼。
+function isValidTwPhone(phone) {
+  const digits = (phone || "").replace(/[\s-]/g, "");
+  return /^09\d{8}$/.test(digits);
+}
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || "").trim());
+}
+
 async function createMember() {
-  const { data } = await api("/auth/create-member", {
-    method: "POST",
-    body: JSON.stringify({
-      name: document.getElementById("mName").value,
-      phone: document.getElementById("mPhone").value,
-      auth_provider: window._pendingProvider,
-      [window._pendingProvider === "line" ? "line_user_id" : "email"]: window._pendingExternalId,
-    })
+  const name = document.getElementById("mName").value.trim();
+  const phone = document.getElementById("mPhone").value.replace(/[\s-]/g, "");
+  const email = document.getElementById("mEmail").value.trim();
+  const statusEl = document.getElementById("memberCreateStatus");
+  statusEl.textContent = "";
+
+  if (!name) { statusEl.textContent = "請輸入姓名"; return; }
+  if (!isValidTwPhone(phone)) { statusEl.textContent = "手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)"; return; }
+  if (!isValidEmail(email)) { statusEl.textContent = "Email格式不正確,請重新輸入"; return; }
+
+  const body = { name, phone, email, auth_provider: window._pendingProvider };
+  if (window._pendingProvider === "line") {
+    body.line_user_id = window._pendingExternalId;
+  }
+
+  const { ok, data } = await api("/auth/create-member", {
+    method: "POST", body: JSON.stringify(body)
   });
+  if (!ok) {
+    statusEl.textContent = data.error || "建立會員資料失敗,請稍後再試";
+    return;
+  }
   currentMemberId = data.id;
   currentMemberToken = data.token;
-  enterMainScreen(data);
+  await enterMainScreen(data);
+  // 註冊剛完成,姓名/手機/Email以外的個人資料(出生年月日、地址、緊急聯絡人等)
+  // 都還是空的,直接帶去會員中心讓客人繼續補完,而不是丟回滑雪旅程首頁。
+  // 這裡是用程式直接呼叫switchPage,不是使用者點擊觸發,沒有真的click事件可用,
+  // switchPage內部「event.target」那段不會執行,所以左側導覽列的「會員中心」
+  // 不會自動反白,額外補上這行手動標記成目前所在頁面,體驗才會一致。
+  switchPage("center", null);
+  document.querySelectorAll(".nav-top, .nav-flat").forEach(n => n.classList.remove("active-top"));
+  document.getElementById("navflat-center").classList.add("active-top");
 }
 
 function populateBirthDateSelects(yearId="pBirthYear", monthId="pBirthMonth", dayId="pBirthDay", minYear=1920) {
