@@ -3772,6 +3772,108 @@ def admin_delete_equipment_closure(closure_id):
     return jsonify({"ok": True})
 
 
+# ------------------------------------------------------------------
+# 系統管理:正式上線前清除測試資料(2026-09新增,依老闆要求)
+# ------------------------------------------------------------------
+# 只清除「客戶端活動資料」(會員帳號、各種預約/訂課、金流交易、通知等這類
+# 測試期間累積出來的資料),保留「營運設定資料」不動——員工/教練帳號、
+# 教練自我介紹/證照/照片、雪場清單、日本滑雪分區、價格設定(含剛設定好的
+# 匯款帳號)、教練班表/出缺勤設定、設備清單、FAQ內容、保險級距、合作夥伴
+# 這些都是老闆/主管已經花時間設定好、要留到正式上線後繼續用的東西,不是
+# 測試訂課產生的,不會被這支API動到。
+#
+# _TEST_DATA_TABLES是清除順序清單:因為schema.sql/schema_postgres.sql這兩份
+# 資料庫幾乎每張要清的表都直接或間接有外鍵約束參照到members.id(還有orders/
+# indoor_sessions/charter_passes/member_plans這幾張表也被其他表參照),
+# 必須先刪「參照別人」的子表,最後才能刪被參照的父表(members放在清單最後)。
+# 這個順序是對照schema.sql裡每一個「REFERENCES members(id)/REFERENCES
+# orders(id)/...」外鍵約束手動排出來的——如果之後schema新增了會員/訂單相關
+# 的表,記得同步把新表加進這個清單、並排在children會參照到的表之前,不然
+# 清除時會被外鍵約束擋下來(擋下來至少不會悄悄漏刪,但務必同步更新這裡)。
+# coach_payroll_records雖然不是直接被會員資料參照,但因為金額是依測試期間的
+# 出勤/訂課資料自動算出來的,清掉那些之後這些數字就不準確了,一併清除,讓
+# 正式上線後從乾淨的資料重新開始計算。
+_TEST_DATA_TABLES = [
+    ("entitlement_ledger", "堂數/權益異動明細"),
+    ("transactions", "金流交易紀錄"),
+    ("orders", "訂單"),
+    ("point_logs", "點數紀錄"),
+    ("member_notes", "會員備註"),
+    ("crm_interactions", "CRM互動紀錄"),
+    ("complaints", "客訴紀錄"),
+    ("notifications", "通知紀錄"),
+    ("faq_unanswered_log", "FAQ無法回答紀錄"),
+    ("member_companions", "會員常用同行人"),
+    ("plan_applications", "團課方案申請"),
+    ("attendance_codes", "上課碼/下課碼"),
+    ("booking_participants", "預約參與者資料"),
+    ("indoor_session_members", "室內團課參與名單"),
+    ("indoor_sessions", "室內雪機時段(體驗/包機/團課/自主練習)"),
+    ("jump_bookings", "跳台預約"),
+    ("japan_bookings", "日本滑雪預約"),
+    ("charter_pass_requests", "包機課堂數包異動申請"),
+    ("charter_passes", "包機課堂數包"),
+    ("plan_billing_records", "月繳方案繳費紀錄"),
+    ("member_quota_cycles", "方案額度使用紀錄"),
+    ("member_plans", "會員方案"),
+    ("coach_payroll_records", "教練薪資紀錄(依測試出勤/訂課資料算出來的,一併清除)"),
+    ("members", "會員帳號"),
+]
+
+
+@app.route("/api/admin/system/test-data-summary", methods=["GET"])
+@require_role("manager")
+def admin_test_data_summary():
+    """清除前的預覽:列出每張表目前各有幾筆資料,讓老闆/主管在真的按下清除之前,
+    可以先確認範圍對不對——例如筆數多到不合理,可能代表已經有真客戶的資料混
+    進來了,要先另外處理,不能貿然整批清除。這支只查詢、不會刪除任何東西。"""
+    conn = get_conn()
+    tables = []
+    total = 0
+    for table, label in _TEST_DATA_TABLES:
+        c = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+        tables.append({"table": table, "label": label, "count": c})
+        total += c
+    conn.close()
+    return jsonify({"tables": tables, "total": total})
+
+
+@app.route("/api/admin/system/clear-test-data", methods=["POST"])
+@require_role("manager")
+def admin_clear_test_data():
+    """正式清除。務必在request body帶上{"confirm": "CLEAR_ALL_TEST_DATA"}這個固定
+    字串才會真的執行,避免前端邏輯萬一寫錯、或有人不小心打到這支API就整批刪光
+    ——這是不可逆的操作,刻意設計成不容易「不小心」觸發。執行前後都用同一個
+    交易(transaction)包起來,任何一張表刪除失敗就整批回復原狀,不會留下
+    「刪一半」的不一致狀態。完成後會在audit_log留一筆紀錄,記下是誰、什麼時候、
+    各表各刪了幾筆。"""
+    d = request.json or {}
+    if d.get("confirm") != "CLEAR_ALL_TEST_DATA":
+        return jsonify({"error": "缺少確認參數,為安全起見拒絕執行"}), 400
+
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        deleted = []
+        for table, label in _TEST_DATA_TABLES:
+            c = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+            conn.execute(f"DELETE FROM {table}")
+            deleted.append({"table": table, "label": label, "count": c})
+        total = sum(x["count"] for x in deleted)
+        conn.execute(
+            """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+               VALUES (?, 'clear_test_data', 'system', NULL, NULL, ?)""",
+            (request.current_staff["id"], json.dumps({"deleted": deleted, "total": total}, ensure_ascii=False)),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "deleted": deleted, "total": total})
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})

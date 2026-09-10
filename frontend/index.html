@@ -1397,7 +1397,7 @@ async function renderStaffPanel(staff) {
         ["partners", "合作單位"],
       ]}] : []),
       ...(isManagerUp ? [{ title: "系統管理", items: [
-        ["pricing", "價格設定"], ["import", "資料匯入"],
+        ["pricing", "價格設定"], ["import", "資料匯入"], ["cleartest", "清除測試資料"],
       ]}] : []),
     ];
 
@@ -1439,6 +1439,7 @@ async function renderStaffPanel(staff) {
       <div id="staffTab-profitloss" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-pricing" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-import" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-cleartest" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-partners" class="staff-tab" style="display:none;"></div>
     `;
     document.getElementById("navbtn-dashboard").classList.add("active");
@@ -1463,6 +1464,7 @@ async function renderStaffPanel(staff) {
       await renderPartnerManageTools();
       await renderPricingConfigTools();
       await renderImportTools();
+      await renderClearTestDataTools();
     }
   } else if (staff.role === "coach") {
     sidebar.innerHTML = `
@@ -1499,6 +1501,7 @@ const STAFF_TAB_REFRESH = {
   profitloss: renderProfitLossTools,
   pricing: renderPricingConfigTools,
   import: renderImportTools,
+  cleartest: renderClearTestDataTools,
   partners: renderPartnerManageTools,
 };
 function switchStaffTab(tabName) {
@@ -1704,6 +1707,77 @@ async function submitImport(type) {
     html += data.failed.map(f => `<div class="list-item">第${f.row}列失敗:${f.reason}</div>`).join("");
   }
   resultEl.innerHTML = html;
+}
+
+// ------------------------------------------------------------------
+// 清除測試資料(2026-09新增,依老闆要求,正式上線前用來清空測試期間累積的
+// 會員/訂課/金流等資料,不會動到教練/員工帳號、雪場清單、價格設定等已經
+// 設定好的營運資料——完整規則見後端_TEST_DATA_TABLES的說明)
+// ------------------------------------------------------------------
+const CLEAR_TEST_DATA_CONFIRM_PHRASE = "清除測試資料";
+async function renderClearTestDataTools() {
+  const wrap = document.getElementById("staffTab-cleartest");
+  wrap.innerHTML = `
+    <h3 style="margin-top:16px; font-size:14px;">清除測試資料(老闆/主管)</h3>
+    <p class="note">正式上線前,用這裡把測試期間產生的會員帳號、各種預約/訂課記錄、金流交易、通知等資料清空。
+      <b>不會動到</b>教練/員工帳號、教練自我介紹/證照/照片、雪場清單、價格設定(含剛設定好的匯款帳號)、
+      教練班表/出缺勤設定、設備清單、FAQ內容這些已經設定好、要繼續留著用的營運資料。這是<b>無法復原</b>的操作,
+      執行前請務必先看清楚下面的預覽筆數,確認範圍跟你想的一致。</p>
+    <button class="small secondary" onclick="loadTestDataSummary()">重新整理預覽</button>
+    <div id="testDataSummaryWrap" class="person-card">尚未載入,請按上面「重新整理預覽」查看目前各項資料筆數。</div>
+    <div class="person-card" style="border:1px solid #c0392b;">
+      <b style="color:#c0392b;">⚠️ 執行清除(無法復原)</b>
+      <p class="note">請在下方輸入框準確輸入「${CLEAR_TEST_DATA_CONFIRM_PHRASE}」五個字以解鎖清除按鈕,再次確認你要清除的就是上面預覽列出的內容。</p>
+      <input type="text" id="clearTestDataConfirmInput" placeholder="請輸入:${CLEAR_TEST_DATA_CONFIRM_PHRASE}" oninput="onClearTestDataConfirmInput()">
+      <button id="clearTestDataBtn" class="small" style="background:#c0392b; border-color:#c0392b;" disabled onclick="submitClearTestData()">開始清除測試資料</button>
+      <div id="clearTestDataResult" style="margin-top:8px;"></div>
+    </div>
+  `;
+  await loadTestDataSummary();
+}
+async function loadTestDataSummary() {
+  const el = document.getElementById("testDataSummaryWrap");
+  if (!el) return;
+  el.innerHTML = "載入中...";
+  const { ok, data } = await api("/admin/system/test-data-summary");
+  if (!ok) { el.innerHTML = `<p class="note">${data.error || "載入失敗"}</p>`; return; }
+  if (data.total === 0) {
+    el.innerHTML = `<p class="note">目前沒有任何測試資料,不需要清除。</p>`;
+    return;
+  }
+  const rows = data.tables.filter(t => t.count > 0);
+  el.innerHTML = `
+    <p class="note" style="margin-top:0;">目前資料筆數(只列出有資料的項目):</p>
+    <table style="width:100%; font-size:13px; border-collapse:collapse;">
+      <tbody>
+        ${rows.map(t => `<tr><td style="padding:2px 0;">${t.label}</td><td style="text-align:right; padding:2px 0;">${t.count} 筆</td></tr>`).join("")}
+        <tr style="font-weight:bold; border-top:1px solid #ddd;"><td style="padding:4px 0;">合計</td><td style="text-align:right; padding:4px 0;">${data.total} 筆</td></tr>
+      </tbody>
+    </table>
+  `;
+}
+function onClearTestDataConfirmInput() {
+  const input = document.getElementById("clearTestDataConfirmInput").value.trim();
+  document.getElementById("clearTestDataBtn").disabled = (input !== CLEAR_TEST_DATA_CONFIRM_PHRASE);
+}
+async function submitClearTestData() {
+  if (!confirm("確定要清除所有測試資料嗎?此操作無法復原,清除後測試期間累積的會員、訂課、金流紀錄都會消失。")) return;
+  const btn = document.getElementById("clearTestDataBtn");
+  btn.disabled = true;
+  const resultEl = document.getElementById("clearTestDataResult");
+  resultEl.innerHTML = "處理中,請稍候...";
+  const { ok, data } = await api("/admin/system/clear-test-data", {
+    method: "POST",
+    body: JSON.stringify({ confirm: "CLEAR_ALL_TEST_DATA" }),
+  });
+  if (ok) {
+    resultEl.innerHTML = `<p style="color:#2e7d32;">已清除完成,共清除 ${data.total} 筆測試資料,系統已可正式上線使用。</p>`;
+    document.getElementById("clearTestDataConfirmInput").value = "";
+    await loadTestDataSummary();
+  } else {
+    resultEl.innerHTML = `<p class="note" style="color:#c0392b;">${data.error || "清除失敗,請稍後再試或聯絡工程協助。"}</p>`;
+    btn.disabled = false;
+  }
 }
 
 async function renderPartnerManageTools() {
