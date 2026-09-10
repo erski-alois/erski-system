@@ -166,7 +166,12 @@ def cors_preflight(_any):
 
 
 ROLE_RANK = {"coach": 1, "cs": 2, "manager": 3, "boss": 4}
-
+# 2026-09:資料庫欄位(staff.role的CHECK約束)、教練自助頁面等「純粹判斷是不是有登入
+# 員工身分/是不是教練本人」的地方,還是繼續用這4個原本就有的角色值,沒有改資料庫
+# 結構。但對外顯示的名稱、以及「後台每個功能區塊誰能看」這件事,已經改成下面
+# SECTION_ROLES這種「每個角色各自列出看得到哪幾塊」的設計,不再是單純比大小——
+# 角色值 'cs' 現在代表「股東」,'manager' 現在代表「主管」,顯示名稱見前端
+# navGroups組裝那段;工號A/B/C開頭分別對應 boss/cs(股東)/manager(主管)。
 
 # ------------------------------------------------------------------
 # 身分驗證(2026-08新增):員工/會員登入後,前端要帶著簽章token發後續請求,
@@ -194,6 +199,10 @@ def _current_member_id():
 
 
 def require_role(min_role):
+    """給「不分後台功能區塊、純粹看角色高低」的地方用(教練自助頁面、員工代會員操作等)。
+    後台各功能區塊(側邊選單每一項)的存取權限,請改用下面的require_section,不要再用
+    這支疊加判斷——同一支路由如果同時掛require_role又疊加rank比較,遇到「主管權限比
+    股東窄」這種非階層式的設計會判斷錯誤。"""
     def decorator(f):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
@@ -206,6 +215,91 @@ def require_role(min_role):
             return f(*args, **kwargs)
         return wrapper
     return decorator
+
+
+# ------------------------------------------------------------------
+# 2026-09新增:後台權限重新設計。依你的指示——
+#   老闆(boss):權限全開。
+#   股東(資料庫角色值仍是'cs',顯示名稱改為「股東」):除了「財務與分析」
+#     (管理報表/薪資管理/月結損益/合作單位)、「系統管理」(價格設定/資料匯入/
+#     清除測試資料)這兩大類之外,其餘全部開放。
+#   主管(role='manager'):只開放「會員與訂課、代客訂課、待處理事項、報到管理、
+#     訂單管理、團課教練指派、教練出勤管理、雪場管理」這8項,其餘一律看不到。
+#   教練(role='coach'):不使用這套後台區塊權限,教練是完全獨立的自助頁面
+#     (/coach路由),各自的存取限制見require_role("coach")+函式內部is_self判斷。
+#
+# 這跟原本ROLE_RANK那種「等級越高看到的越多」的階層式判斷不一樣(主管現在看到的
+# 區塊,比股東還少,不是「股東>=主管」這種單純的大小關係),所以另外用這張表,
+# 每個角色各自獨立列出「看得到哪幾塊」,不是比較誰的等級比較高。
+#
+# key對應前端admin後台側邊選單「每一個分頁」的key(見index.html的navGroups/
+# switchStaffTab),boss不用特別列在每一項裡,require_section內部一律放行boss。
+# ------------------------------------------------------------------
+SECTION_ROLES = {
+    "dashboard":     {"cs"},                # 營運中心(主管不開放)
+    "overview":      {"cs", "manager"},      # 會員與訂課
+    "assist":        {"cs", "manager"},      # 代客訂課
+    "pending":       {"cs", "manager"},      # 待處理事項
+    "checkin":       {"cs", "manager"},      # 報到管理
+    "orders":        {"cs", "manager"},      # 訂單管理
+    "japanbookings": {"cs"},                 # 日本教練課訂單(主管不開放)
+    "groupassign":   {"cs", "manager"},      # 團課教練指派
+    "equipment":     {"cs"},                 # 設備管理(主管不開放)
+    "faq":           {"cs"},                 # FAQ管理(主管不開放)
+    "coachschedule": {"cs", "manager"},      # 教練出勤管理
+    "resorts":       {"cs", "manager"},      # 雪場管理
+    "coaches":       {"cs"},                 # 教練管理(含教練駐在地/合約/時薪等人事資料,主管不開放)
+    "finance":       set(),                  # 財務與分析(管理報表/薪資管理/月結損益/合作單位):僅老闆
+    "system":        set(),                  # 系統管理(價格設定/資料匯入/清除測試資料):僅老闆
+    # partners(合作單位)列表本身另外開放給股東,因為「日本教練課訂單」分頁選合作單位
+    # 篩選條件需要用到這份名單;但合作單位的財務報表(/partners/<id>/report)、新增/
+    # 編輯合作單位,還是只在finance那組,不受這個key影響。
+    "partners_list": {"cs"},
+}
+
+
+def _role_allowed(role, section_key):
+    """給「不是用頂層裝飾器擋,而是函式內部先判斷is_self、不是本人才檢查權限」的路由用,
+    邏輯跟require_section一致(boss一律放行,其餘看SECTION_ROLES),只是包成一般函式
+    方便在is_self判斷式裡直接呼叫。"""
+    return role == "boss" or role in SECTION_ROLES[section_key]
+
+
+def require_section(section_key):
+    """後台各功能區塊(側邊選單分頁)的存取權限判斷——依SECTION_ROLES這張表,
+    每個角色各自獨立列出看得到哪幾塊,不是比較rank高低(boss一律放行,不用列在表裡)。"""
+    allowed = SECTION_ROLES[section_key]
+
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            staff = _current_staff()
+            if not staff:
+                return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+            if staff["role"] != "boss" and staff["role"] not in allowed:
+                return jsonify({"error": "權限不足"}), 403
+            request.current_staff = staff
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def _is_high_trust_staff(role):
+    """判斷這個角色是否屬於「股東或老闆」這個高信任等級——2026-09權限改版後,原本
+    程式裡很多地方寫的「主管以上」(ROLE_RANK>=manager)判斷,依新的權限設計實際上
+    指的都是「股東或老闆」(教練管理的人事機密資料、會員的高度敏感個資遮罩與否等),
+    不是現在角色值'manager'(主管,新設計下權限範圍反而比股東窄)。統一改用這支函式,
+    取代原本分散在各處的ROLE_RANK.get(...) >= ROLE_RANK["manager"]寫法。"""
+    return role == "boss" or role == "cs"
+
+
+def _can_manage_coaches(role):
+    """判斷這個角色是否屬於「教練管理」這個區塊的存取範圍(含教練的駐在地/合約類型/
+    時薪/底薪等人事機密資料)——目前規則跟SECTION_ROLES["coaches"]一致(股東/老闆可以,
+    主管不行),獨立寫成一支函式是因為這個判斷分散在好幾支「教練自助 or 主管以上」的
+    路由內部(不是頂層裝飾器擋,而是函式內部依is_self再判斷),抽出來避免每個地方各自
+    重複寫SECTION_ROLES["coaches"]這串。"""
+    return _is_high_trust_staff(role)
 
 
 def require_member_or_staff(min_staff_role="cs"):
@@ -283,7 +377,7 @@ def _generate_partner_code():
 
 
 @app.route("/api/admin/partners", methods=["GET"])
-@require_role("manager")
+@require_section("partners_list")
 def admin_list_partners():
     conn = get_conn()
     rows = conn.execute("SELECT * FROM partner_organizations ORDER BY created_at DESC").fetchall()
@@ -292,7 +386,7 @@ def admin_list_partners():
 
 
 @app.route("/api/admin/partners", methods=["POST"])
-@require_role("manager")
+@require_section("finance")
 def admin_create_partner():
     d = request.json
     conn = get_conn()
@@ -314,7 +408,7 @@ def admin_create_partner():
 
 
 @app.route("/api/admin/partners/<int:partner_id>", methods=["PUT"])
-@require_role("manager")
+@require_section("finance")
 def admin_update_partner(partner_id):
     d = request.json
     conn = get_conn()
@@ -329,7 +423,7 @@ def admin_update_partner(partner_id):
 
 
 @app.route("/api/admin/partners/<int:partner_id>/report", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_partner_report(partner_id):
     """匯出該合作單位所推薦會員的訂單資料,供計算回饋/回扣參考。"""
     conn = get_conn()
@@ -613,13 +707,13 @@ def update_member_profile(member_id):
 # 價目表(前台課表顯示用)
 # ------------------------------------------------------------------
 @app.route("/api/admin/pricing-config", methods=["GET"])
-@require_role("manager")
+@require_section("system")
 def admin_list_pricing_config():
     return jsonify(pricing.list_all_configs())
 
 
 @app.route("/api/admin/pricing-config/<config_key>", methods=["PUT"])
-@require_role("manager")
+@require_section("system")
 def admin_update_pricing_config(config_key):
     d = request.json
     conn = get_conn()
@@ -828,13 +922,13 @@ def member_request_charter_pass_change(member_id, pass_id):
 
 
 @app.route("/api/admin/charter-pass-requests/pending", methods=["GET"])
-@require_role("cs")
+@require_section("pending")
 def admin_list_charter_pass_requests():
     return jsonify(booking.list_charter_pass_requests(status="pending"))
 
 
 @app.route("/api/admin/charter-pass-requests/<int:request_id>/resolve", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def admin_resolve_charter_pass_request(request_id):
     d = request.json
     try:
@@ -971,7 +1065,7 @@ def list_resort_coaches_public(resort_id):
 
 
 @app.route("/api/admin/resorts/<int:resort_id>", methods=["DELETE"])
-@require_role("manager")
+@require_section("resorts")
 def admin_delete_resort(resort_id):
     conn = get_conn()
     conn.execute("UPDATE ski_resorts SET is_active=0 WHERE id=?", (resort_id,))
@@ -986,7 +1080,7 @@ def admin_delete_resort(resort_id):
 
 
 @app.route("/api/admin/coaches/export.xlsx", methods=["GET"])
-@require_role("manager")
+@require_section("coaches")
 def admin_export_coaches_xlsx():
     """匯出全部教練完整資料(基本資料+教練介紹+能力證照+人事機密欄位)為Excel,僅限主管以上使用。"""
     import openpyxl
@@ -1050,7 +1144,7 @@ def admin_export_coaches_xlsx():
 
 
 @app.route("/api/admin/resorts/export.xlsx", methods=["GET"])
-@require_role("cs")
+@require_section("resorts")
 def admin_export_resorts_xlsx():
     """匯出全部雪場資料為Excel。"""
     import openpyxl
@@ -1096,7 +1190,7 @@ def admin_export_resorts_xlsx():
 
 
 @app.route("/api/admin/resorts", methods=["GET"])
-@require_role("cs")
+@require_section("resorts")
 def admin_list_resorts():
     conn = get_conn()
     rows = conn.execute("SELECT * FROM ski_resorts ORDER BY id").fetchall()
@@ -1105,7 +1199,7 @@ def admin_list_resorts():
 
 
 @app.route("/api/admin/resorts", methods=["POST"])
-@require_role("manager")
+@require_section("resorts")
 def admin_create_resort():
     d = request.json
     conn = get_conn()
@@ -1125,7 +1219,7 @@ def admin_create_resort():
 
 
 @app.route("/api/admin/resorts/<int:resort_id>", methods=["PUT"])
-@require_role("manager")
+@require_section("resorts")
 def admin_update_resort(resort_id):
     d = request.json
     conn = get_conn()
@@ -1143,7 +1237,7 @@ def admin_update_resort(resort_id):
 
 
 @app.route("/api/admin/resort-coaches", methods=["GET"])
-@require_role("cs")
+@require_section("resorts")
 def admin_list_resort_coaches():
     resort_id = request.args.get("resort_id", type=int)
     conn = get_conn()
@@ -1159,7 +1253,7 @@ def admin_list_resort_coaches():
 
 
 @app.route("/api/admin/resort-coaches", methods=["POST"])
-@require_role("manager")
+@require_section("resorts")
 def admin_assign_resort_coach():
     d = request.json
     conn = get_conn()
@@ -1178,7 +1272,7 @@ def admin_assign_resort_coach():
 
 
 @app.route("/api/admin/resort-coaches/<int:assignment_id>", methods=["DELETE"])
-@require_role("manager")
+@require_section("resorts")
 def admin_remove_resort_coach(assignment_id):
     conn = get_conn()
     conn.execute("DELETE FROM resort_coaches WHERE id=?", (assignment_id,))
@@ -1194,7 +1288,7 @@ def admin_set_coach_schedule():
     if not staff:
         return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
     is_self = staff["role"] == "coach" and staff["id"] == d.get("coach_id")
-    if not is_self and ROLE_RANK.get(staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _role_allowed(staff["role"], "coachschedule"):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     conn.execute(
@@ -1248,7 +1342,7 @@ def admin_check_group_auto_cancel():
 
 
 @app.route("/api/admin/group-classes", methods=["GET"])
-@require_role("cs")
+@require_section("groupassign")
 def admin_list_group_classes():
     """列出未來已確認開課(滿2人以上)的團課場次,供後台指派教練用。"""
     from datetime import date
@@ -1268,7 +1362,7 @@ def admin_list_group_classes():
 
 
 @app.route("/api/admin/group-classes/<int:session_id>/assign-coach", methods=["POST"])
-@require_role("cs")
+@require_section("groupassign")
 def admin_assign_group_class_coach(session_id):
     d = request.json
     conn = get_conn()
@@ -1289,7 +1383,7 @@ def admin_assign_group_class_coach(session_id):
 
 
 @app.route("/api/admin/coach-schedule", methods=["GET"])
-@require_role("cs")
+@require_section("coachschedule")
 def admin_list_coach_schedule():
     coach_id = request.args.get("coach_id", type=int)
     date_from = request.args.get("date_from")
@@ -1309,7 +1403,7 @@ def admin_list_coach_schedule():
 
 
 @app.route("/api/admin/dashboard-summary", methods=["GET"])
-@require_role("cs")
+@require_section("dashboard")
 def admin_dashboard_summary():
     """營運中心首頁彙總資料:今日課程數、報到狀況、當日每位教練應收尾款。
     2026-08:依需求把「待付款訂單」改成「當日每位教練應收尾款」——只抓日本教練課
@@ -1354,7 +1448,7 @@ def admin_dashboard_summary():
 
 
 @app.route("/api/admin/team-calendar", methods=["GET"])
-@require_role("cs")
+@require_section("dashboard")
 def admin_team_calendar():
     """
     共用班表日曆:回傳某個月份,每一天所有在職教練的狀態(上班/請假種類)與當天課程數,
@@ -1798,7 +1892,7 @@ def ecpay_payment_info_webhook():
 
 
 @app.route("/api/admin/sessions/<int:session_id>/cancel", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def admin_cancel_session(session_id):
     """客服協調後決定直接取消此場次(取消所有報名此場次的會員,不受時間限制)。"""
     conn = get_conn()
@@ -1815,7 +1909,7 @@ def admin_cancel_session(session_id):
 
 
 @app.route("/api/admin/check-ins/pending", methods=["GET"])
-@require_role("cs")
+@require_section("checkin")
 def admin_pending_check_ins():
     from datetime import date
     up_to_date = request.args.get("up_to_date") or booking.today_tw().isoformat()
@@ -1824,7 +1918,7 @@ def admin_pending_check_ins():
 
 
 @app.route("/api/admin/sessions/<int:session_id>/check-in", methods=["POST"])
-@require_role("cs")
+@require_section("checkin")
 def admin_check_in_indoor(session_id):
     d = request.json
     try:
@@ -1837,7 +1931,7 @@ def admin_check_in_indoor(session_id):
 
 
 @app.route("/api/admin/jump-bookings/<int:jump_id>/check-in", methods=["POST"])
-@require_role("cs")
+@require_section("checkin")
 def admin_check_in_jump(jump_id):
     d = request.json
     try:
@@ -1850,7 +1944,7 @@ def admin_check_in_jump(jump_id):
 
 
 @app.route("/api/admin/japan-bookings/<int:japan_id>/check-in", methods=["POST"])
-@require_role("cs")
+@require_section("checkin")
 def admin_check_in_japan(japan_id):
     d = request.json
     try:
@@ -1881,7 +1975,7 @@ def coach_verify_attendance_code():
 
 
 @app.route("/api/admin/sessions/needs-review", methods=["GET"])
-@require_role("cs")
+@require_section("pending")
 def admin_sessions_needs_review():
     """列出因時段衝突而標記「需人工協調」的機台場次。"""
     from datetime import date
@@ -1900,7 +1994,7 @@ def admin_sessions_needs_review():
 
 
 @app.route("/api/admin/sessions/<int:session_id>/resolve", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def admin_resolve_session(session_id):
     """客服協調後,標記此場次為已確認保留。"""
     conn = get_conn()
@@ -1916,7 +2010,7 @@ def admin_resolve_session(session_id):
 
 
 @app.route("/api/admin/payments/pending", methods=["GET"])
-@require_role("cs")
+@require_section("pending")
 def admin_pending_payments():
     """列出待客服核對入帳的付款(現場付款/匯款轉帳),供後台核准使用。"""
     conn = get_conn()
@@ -1931,7 +2025,7 @@ def admin_pending_payments():
 
 
 @app.route("/api/admin/payments/<int:tx_id>/confirm", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def confirm_payment(tx_id):
     conn = get_conn()
     try:
@@ -1968,7 +2062,7 @@ SENSITIVE_MEMBER_FIELDS = ["id_number", "blood_type", "address", "emergency_cont
 
 def _mask_sensitive_member_fields(member_dict, staff_role):
     """對照系統分析書13.1「高度敏感資料」分級:客服僅能看到遮罩後的內容,主管以上才看得到完整值。"""
-    if ROLE_RANK.get(staff_role, 0) >= ROLE_RANK["manager"]:
+    if _is_high_trust_staff(staff_role):
         return member_dict
     masked = dict(member_dict)
     for field in SENSITIVE_MEMBER_FIELDS:
@@ -1979,7 +2073,7 @@ def _mask_sensitive_member_fields(member_dict, staff_role):
 
 
 @app.route("/api/admin/members", methods=["GET"])
-@require_role("cs")
+@require_section("overview")
 def admin_list_members():
     conn = get_conn()
     rows = conn.execute("SELECT * FROM members ORDER BY created_at DESC").fetchall()
@@ -1990,7 +2084,7 @@ def admin_list_members():
 
 
 @app.route("/api/admin/bookings", methods=["GET"])
-@require_role("cs")
+@require_section("overview")
 def admin_list_bookings():
     """訂客資料總覽:彙整所有類型的預約紀錄,可用 query string 篩選
        member_id / category / date_from / date_to"""
@@ -2030,7 +2124,7 @@ def member_plan_applications(member_id):
 
 
 @app.route("/api/admin/plan-applications", methods=["GET"])
-@require_role("cs")
+@require_section("pending")
 def admin_list_plan_applications():
     conn = get_conn()
     rows = conn.execute(
@@ -2043,7 +2137,7 @@ def admin_list_plan_applications():
 
 
 @app.route("/api/admin/plan-applications/<int:application_id>/review", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def admin_review_plan_application(application_id):
     d = request.json
     try:
@@ -2056,7 +2150,7 @@ def admin_review_plan_application(application_id):
 
 
 @app.route("/api/admin/plan-billing/pending", methods=["GET"])
-@require_role("cs")
+@require_section("pending")
 def admin_pending_plan_billing():
     conn = get_conn()
     rows = conn.execute(
@@ -2069,7 +2163,7 @@ def admin_pending_plan_billing():
 
 
 @app.route("/api/admin/plan-billing/<int:record_id>/confirm", methods=["POST"])
-@require_role("cs")
+@require_section("pending")
 def admin_confirm_plan_billing(record_id):
     conn = get_conn()
     conn.execute("UPDATE plan_billing_records SET status='paid' WHERE id=?", (record_id,))
@@ -2119,14 +2213,21 @@ def admin_list_staff():
 
 
 @app.route("/api/admin/staff/<int:staff_id>", methods=["DELETE"])
-@require_role("manager")
+@require_section("coaches")
 def admin_delete_staff(staff_id):
-    """停用教練/員工帳號(軟刪除:保留歷史預約/稽核紀錄的關聯,僅從清單中隱藏、無法再登入)。"""
+    """停用教練/員工帳號(軟刪除:保留歷史預約/稽核紀錄的關聯,僅從清單中隱藏、無法再登入)。
+    2026-09權限改版:這支API原本掛@require_role("manager"),股東(cs)完全叫不到;現在
+    「教練管理」這個區塊開放給股東,但股東能停用的僅限教練帳號(role='coach')——不能
+    停用股東/主管/老闆等其他後台帳號,避免股東之間或股東對老闆的帳號被停用。只有老闆
+    能停用任何角色的帳號。"""
     conn = get_conn()
     before = conn.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()
     if not before:
         conn.close()
         return jsonify({"error": "找不到此員工"}), 404
+    if request.current_staff["role"] != "boss" and before["role"] != "coach":
+        conn.close()
+        return jsonify({"error": "權限不足:只能停用教練帳號,其餘角色的帳號僅老闆能停用"}), 403
     conn.execute("UPDATE staff SET is_active=0 WHERE id=?", (staff_id,))
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
@@ -2140,30 +2241,37 @@ def admin_delete_staff(staff_id):
 
 
 @app.route("/api/admin/staff", methods=["POST"])
-@require_role("manager")
+@require_section("coaches")
 def admin_create_staff():
     """2026-08修正:原本這裡工號重複時,INSERT會因為work_id唯一限制直接丟未攔截的例外,
     回傳一個HTML錯誤頁而不是JSON——前端api()呼叫端解析JSON會失敗、整個新增流程無聲中斷,
     畫面上「新增教練」完全沒有任何成功或失敗的提示,看起來就像「輸入完成但沒有真的新增」。
-    改成先檢查工號是否已存在,存在的話回傳清楚的錯誤訊息,不要讓資料庫例外整個往外丟。"""
+    改成先檢查工號是否已存在,存在的話回傳清楚的錯誤訊息,不要讓資料庫例外整個往外丟。
+
+    2026-09權限改版:這支API原本掛@require_role("manager"),股東(cs)完全叫不到;現在
+    「教練管理」這個區塊開放給股東,但這支API本身沒有限制role欄位只能是'coach'——如果
+    直接開放給股東呼叫,股東就能繞過前端「新增教練」表單,自己組一個role='boss'的請求
+    幫自己開一個老闆帳號,等於權限提升漏洞。修法:非老闆呼叫這支API時,一律強制role='coach'
+    (忽略請求裡帶的role值),只有老闆能透過這支API新增股東/主管/老闆等級的帳號。"""
     d = request.json
     conn = get_conn()
     existing = conn.execute("SELECT id FROM staff WHERE work_id=?", (d["work_id"],)).fetchone()
     if existing:
         conn.close()
         return jsonify({"error": f"工號「{d['work_id']}」已經有人使用,請換一個工號"}), 400
+    role = d["role"] if request.current_staff["role"] == "boss" else "coach"
     password = d["birthday"].replace("-", "")[2:8]
     cur = conn.execute(
         """INSERT INTO staff (work_id, name, display_code, phone, birthday, password_hash, role, branch)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (d["work_id"], d["name"], d.get("display_code"), d.get("phone"), d["birthday"],
-         auth.new_password_hash(password), d["role"], d["branch"]),
+         auth.new_password_hash(password), role, d["branch"]),
     )
     staff_id = cur.lastrowid
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
            VALUES (?, 'create_staff', 'staff', ?, '{}', ?)""",
-        (request.current_staff["id"], staff_id, json.dumps({"work_id": d["work_id"], "role": d["role"]})),
+        (request.current_staff["id"], staff_id, json.dumps({"work_id": d["work_id"], "role": role})),
     )
     conn.commit()
     conn.close()
@@ -2237,7 +2345,7 @@ def list_coaches_public():
 @require_role("coach")
 def admin_get_coach_basic_info(coach_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["manager"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     row = conn.execute(
@@ -2255,7 +2363,7 @@ def admin_get_coach_basic_info(coach_id):
 def admin_update_coach_basic_info(coach_id):
     """教練可以編輯自己的姓名/身分證字號/生日/地址/電話/分店;工號由主管以上異動,避免教練自己誤改登入帳號。"""
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    is_manager_up = ROLE_RANK.get(request.current_staff["role"], 0) >= ROLE_RANK["manager"]
+    is_manager_up = _can_manage_coaches(request.current_staff["role"])
     if not is_self and not is_manager_up:
         return jsonify({"error": "權限不足"}), 403
     d = request.json
@@ -2306,7 +2414,7 @@ def admin_set_staff_password(staff_id):
     也會跟著變成新生日的六碼」這句提示文字其實是錯的(改生日不會真的改密碼)——這支API連同
     前端「變更密碼」畫面就是補上這個缺口,順便把那句誤導的提示文字改掉。"""
     is_self = request.current_staff["id"] == staff_id
-    is_manager_up = ROLE_RANK.get(request.current_staff["role"], 0) >= ROLE_RANK["manager"]
+    is_manager_up = _can_manage_coaches(request.current_staff["role"])
     if not is_self and not is_manager_up:
         return jsonify({"error": "權限不足"}), 403
     d = request.json
@@ -2337,7 +2445,7 @@ def admin_list_location_options():
 
 
 @app.route("/api/admin/location-options", methods=["POST"])
-@require_role("manager")
+@require_section("coaches")
 def admin_create_location_option():
     d = request.json
     conn = get_conn()
@@ -2388,7 +2496,7 @@ def admin_create_capability_option():
 @require_role("coach")
 def admin_get_coach_details(coach_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["manager"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     profile = conn.execute("SELECT * FROM coach_profiles WHERE coach_id=?", (coach_id,)).fetchone()
@@ -2402,7 +2510,7 @@ def admin_get_coach_details(coach_id):
         "SELECT location_option_id FROM coach_locations WHERE coach_id=?", (coach_id,)
     ).fetchall()
     conn.close()
-    is_manager_up = ROLE_RANK.get(request.current_staff["role"], 0) >= ROLE_RANK["manager"]
+    is_manager_up = _can_manage_coaches(request.current_staff["role"])
     result = {
         "contract_type": profile["contract_type"] if profile else None,
         "rank": profile["rank"] if profile else None,
@@ -2443,7 +2551,7 @@ def admin_update_coach_details(coach_id):
     教練自己送出這幾項會被忽略、維持原值不變。
     """
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    is_manager_up = ROLE_RANK.get(request.current_staff["role"], 0) >= ROLE_RANK["manager"]
+    is_manager_up = _can_manage_coaches(request.current_staff["role"])
     if not is_self and not is_manager_up:
         return jsonify({"error": "權限不足"}), 403
     d = request.json
@@ -2529,7 +2637,7 @@ def admin_update_coach_details(coach_id):
 @require_role("coach")
 def admin_get_coach_profile(coach_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     row = conn.execute("SELECT * FROM coach_profiles WHERE coach_id=?", (coach_id,)).fetchone()
@@ -2541,7 +2649,7 @@ def admin_get_coach_profile(coach_id):
 @require_role("coach")
 def admin_update_coach_profile(coach_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     d = request.json
     # 自我介紹/給學員一句話/代表教練一句話,前端已限制30字,這裡再做一次後端保險(避免繞過前端直接打API)
@@ -2597,7 +2705,7 @@ _CERT_FILE_CATEGORIES = ("ski_license", "related_license", "other_license", "pro
 def admin_list_coach_certificate_files(coach_id):
     """滑雪證照/相關證照/其他證照的檔案清單(每一類可多筆,圖片或PDF)。權限比照/profile。"""
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     rows = conn.execute(
@@ -2612,7 +2720,7 @@ def admin_list_coach_certificate_files(coach_id):
 @require_role("coach")
 def admin_upload_coach_certificate_file(coach_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     d = request.json
     category = d.get("category")
@@ -2637,7 +2745,7 @@ def admin_upload_coach_certificate_file(coach_id):
 @require_role("coach")
 def admin_delete_coach_certificate_file(coach_id, file_id):
     is_self = request.current_staff["role"] == "coach" and request.current_staff["id"] == coach_id
-    if not is_self and ROLE_RANK.get(request.current_staff["role"], 0) < ROLE_RANK["cs"]:
+    if not is_self and not _can_manage_coaches(request.current_staff["role"]):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     row = conn.execute(
@@ -2745,7 +2853,7 @@ def cancel_japan(group_key):
 
 
 @app.route("/api/admin/orders/<int:order_id>/discount", methods=["PUT"])
-@require_role("manager")
+@require_section("orders")
 def admin_set_order_discount(order_id):
     d = request.json
     conn = get_conn()
@@ -2770,7 +2878,7 @@ def admin_set_order_discount(order_id):
 
 
 @app.route("/api/admin/orders/<int:order_id>/record-payment", methods=["POST"])
-@require_role("cs")
+@require_section("orders")
 def admin_record_order_payment(order_id):
     """客服/主管在後台記錄一筆實際收到的款項(可支援訂金/尾款分次收款)。"""
     d = request.json
@@ -2858,7 +2966,7 @@ def _execute_refund(conn, order_id, order, amount, reason, executed_by_staff_id,
 
 
 @app.route("/api/admin/orders/<int:order_id>/refund", methods=["POST"])
-@require_role("manager")
+@require_section("orders")
 def admin_refund_order(order_id):
     d = request.json
     conn = get_conn()
@@ -2906,7 +3014,7 @@ def admin_refund_order(order_id):
 
 
 @app.route("/api/admin/orders/<int:order_id>/refund/approve", methods=["POST"])
-@require_role("manager")
+@require_section("orders")
 def admin_approve_refund(order_id):
     conn = get_conn()
     order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
@@ -2930,7 +3038,7 @@ def admin_approve_refund(order_id):
 
 
 @app.route("/api/admin/orders/<int:order_id>/refund/reject", methods=["POST"])
-@require_role("manager")
+@require_section("orders")
 def admin_reject_refund(order_id):
     d = request.json or {}
     conn = get_conn()
@@ -2960,7 +3068,7 @@ def admin_reject_refund(order_id):
 
 
 @app.route("/api/admin/orders/refunds/pending", methods=["GET"])
-@require_role("manager")
+@require_section("orders")
 def admin_list_pending_refunds():
     conn = get_conn()
     rows = conn.execute(
@@ -2987,7 +3095,7 @@ def _parse_csv(csv_text):
 
 
 @app.route("/api/admin/import/members", methods=["POST"])
-@require_role("manager")
+@require_section("system")
 def admin_import_members():
     """
     匯入既有會員資料。CSV欄位:name,phone,email,birth_date,gender,address,emergency_contact_name,emergency_contact_phone
@@ -3042,7 +3150,7 @@ def admin_import_members():
 
 
 @app.route("/api/admin/import/coaches", methods=["POST"])
-@require_role("manager")
+@require_section("system")
 def admin_import_coaches():
     """
     匯入既有教練資料。CSV欄位:name,work_id,birthday,phone,branch
@@ -3090,7 +3198,7 @@ def admin_import_coaches():
 
 
 @app.route("/api/admin/import/charter-passes", methods=["POST"])
-@require_role("manager")
+@require_section("system")
 def admin_import_charter_passes():
     """
     匯入既有包機堂數包(讓客戶在舊系統已購買但尚未用完的堂數可以延續)。
@@ -3145,7 +3253,7 @@ def admin_import_charter_passes():
 
 
 @app.route("/api/admin/orders", methods=["GET"])
-@require_role("cs")
+@require_section("orders")
 def admin_list_orders():
     member_id = request.args.get("member_id", type=int)
     conn = get_conn()
@@ -3160,7 +3268,7 @@ def admin_list_orders():
 
 
 @app.route("/api/admin/reports/summary", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_reports_summary():
     from datetime import date, timedelta
     date_from = request.args.get("date_from") or (booking.today_tw().replace(day=1)).isoformat()
@@ -3170,7 +3278,7 @@ def admin_reports_summary():
 
 
 @app.route("/api/admin/insurance-brackets", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_list_insurance_brackets():
     conn = get_conn()
     rows = conn.execute("SELECT * FROM insurance_brackets ORDER BY bracket_min").fetchall()
@@ -3179,7 +3287,7 @@ def admin_list_insurance_brackets():
 
 
 @app.route("/api/admin/insurance-brackets", methods=["PUT"])
-@require_role("manager")
+@require_section("finance")
 def admin_update_insurance_brackets():
     """整批覆蓋勞健保級距表(前端管理整份清單後送出取代),供對照勞保局/健保署最新公告更新用。"""
     d = request.json
@@ -3243,7 +3351,7 @@ def coach_my_payslip(record_id):
 
 
 @app.route("/api/admin/payroll", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_list_payroll():
     """查詢某個月份所有教練的薪資紀錄清單(尚未產生過的教練不會出現在清單裡,需先產生)。"""
     period = request.args.get("period")
@@ -3262,7 +3370,7 @@ def admin_list_payroll():
 
 
 @app.route("/api/admin/payroll/generate", methods=["POST"])
-@require_role("manager")
+@require_section("finance")
 def admin_generate_payroll():
     """為某位教練(或全部教練)產生/重新計算某個月份的薪資紀錄。"""
     d = request.json
@@ -3281,7 +3389,7 @@ def admin_generate_payroll():
 
 
 @app.route("/api/admin/payroll/<int:record_id>", methods=["PUT"])
-@require_role("manager")
+@require_section("finance")
 def admin_update_payroll_record(record_id):
     """人工更新加班獎金/其他補貼/勞健保覆蓋值/備註,自動重新計算實際所得。"""
     d = request.json
@@ -3303,7 +3411,7 @@ def admin_update_payroll_record(record_id):
 
 
 @app.route("/api/admin/japan-bookings", methods=["GET"])
-@require_role("cs")
+@require_section("japanbookings")
 def admin_list_japan_bookings():
     """日本教練課訂單總覽,可用 date_from/date_to 篩選,供尾款收款/退佣/轉介管理使用。"""
     date_from = request.args.get("date_from")
@@ -3329,7 +3437,7 @@ def admin_list_japan_bookings():
 
 
 @app.route("/api/admin/japan-bookings/<int:booking_id>/collect-balance", methods=["POST"])
-@require_role("cs")
+@require_section("japanbookings")
 def admin_collect_japan_balance(booking_id):
     """後台收取日本教練課尾款(適用於選擇「先繳訂金」的訂單)。"""
     d = request.json
@@ -3356,7 +3464,7 @@ def admin_collect_japan_balance(booking_id):
 
 
 @app.route("/api/admin/japan-bookings/<int:booking_id>/rebate", methods=["PUT"])
-@require_role("manager")
+@require_section("japanbookings")
 def admin_set_japan_rebate(booking_id):
     """設定退佣(對應合作單位),退介紹費由主管以上手動填寫;會自動重新計算教練收入
     (公式:教練收入 = (報價-退佣金額) x 教練提成比例)。"""
@@ -3441,7 +3549,7 @@ def admin_get_japan_booking(booking_id):
 
 
 @app.route("/api/admin/profit-loss", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_profit_loss():
     period = request.args.get("period")
     if not period:
@@ -3450,7 +3558,7 @@ def admin_profit_loss():
 
 
 @app.route("/api/admin/payroll/<int:record_id>/payslip.pdf", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_download_payslip(record_id):
     import tempfile
     try:
@@ -3470,7 +3578,7 @@ def admin_download_payslip(record_id):
 
 
 @app.route("/api/admin/reports/export", methods=["GET"])
-@require_role("manager")
+@require_section("finance")
 def admin_reports_export():
     from datetime import date
     from io import BytesIO
@@ -3588,7 +3696,7 @@ def ask_faq():
 
 
 @app.route("/api/admin/faq", methods=["POST"])
-@require_role("cs")
+@require_section("faq")
 def admin_create_faq():
     d = request.json
     conn = get_conn()
@@ -3603,7 +3711,7 @@ def admin_create_faq():
 
 
 @app.route("/api/admin/faq/<int:faq_id>", methods=["PUT"])
-@require_role("cs")
+@require_section("faq")
 def admin_update_faq(faq_id):
     d = request.json
     conn = get_conn()
@@ -3617,7 +3725,7 @@ def admin_update_faq(faq_id):
 
 
 @app.route("/api/admin/faq/<int:faq_id>", methods=["DELETE"])
-@require_role("cs")
+@require_section("faq")
 def admin_delete_faq(faq_id):
     conn = get_conn()
     conn.execute("UPDATE faq_entries SET is_active=0 WHERE id=?", (faq_id,))
@@ -3627,7 +3735,7 @@ def admin_delete_faq(faq_id):
 
 
 @app.route("/api/admin/faq/unanswered", methods=["GET"])
-@require_role("cs")
+@require_section("faq")
 def admin_list_unanswered_faq():
     conn = get_conn()
     rows = conn.execute(
@@ -3640,7 +3748,7 @@ def admin_list_unanswered_faq():
 
 
 @app.route("/api/admin/faq/unanswered/<int:log_id>/resolve", methods=["POST"])
-@require_role("cs")
+@require_section("faq")
 def admin_resolve_unanswered_faq(log_id):
     d = request.json
     conn = get_conn()
@@ -3654,7 +3762,7 @@ def admin_resolve_unanswered_faq(log_id):
 
 
 @app.route("/api/admin/equipment", methods=["GET"])
-@require_role("cs")
+@require_section("equipment")
 def admin_list_equipment():
     conn = get_conn()
     rows = conn.execute("SELECT * FROM equipment_items ORDER BY id").fetchall()
@@ -3663,7 +3771,7 @@ def admin_list_equipment():
 
 
 @app.route("/api/admin/equipment", methods=["POST"])
-@require_role("manager")
+@require_section("equipment")
 def admin_create_equipment():
     d = request.json
     conn = get_conn()
@@ -3678,7 +3786,7 @@ def admin_create_equipment():
 
 
 @app.route("/api/admin/equipment/<int:equipment_id>/status", methods=["PUT"])
-@require_role("cs")
+@require_section("equipment")
 def admin_update_equipment_status(equipment_id):
     d = request.json
     conn = get_conn()
@@ -3696,7 +3804,7 @@ def admin_update_equipment_status(equipment_id):
 
 
 @app.route("/api/admin/equipment/<int:equipment_id>/logs", methods=["GET"])
-@require_role("cs")
+@require_section("equipment")
 def admin_list_equipment_logs(equipment_id):
     conn = get_conn()
     rows = conn.execute(
@@ -3710,7 +3818,7 @@ def admin_list_equipment_logs(equipment_id):
 
 
 @app.route("/api/admin/equipment/<int:equipment_id>/logs", methods=["POST"])
-@require_role("cs")
+@require_section("equipment")
 def admin_create_equipment_log(equipment_id):
     d = request.json
     conn = get_conn()
@@ -3726,7 +3834,7 @@ def admin_create_equipment_log(equipment_id):
 
 
 @app.route("/api/admin/equipment-logs/<int:log_id>/resolve", methods=["POST"])
-@require_role("cs")
+@require_section("equipment")
 def admin_resolve_equipment_log(log_id):
     d = request.json
     conn = get_conn()
@@ -3740,7 +3848,7 @@ def admin_resolve_equipment_log(log_id):
 
 
 @app.route("/api/admin/equipment/<int:equipment_id>/closures", methods=["GET"])
-@require_role("cs")
+@require_section("equipment")
 def admin_list_equipment_closures(equipment_id):
     conn = get_conn()
     rows = conn.execute(
@@ -3751,7 +3859,7 @@ def admin_list_equipment_closures(equipment_id):
 
 
 @app.route("/api/admin/equipment/<int:equipment_id>/closures", methods=["POST"])
-@require_role("cs")
+@require_section("equipment")
 def admin_add_equipment_closure(equipment_id):
     d = request.json
     conn = get_conn()
@@ -3766,7 +3874,7 @@ def admin_add_equipment_closure(equipment_id):
 
 
 @app.route("/api/admin/equipment-closures/<int:closure_id>", methods=["DELETE"])
-@require_role("cs")
+@require_section("equipment")
 def admin_delete_equipment_closure(closure_id):
     conn = get_conn()
     conn.execute("DELETE FROM equipment_closures WHERE id=?", (closure_id,))
@@ -3825,7 +3933,7 @@ _TEST_DATA_TABLES = [
 
 
 @app.route("/api/admin/system/test-data-summary", methods=["GET"])
-@require_role("manager")
+@require_section("system")
 def admin_test_data_summary():
     """清除前的預覽:列出每張表目前各有幾筆資料,讓老闆/主管在真的按下清除之前,
     可以先確認範圍對不對——例如筆數多到不合理,可能代表已經有真客戶的資料混
@@ -3842,7 +3950,7 @@ def admin_test_data_summary():
 
 
 @app.route("/api/admin/system/clear-test-data", methods=["POST"])
-@require_role("manager")
+@require_section("system")
 def admin_clear_test_data():
     """正式清除。務必在request body帶上{"confirm": "CLEAR_ALL_TEST_DATA"}這個固定
     字串才會真的執行,避免前端邏輯萬一寫錯、或有人不小心打到這支API就整批刪光

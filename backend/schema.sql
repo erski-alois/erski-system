@@ -684,8 +684,10 @@ INSERT INTO ski_resorts (region_id, code, name)
 -- 白馬、其他雪場:雪場清單由後台自行新增,先不建立示範資料
 
 -- 教練駐在地選項種子資料(高雄是室內滑雪分店,其餘是日本雪場)
+-- 2026-09:新增「白馬」(原本baseline只有藏王/鬼首/北海道/高雄/其他,漏了白馬這個
+-- 日本滑雪分區,見migration 1eb79191a711)
 INSERT INTO coach_location_options (name, is_indoor_branch) VALUES
- ('藏王', 0), ('鬼首', 0), ('北海道', 0), ('高雄', 1), ('其他', 0);
+ ('藏王', 0), ('鬼首', 0), ('北海道', 0), ('高雄', 1), ('其他', 0), ('白馬', 0);
 
 -- 教練能力選項種子資料(中英並列顯示)
 INSERT INTO coach_capability_options (name) VALUES

@@ -392,7 +392,7 @@
             還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
           </div>
           <a class="staff-link-jp" onclick="openCoachLogin()">🎿 教練登入(教練專屬頁面) →</a>
-          <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(客服/主管/老闆) →</a>
+          <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(股東/主管/老闆) →</a>
 
           <div id="memberCreateForm" style="display:none; text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">
             <h3 style="font-size:14px;">建立會員資料</h3>
@@ -481,7 +481,7 @@
   <div class="card" id="coachLoginFormCard" style="max-width:420px; margin:0 auto;">
     <a class="back" onclick="closeCoachLogin()">← 返回</a>
     <h3>教練登入</h3>
-    <p class="note">這裡是教練專屬的頁面,跟員工後台管理(客服/主管/老闆用)是分開的。用你的工號＋密碼登入,登入後直接進入你自己的專屬頁面。</p>
+    <p class="note">這裡是教練專屬的頁面,跟員工後台管理(股東/主管/老闆用)是分開的。用你的工號＋密碼登入,登入後直接進入你自己的專屬頁面。</p>
     <label>工號</label><input id="coachLoginWorkId">
     <label>密碼</label><input id="coachLoginPw" type="password">
     <button onclick="coachLoginSubmit()">登入</button>
@@ -1352,7 +1352,7 @@ async function coachLoginSubmit() {
   }
   if (data.role !== "coach") {
     document.getElementById("coachLoginStatus").innerHTML =
-      `<span class="status-tag warn">此頁面僅供教練使用。您的帳號角色是「${({boss:"老闆",manager:"主管",cs:"客服"})[data.role] || data.role}」,請改由「員工後台管理登入」進入。</span>`;
+      `<span class="status-tag warn">此頁面僅供教練使用。您的帳號角色是「${({boss:"老闆",manager:"主管",cs:"股東"})[data.role] || data.role}」,請改由「員工後台管理登入」進入。</span>`;
     return;
   }
   coachStandaloneMode = true;
@@ -1432,16 +1432,28 @@ async function renderStaffPanel(staff) {
   const displayName = staff.name || document.getElementById("adminTopbarName").textContent || "";
   document.getElementById("adminTopbarAvatar").textContent = displayName.slice(0,1);
   document.getElementById("adminTopbarName").textContent = displayName;
-  const roleLabel = { boss: "最高管理者", manager: "主管", cs: "客服", coach: "教練" };
+  const roleLabel = { boss: "老闆", manager: "主管", cs: "股東", coach: "教練" };
   document.getElementById("adminTopbarRole").textContent = roleLabel[staff.role] || staff.role;
 
   const body = document.getElementById("staffPanelBody");
   const sidebar = document.getElementById("adminSidebarNav");
 
   if (["cs","manager","boss"].includes(staff.role)) {
-    const isManagerUp = ["manager","boss"].includes(staff.role);
+    // 2026-09權限改版:依「老闆權限全開;股東(角色值仍是cs)除了財務與分析、系統管理
+    // 兩大類不開放,其餘全開;主管只開放會員與訂課/代客訂課/待處理事項/報到管理/
+    // 訂單管理/團課教練指派/教練出勤管理/雪場管理這8項」的需求,後台每個分頁能不能看,
+    // 不再是「角色等級越高看到的越多」這種單純比大小,改成每個角色各自獨立列出看得到
+    // 哪幾塊(跟後端app.py的SECTION_ROLES是同一套規則,兩邊要保持一致)。
+    const SECTION_ROLES = {
+      dashboard: ["cs"], overview: ["cs","manager"], assist: ["cs","manager"], pending: ["cs","manager"],
+      checkin: ["cs","manager"], orders: ["cs","manager"], japanbookings: ["cs"], groupassign: ["cs","manager"],
+      equipment: ["cs"], faq: ["cs"], coachschedule: ["cs","manager"], resorts: ["cs","manager"], coaches: ["cs"],
+      finance: [], system: [],
+    };
+    const canSee = (sectionKey) => staff.role === "boss" || (SECTION_ROLES[sectionKey] || []).includes(staff.role);
+
     const isBoss = staff.role === "boss";
-    window.currentStaffIsManagerUp = isManagerUp;
+    window.currentStaffHighTrust = staff.role === "cs" || staff.role === "boss";
     window.currentStaffRole = staff.role;
     window.currentStaffId = staff.id;
 
@@ -1455,17 +1467,19 @@ async function renderStaffPanel(staff) {
       ]},
       { title: "排程與資源", items: [
         ["groupassign", "團課教練指派"], ["equipment", "設備管理"], ["faq", "FAQ管理"],
-        ["coachschedule", "教練出勤管理"],
-        ...(isManagerUp ? [["resorts", "雪場管理"], ["coaches", "教練管理"]] : []),
+        ["coachschedule", "教練出勤管理"], ["resorts", "雪場管理"], ["coaches", "教練管理"],
       ]},
-      ...(isManagerUp ? [{ title: "財務與分析", items: [
-        ["reports", "管理報表"], ["payroll", "薪資管理"], ["profitloss", "月結損益"],
-        ["partners", "合作單位"],
-      ]}] : []),
-      ...(isManagerUp ? [{ title: "系統管理", items: [
-        ["pricing", "價格設定"], ["import", "資料匯入"], ["cleartest", "清除測試資料"],
-      ]}] : []),
-    ];
+      { title: "財務與分析", items: [
+        ["reports", "管理報表", "finance"], ["payroll", "薪資管理", "finance"],
+        ["profitloss", "月結損益", "finance"], ["partners", "合作單位", "finance"],
+      ]},
+      { title: "系統管理", items: [
+        ["pricing", "價格設定", "system"], ["import", "資料匯入", "system"], ["cleartest", "清除測試資料", "system"],
+      ]},
+    ].map(g => ({
+      title: g.title,
+      items: g.items.filter(([key, , sectionKey]) => canSee(sectionKey || key)),
+    })).filter(g => g.items.length > 0);
 
     sidebar.innerHTML = `
       <div class="admin-sidebar-brand">
@@ -1487,7 +1501,7 @@ async function renderStaffPanel(staff) {
     `;
 
     body.innerHTML = `
-      <div id="staffTab-dashboard" class="staff-tab"></div>
+      <div id="staffTab-dashboard" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-overview" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-assist" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-orders" class="staff-tab" style="display:none;"></div>
@@ -1508,22 +1522,33 @@ async function renderStaffPanel(staff) {
       <div id="staffTab-cleartest" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-partners" class="staff-tab" style="display:none;"></div>
     `;
-    document.getElementById("navbtn-dashboard").classList.add("active");
 
-    await renderDashboardTab();
-    await renderStaffOverviewTab();
-    await renderStaffAssistTab();
-    await renderOrdersManageTab();
-    await renderPendingActions();
-    await renderCheckInTab();
-    await renderJapanBookingsTools();
-    await renderFaqManageTab();
-    await renderEquipmentTab();
-    await renderGroupClassAssignTools();
-    await renderCoachScheduleTools();
-    if (isManagerUp) {
-      await renderResortManageTools();
-      await renderCoachManageTools();
+    // 預設打開的分頁:優先選「營運中心」,如果這個角色看不到(例如主管),就選這個角色
+    // 實際看得到的第一個分頁,避免畫面一開始是空的。
+    const firstVisibleKey = navGroups.length ? navGroups[0].items[0][0] : null;
+    const defaultTab = canSee("dashboard") ? "dashboard" : firstVisibleKey;
+    if (defaultTab) {
+      document.getElementById(`staffTab-${defaultTab}`).style.display = "block";
+      const navBtn = document.getElementById(`navbtn-${defaultTab}`);
+      if (navBtn) navBtn.classList.add("active");
+    }
+
+    // 只呼叫這個角色實際看得到的分頁對應的初始化函式,看不到的分頁不用打對應的API
+    // (打了也會被後端擋掉,但沒必要浪費請求、也避免畫面上出現不必要的錯誤訊息)。
+    if (canSee("dashboard")) await renderDashboardTab();
+    if (canSee("overview")) await renderStaffOverviewTab();
+    if (canSee("assist")) await renderStaffAssistTab();
+    if (canSee("orders")) await renderOrdersManageTab();
+    if (canSee("pending")) await renderPendingActions();
+    if (canSee("checkin")) await renderCheckInTab();
+    if (canSee("japanbookings")) await renderJapanBookingsTools();
+    if (canSee("faq")) await renderFaqManageTab();
+    if (canSee("equipment")) await renderEquipmentTab();
+    if (canSee("groupassign")) await renderGroupClassAssignTools();
+    if (canSee("coachschedule")) await renderCoachScheduleTools();
+    if (canSee("resorts")) await renderResortManageTools();
+    if (canSee("coaches")) await renderCoachManageTools();
+    if (isBoss) {
       await renderReportsTools();
       await renderPayrollTools();
       await renderProfitLossTools();
@@ -2087,7 +2112,7 @@ const SCHEDULE_STATUS_LABEL = { working: "上班", personal_leave: "事假", sic
 async function renderJapanBookingsTools() {
   const wrap = document.getElementById("staffTab-japanbookings");
   const now = new Date();
-  const isManagerUp = window.currentStaffIsManagerUp;
+  const isManagerUp = window.currentStaffHighTrust;
   const isBoss = window.currentStaffRole === "boss";
   wrap.innerHTML = `
     <h3 style="margin-top:16px; font-size:14px;">日本教練課訂單管理</h3>
@@ -2110,7 +2135,7 @@ async function loadJapanBookingsList() {
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
   const { data: bookings } = await api(`/admin/japan-bookings?${params.toString()}`);
-  const isManagerUp = window.currentStaffIsManagerUp;
+  const isManagerUp = window.currentStaffHighTrust;
   const isBoss = window.currentStaffRole === "boss";
   const wrap = document.getElementById("jbListWrap");
   wrap.innerHTML = bookings.map(b => `
@@ -2617,7 +2642,7 @@ async function toggleMemberDetail(memberId) {
 
   const { data: full } = await api(`/members/${memberId}`);
   const listVersion = staffAllMembers.find(x => x.id === memberId) || {};
-  const isManagerUp = window.currentStaffIsManagerUp;
+  const isManagerUp = window.currentStaffHighTrust;
   // 敏感欄位(身分證/血型/地址/緊急聯絡電話):客服只看得到清單API已遮罩過的版本,且設為唯讀,
   // 避免客服在不知情的狀況下把遮罩後的假資料存回去蓋掉真實值;主管以上才看得到/改得到真實值。
   // 2026-08修正:/api/members/<id>回傳的姓名/電話/生日等基本資料是包在full.member裡面
@@ -2642,7 +2667,7 @@ async function toggleMemberDetail(memberId) {
     <div class="field-grid">
       <div><label>姓名</label><input id="memName-${memberId}" value="${(m.name||"").replace(/"/g,'&quot;')}"></div>
       <div><label>電話</label><input id="memPhone-${memberId}" value="${(m.phone||"").replace(/"/g,'&quot;')}"></div>
-      <div><label>身分證字號${!isManagerUp?"(主管以上可見)":""}</label><input id="memIdNumber-${memberId}" value="${(m.id_number||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
+      <div><label>身分證字號${!isManagerUp?"(股東以上可見)":""}</label><input id="memIdNumber-${memberId}" value="${(m.id_number||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
       <div><label>出生日期</label><input id="memBirthDate-${memberId}" type="date" value="${m.birth_date||""}"></div>
       <div><label>性別</label>
         <select id="memGender-${memberId}">
@@ -2651,12 +2676,12 @@ async function toggleMemberDetail(memberId) {
           <option value="female" ${m.gender==="female"?"selected":""}>女</option>
         </select>
       </div>
-      <div><label>血型${!isManagerUp?"(主管以上可見)":""}</label><input id="memBloodType-${memberId}" value="${(m.blood_type||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
-      <div><label>地址${!isManagerUp?"(主管以上可見)":""}</label><input id="memAddress-${memberId}" value="${(m.address||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
+      <div><label>血型${!isManagerUp?"(股東以上可見)":""}</label><input id="memBloodType-${memberId}" value="${(m.blood_type||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
+      <div><label>地址${!isManagerUp?"(股東以上可見)":""}</label><input id="memAddress-${memberId}" value="${(m.address||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
       <div><label>LINE ID</label><input id="memLineId-${memberId}" value="${(m.line_id||"").replace(/"/g,'&quot;')}"></div>
       <div><label>社群帳號</label><input id="memSocial-${memberId}" value="${(m.social_handle||"").replace(/"/g,'&quot;')}"></div>
       <div><label>緊急聯絡人</label><input id="memEmergName-${memberId}" value="${(m.emergency_contact_name||"").replace(/"/g,'&quot;')}"></div>
-      <div><label>緊急聯絡電話${!isManagerUp?"(主管以上可見)":""}</label><input id="memEmergPhone-${memberId}" value="${(m.emergency_contact_phone||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
+      <div><label>緊急聯絡電話${!isManagerUp?"(股東以上可見)":""}</label><input id="memEmergPhone-${memberId}" value="${(m.emergency_contact_phone||"").replace(/"/g,'&quot;')}" ${sensitiveReadonly}></div>
     </div>
 
     <div class="sub-section-title">滑雪資料</div>
@@ -2698,7 +2723,7 @@ async function toggleMemberDetail(memberId) {
   `;
 }
 async function saveMemberProfileAdmin(memberId) {
-  const isManagerUp = window.currentStaffIsManagerUp;
+  const isManagerUp = window.currentStaffHighTrust;
   const payload = {
     name: document.getElementById(`memName-${memberId}`).value,
     phone: document.getElementById(`memPhone-${memberId}`).value,
@@ -3959,7 +3984,7 @@ async function toggleCoachEdit(coachId) {
     <label style="margin-top:8px;">時薪/鐘點費率(元,用於估算授課費用)</label>
     <input id="coachHourlyRate-${coachId}" type="number" value="${details.hourly_rate || ""}">
 
-    <div class="sub-section-title">室內滑雪薪資(人事機密,僅主管以上可見)</div>
+    <div class="sub-section-title">室內滑雪薪資(人事機密,僅股東以上可見)</div>
     <div class="field-grid">
       <div><label>基本薪資(底薪)</label><input id="coachBaseSalary-${coachId}" type="number" value="${details.base_salary || ""}"></div>
       <div><label>堂課時薪(包機/自訓/團課)</label><input id="coachRateGroup-${coachId}" type="number" value="${details.rate_group_class || ""}"></div>
@@ -3967,7 +3992,7 @@ async function toggleCoachEdit(coachId) {
       <div><label>助教時薪</label><input id="coachRateAssistant-${coachId}" type="number" value="${details.rate_assistant || ""}"></div>
     </div>
 
-    <div class="sub-section-title">日本滑雪薪資(人事機密,僅主管以上可見)</div>
+    <div class="sub-section-title">日本滑雪薪資(人事機密,僅股東以上可見)</div>
     <div class="field-grid">
       <div><label>教練提成比例(0~1)</label><input id="coachJapanRate-${coachId}" type="number" step="0.01" value="${details.japan_commission_rate != null ? details.japan_commission_rate : ""}"></div>
     </div>
