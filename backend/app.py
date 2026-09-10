@@ -2252,7 +2252,13 @@ def admin_create_staff():
     「教練管理」這個區塊開放給股東,但這支API本身沒有限制role欄位只能是'coach'——如果
     直接開放給股東呼叫,股東就能繞過前端「新增教練」表單,自己組一個role='boss'的請求
     幫自己開一個老闆帳號,等於權限提升漏洞。修法:非老闆呼叫這支API時,一律強制role='coach'
-    (忽略請求裡帶的role值),只有老闆能透過這支API新增股東/主管/老闆等級的帳號。"""
+    (忽略請求裡帶的role值),只有老闆能透過這支API新增股東/主管/老闆等級的帳號。
+
+    2026-09-10依需求調整預設密碼規則:「後台所有人預設密碼都用123456,登入後台後讓所有人
+    自行更改密碼」——這裡的「後台」指股東/主管/老闆這3種角色(教練是走另一個「教練頁面」,
+    不在這次的指示範圍內,教練的預設密碼維持原本的生日後6碼規則不變)。所以下面改成:
+    新增的角色是cs/manager/boss時,預設密碼固定是123456;新增的角色是coach時,預設密碼
+    維持原本「生日後6碼」的規則。"""
     d = request.json
     conn = get_conn()
     existing = conn.execute("SELECT id FROM staff WHERE work_id=?", (d["work_id"],)).fetchone()
@@ -2260,7 +2266,7 @@ def admin_create_staff():
         conn.close()
         return jsonify({"error": f"工號「{d['work_id']}」已經有人使用,請換一個工號"}), 400
     role = d["role"] if request.current_staff["role"] == "boss" else "coach"
-    password = d["birthday"].replace("-", "")[2:8]
+    password = "123456" if role in ("cs", "manager", "boss") else d["birthday"].replace("-", "")[2:8]
     cur = conn.execute(
         """INSERT INTO staff (work_id, name, display_code, phone, birthday, password_hash, role, branch)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
