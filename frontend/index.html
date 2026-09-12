@@ -3156,28 +3156,40 @@ function coachBookingDetailHtml(b) {
   }
 
   html += `<h3 style="margin-top:14px; font-size:14px;">教練簽到</h3>`;
-  html += `<p class="note">請學員口頭提供上課碼/下課碼,分別輸入後按「送出」即可完成報到——可以先輸入上課碼、下課時再回來輸入下課碼,也可以兩個都填好後一次送出。</p>`;
+  html += `<p class="note">請學員口頭提供上課碼/下課碼,輸入後按各自後面的「確認」即可完成報到——上課時先輸入上課碼確認,下課時再回來輸入下課碼確認,兩邊分開送出,不用等兩個都填好才能按。</p>`;
 
   b.attendance_code_status.forEach(s => {
     const slot = ATTENDANCE_SLOT_LABEL[s.session_slot] || s.session_slot;
     // 2026-09:改成上下2行各自滿版寬度(原本是同一行並排、輸入框寫死120px,在手機窄螢幕
     // 上會被切斷、要橫向捲動才看得到——已用瀏覽器手機尺寸實測修正)。另外加上
     // inputmode="numeric"/pattern,手機輸入編碼時會直接跳出數字鍵盤,不用切換英數鍵盤。
+    // 2026-09第二次改版:上課碼/下課碼原本共用畫面最下方一顆「送出」按鈕,教練反映
+    // 這樣不方便——上課時只想先確認上課碼、下課時才要確認下課碼,共用一顆按鈕容易
+    // 誤觸(例如上課時按下去,下課碼欄位是空的沒差,但操作上不直覺)。改成每一組
+    // 欄位各自後面接一顆「確認」按鈕,分開送出,已完成的那組不再顯示欄位/按鈕。
     const checkinField = s.checkin_done
       ? `<div style="margin-top:8px;"><span class="status-tag ok">上課碼已完成</span></div>`
-      : `<div style="margin-top:8px;"><label>上課碼</label><input type="text" inputmode="numeric" pattern="[0-9]*"
-           autocomplete="off" maxlength="8" id="checkinCode-${b.booking_ref_id}-${s.session_slot}"
-           placeholder="輸入學員的上課碼" style="max-width:200px;"></div>`;
+      : `<div style="margin-top:8px;"><label>上課碼</label>
+           <div class="row" style="margin-top:4px;">
+             <input type="text" inputmode="numeric" pattern="[0-9]*"
+               autocomplete="off" maxlength="8" id="checkinCode-${b.booking_ref_id}-${s.session_slot}"
+               placeholder="輸入學員的上課碼" style="max-width:200px;">
+             <button onclick="submitOneAttendanceCode(${b.booking_ref_id}, '${s.session_slot}', 'checkin')">確認</button>
+           </div>
+         </div>`;
     const checkoutField = s.checkout_done
       ? `<div style="margin-top:8px;"><span class="status-tag ok">下課碼已完成</span></div>`
-      : `<div style="margin-top:8px;"><label>下課碼</label><input type="text" inputmode="numeric" pattern="[0-9]*"
-           autocomplete="off" maxlength="8" id="checkoutCode-${b.booking_ref_id}-${s.session_slot}"
-           placeholder="輸入學員的下課碼" style="max-width:200px;"></div>`;
-    const needsSubmit = !s.checkin_done || !s.checkout_done;
+      : `<div style="margin-top:8px;"><label>下課碼</label>
+           <div class="row" style="margin-top:4px;">
+             <input type="text" inputmode="numeric" pattern="[0-9]*"
+               autocomplete="off" maxlength="8" id="checkoutCode-${b.booking_ref_id}-${s.session_slot}"
+               placeholder="輸入學員的下課碼" style="max-width:200px;">
+             <button onclick="submitOneAttendanceCode(${b.booking_ref_id}, '${s.session_slot}', 'checkout')">確認</button>
+           </div>
+         </div>`;
     html += `<div class="card" style="margin-top:8px; padding:10px;">
       <b>${slot}</b>
       ${checkinField}${checkoutField}
-      ${needsSubmit ? `<button style="margin-top:10px;" onclick="submitAttendanceCodesForSlot(${b.booking_ref_id}, '${s.session_slot}')">送出</button>` : ""}
     </div>`;
   });
   return html;
@@ -3193,27 +3205,24 @@ function openCoachAttendanceCheckin(refId) {
   body.innerHTML = coachBookingDetailHtml(b);
 }
 
-// 「送出」時,把這個時段目前有填寫的上課碼/下課碼都送到後端驗證(可以只填一個,也可以
-// 兩個一起送);送完重新抓一次「我的課表」最新狀態,再重畫這個簽到頁面。
-async function submitAttendanceCodesForSlot(refId, slot) {
-  const checkinEl = document.getElementById(`checkinCode-${refId}-${slot}`);
-  const checkoutEl = document.getElementById(`checkoutCode-${refId}-${slot}`);
-  const checkinCode = checkinEl ? checkinEl.value.trim() : "";
-  const checkoutCode = checkoutEl ? checkoutEl.value.trim() : "";
-  if (!checkinCode && !checkoutCode) { alert("請至少輸入一組編碼"); return; }
+// 2026-09第二次改版:原本上課碼/下課碼共用畫面最下方一顆「送出」按鈕,改成上課碼、
+// 下課碼各自後面接一顆「確認」按鈕、分開送出(見coachBookingDetailHtml)。這支函式
+// 一次只處理「一種」編碼(codeType是'checkin'或'checkout'),按哪個「確認」就只送
+// 那一組欄位的值,不會連帶送出另一組(尚未填寫或還沒輪到)的欄位。送完重新抓一次
+// 「我的課表」最新狀態,再重畫這個簽到頁面。
+async function submitOneAttendanceCode(refId, slot, codeType) {
+  const inputId = codeType === "checkin" ? `checkinCode-${refId}-${slot}` : `checkoutCode-${refId}-${slot}`;
+  const el = document.getElementById(inputId);
+  const code = el ? el.value.trim() : "";
+  if (!code) { alert("請先輸入編碼"); return; }
 
-  const messages = [];
-  for (const code of [checkinCode, checkoutCode]) {
-    if (!code) continue;
-    const { ok, data } = await api("/admin/coach/attendance-codes/verify", {
-      method: "POST",
-      body: JSON.stringify({ ref_type: "japan_booking", ref_id: refId, code }),
-    });
-    messages.push(ok
-      ? `${data.slot_label}${data.code_type_label}報到成功${data.booking_completed ? "(此堂課已全部完成報到)" : ""}`
-      : `錯誤:${data.error}`);
-  }
-  alert(messages.join("\n"));
+  const { ok, data } = await api("/admin/coach/attendance-codes/verify", {
+    method: "POST",
+    body: JSON.stringify({ ref_type: "japan_booking", ref_id: refId, code }),
+  });
+  alert(ok
+    ? `${data.slot_label}${data.code_type_label}報到成功${data.booking_completed ? "(此堂課已全部完成報到)" : ""}`
+    : `錯誤:${data.error}`);
 
   const { data: freshBookings } = await api("/admin/coach/my-bookings");
   _lastCoachBookings = freshBookings;
