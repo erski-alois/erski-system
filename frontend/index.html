@@ -4153,7 +4153,7 @@ async function renderResortManageTools() {
                 <button class="small" onclick="assignResortCoachAdmin(${r.id}, ${region.id})">指派教練</button>
               </div>
             </div>`;
-          }).join("") || `<div class="list-item">尚無雪場</div>`}
+          }).join("") || `<div class="list-item">尚無雪場<p class="note" style="margin:4px 0 0;">「指派教練」要先幫這個地區新增至少一個雪場名稱(在下方輸入名稱按「新增」),新增後才會出現可以指派教練的欄位。</p></div>`}
         </div>
         <div class="row">
           <input id="newResortName-${region.id}" placeholder="新雪場名稱">
