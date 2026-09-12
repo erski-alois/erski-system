@@ -218,13 +218,15 @@ def require_role(min_role):
 
 
 # ------------------------------------------------------------------
-# 2026-09新增:後台權限重新設計。依你的指示——
+# 2026-09第二次改版(依「後台部份重新更改」的新需求):後台側邊選單重新分類/搬移/
+# 改名,權限表也跟著重新設計。依你的指示——
 #   老闆(boss):權限全開。
-#   股東(資料庫角色值仍是'cs',顯示名稱改為「股東」):除了「財務與分析」
-#     (管理報表/薪資管理/月結損益/合作單位)、「系統管理」(價格設定/資料匯入/
-#     清除測試資料)這兩大類之外,其餘全部開放。
-#   主管(role='manager'):只開放「會員與訂課、代客訂課、待處理事項、報到管理、
-#     訂單管理、團課教練指派、教練出勤管理、雪場管理」這8項,其餘一律看不到。
+#   股東(資料庫角色值仍是'cs',顯示名稱改為「股東」):除了「管理報表」這一大類
+#     (管理報表/薪資管理/月結損益/價格設定/資料匯入/清除測試資料)之外,其餘全部開放
+#     (包含這次從「財務與分析」搬出來、獨立成「教練及雪場管理」底下一項的「合作單位」)。
+#   主管(role='manager'):只開放「共用班表日曆、每日資訊、待處理事項、設備管理、
+#     FAQ管理、代客訂課、會員資料與訂單詳情」這7項,其餘一律看不到(教練及雪場管理、
+#     出勤管理、訂單資訊底下的室內滑雪訂單管理/日本訂單管理、管理報表都不開放)。
 #   教練(role='coach'):不使用這套後台區塊權限,教練是完全獨立的自助頁面
 #     (/coach路由),各自的存取限制見require_role("coach")+函式內部is_self判斷。
 #
@@ -234,26 +236,39 @@ def require_role(min_role):
 #
 # key對應前端admin後台側邊選單「每一個分頁」的key(見index.html的navGroups/
 # switchStaffTab),boss不用特別列在每一項裡,require_section內部一律放行boss。
+#
+# key沿革說明(避免以後看code誤以為key名稱跟現在畫面上的分頁名稱對不起來):
+#   "coachschedule"key現在對應到「共用班表日曆」這個分頁(原本掛在營運中心/dashboard
+#     底下的月曆,這次改成搬到後台第一欄,並入原本這個key底下的「今日人力」「設定
+#     教練出勤」內容,一起用室內滑雪/日本滑雪分開看);key名稱沿用舊的沒有改,單純是
+#     為了少動一支「當日人力總覽」API的裝飾器,不影響任何前端顯示文字。
+#   "japanattendance"是這次新增的key,對應新分頁「日本教練出勤管理」(原本「教練出勤
+#     管理」這個名字現在轉指到上面的共用班表日曆去了)——串上下課編碼,只呈現完成
+#     資訊,不能編輯。
+#   "partners"是這次新增的key,對應「合作單位」分頁,從原本的"finance"(僅老闆)獨立
+#     出來、開放給股東,搬到側邊選單「教練及雪場管理」那組。
 # ------------------------------------------------------------------
 SECTION_ROLES = {
-    "dashboard":     {"cs"},                # 營運中心(主管不開放)
-    "overview":      {"cs", "manager"},      # 會員與訂課
-    "assist":        {"cs", "manager"},      # 代客訂課
-    "pending":       {"cs", "manager"},      # 待處理事項
-    "checkin":       {"cs", "manager"},      # 報到管理
-    "orders":        {"cs", "manager"},      # 訂單管理
-    "japanbookings": {"cs"},                 # 日本教練課訂單(主管不開放)
-    "groupassign":   {"cs", "manager"},      # 團課教練指派
-    "equipment":     {"cs"},                 # 設備管理(主管不開放)
-    "faq":           {"cs"},                 # FAQ管理(主管不開放)
-    "coachschedule": {"cs", "manager"},      # 教練出勤管理
-    "resorts":       {"cs", "manager"},      # 雪場管理
-    "coaches":       {"cs"},                 # 教練管理(含教練駐在地/合約/時薪等人事資料,主管不開放)
-    "finance":       set(),                  # 財務與分析(管理報表/薪資管理/月結損益/合作單位):僅老闆
-    "system":        set(),                  # 系統管理(價格設定/資料匯入/清除測試資料):僅老闆
-    # partners(合作單位)列表本身另外開放給股東,因為「日本教練課訂單」分頁選合作單位
-    # 篩選條件需要用到這份名單;但合作單位的財務報表(/partners/<id>/report)、新增/
-    # 編輯合作單位,還是只在finance那組,不受這個key影響。
+    "coachschedule":   {"cs", "manager"},   # 共用班表日曆(原營運中心內的月曆,併入今日人力/教練出勤設定,移到後台第一欄)
+    "dashboard":       {"cs", "manager"},   # 每日資訊(原營運中心)
+    "pending":         {"cs", "manager"},   # 待處理事項
+    "equipment":       {"cs", "manager"},   # 設備管理
+    "faq":             {"cs", "manager"},   # FAQ管理
+    "assist":          {"cs", "manager"},   # 代客訂課
+    "overview":        {"cs", "manager"},   # 會員資料與訂單詳情(原會員與訂單)
+    "orders":          {"cs"},              # 室內滑雪訂單管理(原訂單管理,主管不再開放)
+    "japanbookings":   {"cs"},              # 日本訂單管理(主管不開放)
+    "coaches":         {"cs"},              # 教練管理(含教練駐在地/合約/時薪等人事資料,主管不開放)
+    "resorts":         {"cs"},              # 雪場管理(主管不再開放)
+    "partners":        {"cs"},              # 合作單位(原本掛finance/僅老闆,這次獨立出來開放股東)
+    "japanattendance": {"cs"},              # 日本教練出勤管理(原教練出勤管理,改唯讀,主管不開放)
+    "checkin":         {"cs"},              # 學員報到管理(原報到管理,主管不再開放)
+    "groupassign":     {"cs"},              # 教練指派管理(原團課教練指派,主管不再開放;新增可指派日本滑雪雪場)
+    "finance":         set(),               # 管理報表/薪資管理/月結損益:僅老闆
+    "system":          set(),               # 價格設定/資料匯入/清除測試資料:僅老闆
+    # partners_list(合作單位「名單」,不是完整分頁)另外開放給股東,因為「日本訂單
+    # 管理」分頁選合作單位篩選條件需要用到這份名單,跟上面完整的"partners"分頁權限
+    # (可新增/編輯合作單位、看財務報表)是兩回事,股東兩者現在都開放,這裡維持不動。
     "partners_list": {"cs"},
 }
 
@@ -327,11 +342,31 @@ def _require_member_id_from_token():
     """給訂課/付款這類路由用:一律用X-Member-Token裡的member_id,不再信任前端傳來的
     member_id欄位(避免有人把body裡的member_id改成別人的id去下單/查詢)。
     回傳(member_id, None)表示驗證成功;驗證失敗回傳(None, (response, status_code)),
-    呼叫端直接 `return err` 即可。"""
+    呼叫端直接 `return err` 即可。
+
+    2026-09新增(修正回報的bug:「代客訂課無法使用」):「代客訂課」需要客服/主管/老闆
+    用自己的員工token,直接幫會員下單,不是會員本人登入操作——修正前這支函式只認
+    X-Member-Token,員工token一律視為未登入,導致代客訂課這個分頁形同虛設,不管選
+    什麼課程種類、送出都會得到「未登入或登入已過期」。這裡補上:如果沒有會員token,
+    改看是不是「代客訂課」權限(assist)以上的員工token,且body有帶member_id,就
+    信任這個member_id(這個情境下member_id本來就必須由畫面上選擇會員產生,不是使用者
+    自己宣稱的身份,不算繞過原本的資安考量);純會員自己下單那條路徑完全不受影響,
+    還是只認X-Member-Token,不會因為這次改動多開任何後門給一般會員。"""
     member_id = _current_member_id()
-    if member_id is None:
-        return None, (jsonify({"error": "未登入或登入已過期,請重新登入"}), 401)
-    return member_id, None
+    if member_id is not None:
+        return member_id, None
+    staff = _current_staff()
+    if staff and (staff["role"] == "boss" or staff["role"] in SECTION_ROLES["assist"]):
+        d = request.get_json(silent=True) or {}
+        body_member_id = d.get("member_id")
+        if body_member_id:
+            conn = get_conn()
+            row = conn.execute("SELECT id FROM members WHERE id=?", (body_member_id,)).fetchone()
+            conn.close()
+            if not row:
+                return None, (jsonify({"error": "找不到此會員"}), 404)
+            return int(body_member_id), None
+    return None, (jsonify({"error": "未登入或登入已過期,請重新登入"}), 401)
 
 
 # ------------------------------------------------------------------
@@ -346,6 +381,18 @@ def oauth_login():
     # 目前是mock_external_id模擬這個結果),核發一組會員token給前端後續請求使用。
     if not result.get("is_new") and result.get("member"):
         result["token"] = authtoken.issue_member_token(result["member"]["id"])
+    return jsonify(result)
+
+
+@app.route("/api/auth/member-login", methods=["POST"])
+def member_login():
+    """2026-09新增:會員Email+密碼正式登入(取代原本完全沒有密碼驗證的
+    /auth/oauth-login provider='email' 那條路,詳見auth.member_login說明)。"""
+    d = request.json or {}
+    result = auth.member_login(d.get("email"), d.get("password"))
+    if "error" in result:
+        return jsonify(result), 401
+    result["token"] = authtoken.issue_member_token(result["member"]["id"])
     return jsonify(result)
 
 
@@ -386,7 +433,7 @@ def admin_list_partners():
 
 
 @app.route("/api/admin/partners", methods=["POST"])
-@require_section("finance")
+@require_section("partners")
 def admin_create_partner():
     d = request.json
     conn = get_conn()
@@ -408,7 +455,7 @@ def admin_create_partner():
 
 
 @app.route("/api/admin/partners/<int:partner_id>", methods=["PUT"])
-@require_section("finance")
+@require_section("partners")
 def admin_update_partner(partner_id):
     d = request.json
     conn = get_conn()
@@ -423,7 +470,7 @@ def admin_update_partner(partner_id):
 
 
 @app.route("/api/admin/partners/<int:partner_id>/report", methods=["GET"])
-@require_section("finance")
+@require_section("partners")
 def admin_partner_report(partner_id):
     """匯出該合作單位所推薦會員的訂單資料,供計算回饋/回扣參考。"""
     conn = get_conn()
@@ -496,6 +543,27 @@ def set_member_referral_code(member_id):
     return jsonify({"ok": True, "partner_name": partner["name"]})
 
 
+@app.route("/api/admin/members/<int:member_id>/reset-password", methods=["POST"])
+@require_section("overview")
+def admin_reset_member_password(member_id):
+    """2026-09新增:客服/主管/老闆可用,幫忘記密碼的會員清除登入密碼(見
+    auth.admin_reset_member_password說明)。清除後該會員下次用Email登入,系統會
+    引導他直接設定一組新密碼,不需要員工知道/決定會員實際使用的密碼。"""
+    try:
+        auth.admin_reset_member_password(member_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'reset_member_password', 'member', ?, '{}', '{}')""",
+        (request.current_staff["id"], member_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/members/<int:member_id>/password", methods=["PUT"])
 @require_member_or_staff()
 def set_member_password(member_id):
@@ -558,6 +626,17 @@ def get_member(member_id):
 
     m_dict = dict(m)
     has_password = bool(m_dict.pop("password_hash", None))
+    # 2026-09-10修正(檢查RBAC改版時發現的漏洞):這支API原本沒有套用_mask_sensitive_member_fields,
+    # 導致「/api/admin/members清單有遮罩,但直接叫這支單筆詳情API卻拿到完整未遮罩資料」——
+    # 前端會員詳情頁原本只是「畫面上」把主管看到的欄位蓋成清單API的遮罩版本、輸入框disabled,
+    # 但這支API實際回傳的原始JSON裡,身分證字號/血型/地址/緊急聯絡電話都是完整明碼,只要
+    # 打開瀏覽器開發者工具的Network分頁,或直接用API呼叫,主管(股東以下)一樣看得到完整值,
+    # 等於這次做的PII遮罩對這支API完全沒有實際生效。這裡補上跟清單API一致的遮罩規則:
+    # 只有股東以上(_is_high_trust_staff)才看得到完整值,會員自己查自己的資料(current_staff
+    # 沒有被設定,代表是會員token而不是員工token)不受影響,一律看得到自己的完整資料。
+    current_staff = getattr(request, "current_staff", None)
+    if current_staff:
+        m_dict = _mask_sensitive_member_fields(m_dict, current_staff["role"])
 
     return jsonify({
         "member": m_dict,
@@ -674,6 +753,17 @@ def update_member_profile(member_id):
         "snowboard_length", "snowboard_boot_size", "ski_length", "ski_boot_size",
         "machine_level", "snow_level", "primary_equipment",
     ]
+    # 2026-09-10修正(檢查RBAC改版時發現的漏洞):高度敏感欄位(身分證字號/血型/地址/
+    # 緊急聯絡電話)原本這支API沒有限制誰能寫入——前端「代客戶編輯資料」畫面雖然只有
+    # 股東以上才會把這幾個欄位放進送出的請求內容(主管看到的輸入框是disabled、且不會被
+    # 加進payload),但那只是前端畫面的行為,不是後端真正的把關,只要主管自己組一個
+    # 帶著這幾個欄位的PUT請求直接呼叫這支API,一樣可以覆蓋掉會員的真實敏感資料。
+    # 這裡補上後端檢查:只有股東以上(_is_high_trust_staff)的員工,或會員本人
+    # (current_staff沒被設定,代表用的是會員自己的token)才能異動這幾個欄位;主管
+    # 呼叫這支API時,如果請求內容剛好帶了這幾個欄位,一律忽略,不會被寫入。
+    current_staff = getattr(request, "current_staff", None)
+    if current_staff and not _is_high_trust_staff(current_staff["role"]):
+        d = {k: v for k, v in d.items() if k not in SENSITIVE_MEMBER_FIELDS}
     updates = {k: v for k, v in d.items() if k in fields}
     if not updates:
         return jsonify({"error": "no valid fields"}), 400
@@ -1382,6 +1472,96 @@ def admin_assign_group_class_coach(session_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/japan-bookings/needs-coach", methods=["GET"])
+@require_section("groupassign")
+def admin_list_japan_bookings_needs_coach():
+    """2026-09新增(「教練指派管理」分頁新增的日本滑雪雪場指派功能):列出未來日期、
+    尚未指派教練的日本教練課訂單,供這個分頁指派教練用。修正前系統完全沒有任何後台
+    介面可以指派/更換日本教練課的教練(只能在「共用班表日曆」建立訂單當下順便指定,
+    之後就沒有任何地方能改),回報的相關問題:「日本雪場沒有教練指派機制」。
+    這裡只列「尚未指派」的,已經有教練的訂單如果要更換,直接用下面
+    assign-coach這支API(帶新的coach_id)即可,不需要另外查詢。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT jb.id, jb.booking_date, jb.day_type, jb.half_day_slot, jb.headcount, jb.equipment_type,
+                  r.name AS resort_name, m.name AS member_name
+           FROM japan_bookings jb
+           JOIN ski_resorts r ON jb.resort_id = r.id
+           JOIN members m ON jb.member_id = m.id
+           WHERE jb.coach_id IS NULL AND jb.status != 'cancelled'
+             AND jb.booking_date >= ?
+           ORDER BY jb.booking_date, jb.id""",
+        (booking.today_tw().isoformat(),),
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/japan-bookings/<int:booking_id>/assign-coach", methods=["POST"])
+@require_section("groupassign")
+def admin_assign_japan_booking_coach(booking_id):
+    """指派/更換日本教練課訂單的教練。這是後台「教練指派管理」分頁的操作(主管以上
+    幫忙安排人力),不是客戶下單時付費指定教練(見booking.book_japan_multi_day的
+    designate_coach/designate_fee),所以這裡不收取指定教練費、不改price/designate_fee/
+    designate_coach欄位,只更新coach_id,並依新教練的個人提成設定重新計算
+    coach_commission_rate/coach_income(否則薪資計算會沿用舊教練的提成比例或維持NULL,
+    導致這位教練的日本教練課收入報表少算)。
+    已取消或已完成報到的訂單不允許再改教練,避免回溯竄改已經結算/已經上課完的紀錄。"""
+    d = request.json or {}
+    coach_id = d.get("coach_id")
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, coach_id, price, status, attendance_status FROM japan_bookings WHERE id=?",
+        (booking_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "找不到這筆日本教練課訂單"}), 404
+    if row["status"] == "cancelled":
+        conn.close()
+        return jsonify({"error": "這筆訂單已取消,無法指派教練"}), 400
+    if row["attendance_status"] == "completed":
+        conn.close()
+        return jsonify({"error": "這筆訂單已完成報到,無法再更改教練"}), 400
+
+    commission_rate = None
+    coach_income = None
+    if coach_id is not None:
+        coach_row = conn.execute(
+            "SELECT id, role, is_active FROM staff WHERE id=?", (coach_id,)
+        ).fetchone()
+        if not coach_row:
+            conn.close()
+            return jsonify({"error": "找不到這個教練帳號"}), 404
+        if coach_row["role"] != "coach":
+            conn.close()
+            return jsonify({"error": "這個員工帳號不是教練身份,無法指派"}), 400
+        if not coach_row["is_active"]:
+            conn.close()
+            return jsonify({"error": "這位教練目前是非在職狀態,無法指派"}), 400
+        profile = conn.execute(
+            "SELECT japan_commission_rate FROM coach_profiles WHERE coach_id=?", (coach_id,)
+        ).fetchone()
+        commission_rate = profile["japan_commission_rate"] if profile and profile["japan_commission_rate"] else None
+        if commission_rate is not None:
+            coach_income = round(row["price"] * commission_rate)
+
+    before_coach_id = row["coach_id"]
+    conn.execute(
+        "UPDATE japan_bookings SET coach_id=?, coach_commission_rate=?, coach_income=? WHERE id=?",
+        (coach_id, commission_rate, coach_income, booking_id),
+    )
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'assign_japan_booking_coach', 'japan_booking', ?, ?, ?)""",
+        (request.current_staff["id"], booking_id,
+         json.dumps({"coach_id": before_coach_id}), json.dumps({"coach_id": coach_id})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "coach_income": coach_income})
+
+
 @app.route("/api/admin/coach-schedule", methods=["GET"])
 @require_section("coachschedule")
 def admin_list_coach_schedule():
@@ -1405,28 +1585,49 @@ def admin_list_coach_schedule():
 @app.route("/api/admin/dashboard-summary", methods=["GET"])
 @require_section("dashboard")
 def admin_dashboard_summary():
-    """營運中心首頁彙總資料:今日課程數、報到狀況、當日每位教練應收尾款。
-    2026-08:依需求把「待付款訂單」改成「當日每位教練應收尾款」——只抓日本教練課
-    (訂金/尾款制)裡,今天出團、尾款還沒收的部分,依教練分組加總,方便教練當天去跟
-    學員收現金尾款時對帳;同時把原本「待指派教練」「設備異常」這兩張卡片拿掉
-    (共用班表日曆也在同一次改動合併進這個畫面,見前端)。"""
+    """每日資訊首頁彙總資料(原「營運中心」,2026-09第二次改版重新設計內容)。
+    依你的新指示:
+    - 今日課程:區分日本滑雪及室內滑雪(室內滑雪含高雄室內雪機各類課程+跳台體驗)。
+    - 今日營業額:原本的「今日報到」(報到人數)改成營業額,並與金流(transactions資料表)
+      串起來,拆刷卡金額/匯款金額/現金金額——只算「今天已確認入帳」的交易,忽略
+      manual_grant(人工核發,不是真實金流)跟refund(退款,是負向調整不是營收);
+      webatm/atm兩種都歸類到「匯款」金額(對帳邏輯跟匯款一樣,都是先產生虛擬帳號/
+      約定帳號等對方入帳,不是店員當面收現金也不是即時線上刷卡)。
+    - 當日每位教練應收尾款、待處理事項摘要卡片、共用班表日曆都依指示從這裡移除
+      (應收尾款移到「日本訂單管理」分頁;共用班表日曆移到後台第一欄,並在那邊合併
+      「今日人力」跟「設定教練出勤」;待處理事項本身分頁不變,只是不在這裡重複摘要)。
+    coach_receivables_today這個key保留在回傳值裡(不是每日資訊自己顯示,是給「日本訂單
+    管理」分頁重複呼叫這支API取用,避免另外重寫一支幾乎一樣的統計API)。"""
     today_str = booking.today_tw().isoformat()
     conn = get_conn()
 
-    today_sessions = conn.execute(
+    today_indoor = conn.execute(
         "SELECT COUNT(*) c FROM indoor_sessions WHERE booking_date=? AND status != 'cancelled'", (today_str,)
-    ).fetchone()["c"]
-    today_japan = conn.execute(
-        "SELECT COUNT(*) c FROM japan_bookings WHERE booking_date=? AND status != 'cancelled'", (today_str,)
     ).fetchone()["c"]
     today_jump = conn.execute(
         "SELECT COUNT(*) c FROM jump_bookings WHERE booking_date=? AND status != 'cancelled'", (today_str,)
     ).fetchone()["c"]
-    total_today = today_sessions + today_japan + today_jump
-
-    checked_in = conn.execute(
-        "SELECT COUNT(*) c FROM indoor_sessions WHERE booking_date=? AND attendance_status='completed'", (today_str,)
+    today_japan = conn.execute(
+        "SELECT COUNT(*) c FROM japan_bookings WHERE booking_date=? AND status != 'cancelled'", (today_str,)
     ).fetchone()["c"]
+
+    revenue_rows = conn.execute(
+        """SELECT payment_method, SUM(amount) AS total FROM transactions
+           WHERE date(created_at)=? AND payment_status='confirmed'
+             AND payment_type != 'refund' AND payment_method != 'manual_grant'
+           GROUP BY payment_method""",
+        (today_str,),
+    ).fetchall()
+    revenue_by_method = {"online_card": 0, "onsite": 0, "bank_transfer": 0, "webatm": 0, "atm": 0}
+    for r in revenue_rows:
+        if r["payment_method"] in revenue_by_method:
+            revenue_by_method[r["payment_method"]] = r["total"] or 0
+    today_revenue = {
+        "card": revenue_by_method["online_card"],
+        "transfer": revenue_by_method["bank_transfer"] + revenue_by_method["webatm"] + revenue_by_method["atm"],
+        "cash": revenue_by_method["onsite"],
+    }
+    today_revenue["total"] = today_revenue["card"] + today_revenue["transfer"] + today_revenue["cash"]
 
     coach_receivables = conn.execute(
         """SELECT jb.coach_id, st.name AS coach_name, SUM(jb.balance_amount) AS amount, COUNT(*) AS booking_count
@@ -1441,19 +1642,24 @@ def admin_dashboard_summary():
 
     conn.close()
     return jsonify({
-        "today_sessions": total_today,
-        "today_checked_in": checked_in,
+        "today_indoor_sessions": today_indoor + today_jump,
+        "today_japan_sessions": today_japan,
+        "today_revenue": today_revenue,
         "coach_receivables_today": rows_to_dicts(coach_receivables),
     })
 
 
 @app.route("/api/admin/team-calendar", methods=["GET"])
-@require_section("dashboard")
+@require_section("coachschedule")
 def admin_team_calendar():
     """
     共用班表日曆:回傳某個月份,每一天所有在職教練的狀態(上班/請假種類)與當天課程數,
     供後台畫出類似TimeTree的「一眼看到誰哪天在忙什麼」共用月曆。
     沒有明確請假紀錄的日期,預設視為正常上班。
+    2026-09第二次改版:這支API原本掛在dashboard(營運中心)分頁底下,這次共用班表日曆
+    整個搬到後台第一欄、獨立成自己的分頁(跟「今日人力」「設定教練出勤」同一個分頁,
+    key沿用原本的"coachschedule"),改用這個key,不影響存取的角色範圍(股東/主管都
+    還是看得到,行為不變)。
     """
     month = request.args.get("month")  # 格式 YYYY-MM
     if not month:
@@ -1513,6 +1719,28 @@ def admin_team_calendar():
             {"resort_name": r["resort_name"], "count": r["c"]}
         )
 
+    # 2026-09優化:室內課程(高雄)的「未指派教練」也比照日本教練課的unassigned_japan
+    # 做法,額外整理成一個bucket,讓共用班表日曆也能一眼看到哪幾天有課還沒排教練——
+    # 修正前只有日本教練課有這個提示,室內課(體驗課/包機/團課)完全沒有,是這次
+    # 「無法安排高雄上課教練」問題連帶發現的可視性缺口之一。
+    # 注意:自主練習(self_practice)在系統設計上本來就沒有教練的概念(booking.py的
+    # book_self_practice從來不會收coach_id參數),所以這裡故意排除self_practice,
+    # 只計算「體驗課/包機/團課」這3種本來就會有教練的類別,避免把不需要教練的
+    # 自主練習誤列成「未指派」造成主管誤判人力。
+    unassigned_indoor_rows = conn.execute(
+        """SELECT s.booking_date, s.category, COUNT(*) c FROM indoor_sessions s
+           WHERE s.status != 'cancelled' AND s.coach_id IS NULL
+             AND s.category IN ('trial', 'charter', 'group_class')
+             AND s.booking_date >= ? AND s.booking_date <= ?
+           GROUP BY s.booking_date, s.category""",
+        (date_from, date_to),
+    ).fetchall()
+    unassigned_indoor_map = {}
+    for r in unassigned_indoor_rows:
+        unassigned_indoor_map.setdefault(r["booking_date"], []).append(
+            {"category": r["category"], "category_label": _INDOOR_CATEGORY_LABEL.get(r["category"], r["category"]), "count": r["c"]}
+        )
+
     conn.close()
 
     days = {}
@@ -1529,9 +1757,149 @@ def admin_team_calendar():
                 "session_count": session_map.get((c["id"], date_str), 0),
                 "japan_resort_name": japan_resort_map.get((c["id"], date_str)),
             })
-        days[date_str] = {"entries": entries, "unassigned_japan": unassigned_japan_map.get(date_str, [])}
+        days[date_str] = {
+            "entries": entries,
+            "unassigned_japan": unassigned_japan_map.get(date_str, []),
+            "unassigned_indoor": unassigned_indoor_map.get(date_str, []),
+        }
 
     return jsonify({"month": month, "coaches": rows_to_dicts(coaches), "days": days})
+
+
+@app.route("/api/admin/sessions/<int:session_id>/assign-coach", methods=["POST"])
+@require_section("overview")
+def admin_assign_session_coach(session_id):
+    """2026-09新增:通用的室內課程(體驗課/包機/團課)指派教練功能。修正前唯一能指派
+    教練的入口是團課教練指派(admin_assign_group_class_coach),只認category='group_class'
+    的場次,導致高雄體驗課/包機課完全沒有後台介面可以排教練(回報的bug:「後端無法
+    安排高雄上課教練」)。這支路由跟team-calendar/預約課表畫面一起用,任何一種
+    有教練概念的室內課場次都能在這裡指派,不影響原本團課那支路由(那支繼續保留給
+    「團課教練指派」分頁用,行為不變)。
+    自主練習(self_practice)在系統設計上沒有教練概念,這裡刻意擋掉,回傳明確錯誤
+    訊息,而不是靜默允許存一個永遠不會被用到的coach_id進去。"""
+    d = request.json or {}
+    coach_id = d.get("coach_id")
+    conn = get_conn()
+    session_row = conn.execute(
+        "SELECT id, category, coach_id, booking_date, start_hour, status FROM indoor_sessions WHERE id=?",
+        (session_id,),
+    ).fetchone()
+    if not session_row:
+        conn.close()
+        return jsonify({"error": "找不到這個場次"}), 404
+    if session_row["category"] not in ("trial", "charter", "group_class"):
+        conn.close()
+        return jsonify({"error": "這個類別的課程沒有教練的概念,無法指派教練(例如自主練習)"}), 400
+    if session_row["status"] == "cancelled":
+        conn.close()
+        return jsonify({"error": "這堂課已取消,無法指派教練"}), 400
+
+    if coach_id is not None:
+        coach_row = conn.execute(
+            "SELECT id, name, role, is_active FROM staff WHERE id=?", (coach_id,)
+        ).fetchone()
+        if not coach_row:
+            conn.close()
+            return jsonify({"error": "找不到這個教練帳號"}), 404
+        if coach_row["role"] != "coach":
+            conn.close()
+            return jsonify({"error": "這個員工帳號不是教練身份,無法指派"}), 400
+        if not coach_row["is_active"]:
+            conn.close()
+            return jsonify({"error": "這位教練目前是非在職狀態,無法指派"}), 400
+
+    before_coach_id = session_row["coach_id"]
+    conn.execute("UPDATE indoor_sessions SET coach_id=? WHERE id=?", (coach_id, session_id))
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'assign_session_coach', 'indoor_session', ?, ?, ?)""",
+        (request.current_staff["id"], session_id,
+         json.dumps({"coach_id": before_coach_id}), json.dumps({"coach_id": coach_id})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/coach-schedule/roster", methods=["GET"])
+@require_section("coachschedule")
+def admin_coach_schedule_roster():
+    """2026-09新增:「當日人力總覽」——回傳指定某一天,所有在職教練的出勤狀態
+    (上班/請假/出差)與當天課程數(室內+日本),以及當天未指派教練的課程整理。
+    修正前這種「一眼看到當日人力」的畫面(共用班表日曆)只掛在dashboard分頁下,
+    而dashboard分頁SECTION_ROLES只開放cs(股東)/boss(老闆),主管完全看不到,
+    這支路由改掛coachschedule分頁(cs/manager/boss都能看),讓主管也能確認當日人力
+    (回報的bug:「沒有可以瀏覽当天上班/當天休假的地方,無法確認當日人力」)。
+    跟team-calendar(月曆版)不同,這支只查單一天,計算邏輯是team-calendar單日版的
+    簡化重用,方便嵌在「教練出勤管理」分頁最上方當作一個輕量的每日面板。"""
+    date_str = request.args.get("date") or booking.today_tw().isoformat()
+    conn = get_conn()
+    coaches = conn.execute("SELECT id, name FROM staff WHERE role='coach' AND is_active=1 ORDER BY name").fetchall()
+
+    sched_row_map = {
+        r["coach_id"]: {"status": r["status"], "reason": r["reason"]}
+        for r in conn.execute(
+            "SELECT coach_id, status, reason FROM coach_schedule WHERE work_date=?", (date_str,)
+        ).fetchall()
+    }
+
+    indoor_counts = {
+        r["coach_id"]: r["c"]
+        for r in conn.execute(
+            """SELECT coach_id, COUNT(*) c FROM indoor_sessions
+               WHERE status != 'cancelled' AND coach_id IS NOT NULL AND booking_date=?
+               GROUP BY coach_id""",
+            (date_str,),
+        ).fetchall()
+    }
+    japan_rows = conn.execute(
+        """SELECT jb.coach_id, r.name AS resort_name FROM japan_bookings jb
+           LEFT JOIN ski_resorts r ON jb.resort_id = r.id
+           WHERE jb.status != 'cancelled' AND jb.coach_id IS NOT NULL AND jb.booking_date=?""",
+        (date_str,),
+    ).fetchall()
+    japan_resort_map = {r["coach_id"]: r["resort_name"] for r in japan_rows}
+    japan_counts = {}
+    for r in japan_rows:
+        japan_counts[r["coach_id"]] = japan_counts.get(r["coach_id"], 0) + 1
+
+    roster = []
+    for c in coaches:
+        sched = sched_row_map.get(c["id"])
+        status = sched["status"] if sched else "working"
+        reason = sched["reason"] if sched else None
+        roster.append({
+            "coach_id": c["id"], "coach_name": c["name"],
+            "status": status, "reason": reason,
+            "session_count": indoor_counts.get(c["id"], 0) + japan_counts.get(c["id"], 0),
+            "japan_resort_name": japan_resort_map.get(c["id"]),
+        })
+
+    unassigned_indoor_rows = conn.execute(
+        """SELECT category, COUNT(*) c FROM indoor_sessions
+           WHERE status != 'cancelled' AND coach_id IS NULL
+             AND category IN ('trial', 'charter', 'group_class') AND booking_date=?
+           GROUP BY category""",
+        (date_str,),
+    ).fetchall()
+    unassigned_indoor = [
+        {"category": r["category"], "category_label": _INDOOR_CATEGORY_LABEL.get(r["category"], r["category"]), "count": r["c"]}
+        for r in unassigned_indoor_rows
+    ]
+    unassigned_japan_rows = conn.execute(
+        """SELECT r.name AS resort_name, COUNT(*) c FROM japan_bookings jb
+           LEFT JOIN ski_resorts r ON jb.resort_id = r.id
+           WHERE jb.status != 'cancelled' AND jb.coach_id IS NULL AND jb.booking_date=?
+           GROUP BY r.name""",
+        (date_str,),
+    ).fetchall()
+    unassigned_japan = [{"resort_name": r["resort_name"], "count": r["c"]} for r in unassigned_japan_rows]
+
+    conn.close()
+    return jsonify({
+        "date": date_str, "roster": roster,
+        "unassigned_indoor": unassigned_indoor, "unassigned_japan": unassigned_japan,
+    })
 
 
 @app.route("/api/booking/japan", methods=["POST"])
@@ -1974,6 +2342,46 @@ def coach_verify_attendance_code():
         return jsonify({"error": str(e)}), 400
 
 
+@app.route("/api/admin/japan-attendance-overview", methods=["GET"])
+@require_section("japanattendance")
+def admin_japan_attendance_overview():
+    """2026-09新增:「日本教練出勤管理」分頁(原「教練出勤管理」改名+改用途)。
+    依指示這個分頁改成串上下課編碼(attendance_codes,見booking.py的_create_japan_
+    attendance_codes/verify_attendance_code),只呈現完成資訊,不做任何編輯——排休/
+    請假/出差這些「教練出勤設定」的編輯功能,已經移到「共用班表日曆」分頁(搬到後台
+    第一欄那個,原本這裡的「今日人力」「設定教練出勤」表單都併過去了),這支API跟
+    這個分頁只負責「唯讀顯示」每一筆日本教練課,學員是否已經用上/下課碼完成報到。
+    可用date_from/date_to(依booking_date篩選)、coach_id(選填)縮小範圍。"""
+    date_from = request.args.get("date_from") or booking.today_tw().isoformat()
+    date_to = request.args.get("date_to") or date_from
+    coach_id = request.args.get("coach_id", type=int)
+    conn = get_conn()
+    q = """SELECT jb.id AS japan_booking_id, jb.booking_date, jb.half_day_slot AS jb_half_day_slot,
+                  jb.day_type, jb.coach_id, st.name AS coach_name, m.name AS member_name,
+                  r.name AS resort_name,
+                  ac.session_slot, ac.checkin_used_at, ac.checkout_used_at
+           FROM japan_bookings jb
+           JOIN members m ON jb.member_id = m.id
+           JOIN ski_resorts r ON jb.resort_id = r.id
+           LEFT JOIN staff st ON jb.coach_id = st.id
+           LEFT JOIN attendance_codes ac ON ac.ref_type='japan_booking' AND ac.ref_id = jb.id
+           WHERE jb.status != 'cancelled' AND jb.booking_date >= ? AND jb.booking_date <= ?"""
+    params = [date_from, date_to]
+    if coach_id:
+        q += " AND jb.coach_id=?"
+        params.append(coach_id)
+    q += " ORDER BY jb.booking_date, st.name, jb.id"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["checkin_done"] = bool(d.get("checkin_used_at"))
+        d["checkout_done"] = bool(d.get("checkout_used_at"))
+        result.append(d)
+    return jsonify(result)
+
+
 @app.route("/api/admin/sessions/needs-review", methods=["GET"])
 @require_section("pending")
 def admin_sessions_needs_review():
@@ -2061,7 +2469,10 @@ SENSITIVE_MEMBER_FIELDS = ["id_number", "blood_type", "address", "emergency_cont
 
 
 def _mask_sensitive_member_fields(member_dict, staff_role):
-    """對照系統分析書13.1「高度敏感資料」分級:客服僅能看到遮罩後的內容,主管以上才看得到完整值。"""
+    """對照系統分析書13.1「高度敏感資料」分級。2026-09權限改版:判斷標準改成
+    _is_high_trust_staff(股東(cs)/老闆(boss)才看得到完整值,主管(manager)看遮罩後的內容)——
+    這裡的角色值命名容易誤會,提醒一下:'cs'這個DB角色值現在顯示名稱是「股東」不是「客服」,
+    'manager'現在是範圍更窄的「主管」,不要被字面上的英文/舊名稱誤導。"""
     if _is_high_trust_staff(staff_role):
         return member_dict
     masked = dict(member_dict)
@@ -2234,6 +2645,50 @@ def admin_delete_staff(staff_id):
            VALUES (?, 'delete_staff', 'staff', ?, ?, ?)""",
         (request.current_staff["id"], staff_id,
          json.dumps({"is_active": 1}), json.dumps({"is_active": 0, "name": before["name"]})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/coaches/inactive", methods=["GET"])
+@require_section("coaches")
+def admin_list_inactive_coaches():
+    """2026-09新增:「教練管理」測試時發現的既有缺口——「刪除教練」按鈕其實只是停用
+    (staff.is_active=0),但停用後這位教練會從公開的/api/coaches(教練管理分頁原本
+    拿清單用的來源)整個消失,後端也完全沒有任何路由能把is_active改回1,等於一旦點了
+    「刪除教練」,或教練請假一段時間想暫停帳號、之後又要恢復,先前完全沒有辦法復原,
+    只能請有資料庫存取權限的人手動改資料庫。這裡補上一支「列出已停用教練」的專用API,
+    只回傳最基本的識別資訊(姓名/工號),供教練管理分頁顯示+提供「重新啟用」按鈕用,
+    不影響原本/api/coaches(仍然只回傳在職教練,公開頁面行為不變)。"""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, work_id, name, branch FROM staff WHERE role='coach' AND is_active=0 ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/staff/<int:staff_id>/reactivate", methods=["POST"])
+@require_section("coaches")
+def admin_reactivate_staff(staff_id):
+    """重新啟用先前被「刪除」(停用)的教練/員工帳號,是admin_delete_staff的反向操作,
+    權限規則完全比照:股東只能重新啟用教練帳號,只有老闆能重新啟用任何角色的帳號
+    (避免股東把自己或其他股東的帳號改回啟用狀態)。"""
+    conn = get_conn()
+    before = conn.execute("SELECT * FROM staff WHERE id=?", (staff_id,)).fetchone()
+    if not before:
+        conn.close()
+        return jsonify({"error": "找不到此員工"}), 404
+    if request.current_staff["role"] != "boss" and before["role"] != "coach":
+        conn.close()
+        return jsonify({"error": "權限不足:只能重新啟用教練帳號,其餘角色的帳號僅老闆能重新啟用"}), 403
+    conn.execute("UPDATE staff SET is_active=1 WHERE id=?", (staff_id,))
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'reactivate_staff', 'staff', ?, ?, ?)""",
+        (request.current_staff["id"], staff_id,
+         json.dumps({"is_active": 0}), json.dumps({"is_active": 1, "name": before["name"]})),
     )
     conn.commit()
     conn.close()
@@ -2907,6 +3362,22 @@ def admin_record_order_payment(order_id):
              payment_type, d.get("payment_method", "onsite"), request.current_staff["id"], d.get("note")),
         )
         new_status = "paid" if new_paid >= payable else order["status"]
+
+        # 2026-09修正(Task C測試中發現的既有bug):這裡「先觸發權益產生、再把orders表
+        # 更新成paid」的順序不能顛倒。finalize_charter_purchase/mark_order_paid內部都會
+        # 自己重新查一次orders表來判斷「這張訂單是不是第一次變成paid」(避免使用者連點
+        # 兩次記錄收款重複入帳/重複產生上下課碼)。如果這裡先把orders.status改成'paid'
+        # 才呼叫這兩支函式,它們重新查到的就已經是'paid',會被自己的防重複機制擋下,
+        # 誤判成「已經處理過」,導致完全不會執行——包機堂數包不會真的加回可用堂數、
+        # 日本教練課也不會產生上下課碼。修正前只有「單次收款就直接達到付清金額」
+        # 這種情境會踩到(訂金/尾款分次收款、最後一筆才付清的情境不受影響,因為
+        # finalize_charter_purchase/mark_order_paid本來就是在還沒被標記過paid時呼叫)。
+        if new_status == "paid" and order["status"] != "paid":
+            if order["ref_type"] == "charter_pass":
+                booking.finalize_charter_purchase(order_id, conn=conn)
+            elif order["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
+                booking.mark_order_paid(order["ref_type"], order["ref_id"], conn=conn)
+
         conn.execute("UPDATE orders SET paid_amount=?, status=? WHERE id=?", (new_paid, new_status, order_id))
         conn.execute(
             """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
@@ -2914,13 +3385,6 @@ def admin_record_order_payment(order_id):
             (request.current_staff["id"], order_id,
              json.dumps({"paid_amount": order["paid_amount"]}), json.dumps({"paid_amount": new_paid, "amount": amount})),
         )
-
-        # 若這筆收款讓訂單正式完成付款,依原本邏輯觸發權益產生(與此筆收款合併在同一筆交易內,避免分段寫入不一致)
-        if new_status == "paid" and order["status"] != "paid":
-            if order["ref_type"] == "charter_pass":
-                booking.finalize_charter_purchase(order_id, conn=conn)
-            elif order["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
-                booking.mark_order_paid(order["ref_type"], order["ref_id"], conn=conn)
 
         conn.commit()
     except Exception:
@@ -3261,9 +3725,25 @@ def admin_import_charter_passes():
 @app.route("/api/admin/orders", methods=["GET"])
 @require_section("orders")
 def admin_list_orders():
+    """2026-09新增customer_payment_method欄位:回傳這張訂單目前最新一筆「客戶自己在
+    前台結帳時選擇、但還沒被後台確認入帳」的付款方式(transactions.ref_type/ref_id
+    對應orders.ref_type/ref_id)。依指示「若客戶點選現場付款請自動帶入應結帳金額」:
+    前端看到這個欄位是'onsite'時,「記錄收款」表單直接帶入應付金額,不用店員自己
+    再算一次、也不用問客戶選了什麼。
+    payment_status篩選'pending'跟'awaiting_backoffice_review'兩種(見payments.py):
+    信用卡走綠界導頁付款、使用者還沒完成付款前是'pending';現場付款/匯款轉帳/ATM這幾種
+    本來就需要人工核對入帳,建立當下狀態直接是'awaiting_backoffice_review',不會經過
+    'pending'這個階段——這裡兩種都算「客戶已經選了、還沒被後台確認」,都要抓進來,
+    漏掉'awaiting_backoffice_review'的話,現場付款/匯款轉帳這兩種(自動帶入金額最需要
+    幫忙的情境)反而完全抓不到,只剩信用卡這種原本很少需要後台手動處理的情境有效。"""
     member_id = request.args.get("member_id", type=int)
     conn = get_conn()
-    q = "SELECT o.*, m.name AS member_name FROM orders o JOIN members m ON o.member_id = m.id WHERE 1=1"
+    q = """SELECT o.*, m.name AS member_name,
+               (SELECT t.payment_method FROM transactions t
+                WHERE t.ref_type = o.ref_type AND t.ref_id = o.ref_id
+                  AND t.payment_status IN ('pending', 'awaiting_backoffice_review')
+                ORDER BY t.id DESC LIMIT 1) AS customer_payment_method
+           FROM orders o JOIN members m ON o.member_id = m.id WHERE 1=1"""
     params = []
     if member_id:
         q += " AND o.member_id=?"; params.append(member_id)
@@ -3516,9 +3996,13 @@ def admin_set_japan_referral(booking_id):
 
 
 @app.route("/api/admin/partners/<int:partner_id>/japan-bookings", methods=["GET"])
-@require_role("manager")
+@require_section("partners")
 def admin_partner_japan_bookings(partner_id):
-    """合作單位底下的日本教練課退佣紀錄:自動帶出訂課人/課程項目/課程人數/課費,退介紹費為手動填寫值。"""
+    """合作單位底下的日本教練課退佣紀錄:自動帶出訂課人/課程項目/課程人數/課費,退介紹費為手動填寫值。
+    2026-09權限改版:這支API原本掛@require_role("manager")(rank>=manager,也就是主管/老闆),
+    股東(cs,rank比manager低)完全叫不到——但現在「合作單位」整個分頁已經開放給股東,這支是
+    合作單位分頁底下「查看某合作單位的日本教練課退佣明細」用的API,理應跟分頁本身用同一組
+    權限,改成require_section("partners")跟其餘合作單位API一致。"""
     conn = get_conn()
     rows = conn.execute(
         """SELECT jb.id, jb.booking_date, m.name AS member_name, jb.equipment_type,

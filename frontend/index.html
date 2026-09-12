@@ -362,10 +362,11 @@
             <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:0;">
               <input type="checkbox" style="width:auto; margin:0;"> 記住我
             </label>
-            <a onclick="alert('示範用途:此為模擬畫面')">忘記密碼？</a>
+            <a onclick="alert('請洽客服協助重設密碼(客服可在後台清除你的登入密碼,清除後下次登入會請你直接設定一組新密碼)。')">忘記密碼？</a>
           </div>
 
           <button class="btn-primary" onclick="emailLogin()">登入</button>
+          <div id="emailLoginStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
 
           <div class="divider" onclick="toggleOtherLogin()">或使用以下方式登入 <span id="otherLoginArrow">▾</span></div>
 
@@ -386,7 +387,7 @@
             </div>
           </div>
 
-          <p class="hint" style="text-align:center; font-size:11.5px; color:#a39d90;">示範用途:登入方式皆為模擬,點選即完成登入。</p>
+          <p class="hint" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE/Apple目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
 
           <div class="form-footer-note">
             還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
@@ -400,6 +401,10 @@
             <label>姓名</label><input id="mName" placeholder="請輸入姓名">
             <label>手機號碼</label><input id="mPhone" placeholder="例如:0912345678" inputmode="numeric">
             <label>Email</label><input id="mEmail" placeholder="you@example.com" type="email">
+            <div id="mPasswordFieldsWrap">
+              <label>設定登入密碼(至少6碼)</label><input id="mPassword" type="password">
+              <label>再輸入一次密碼</label><input id="mPasswordConfirm" type="password">
+            </div>
             <div id="memberCreateStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
             <button onclick="createMember()">完成建立會員</button>
           </div>
@@ -1115,6 +1120,9 @@ async function ensurePricing() {
 }
 
 async function oauthLogin(provider) {
+  // 2026-09:Google/LINE/Apple目前還是模擬OAuth按鈕(還沒有串接真正的第三方OAuth,
+  // 詳見auth.mock_oauth_login的說明),沒有密碼概念,行為維持不變——「OAuth完成」
+  // 本身就視同身分驗證完成。正式的密碼驗證只套用在下面的Email+密碼登入(emailLogin)。
   const mockIds = { line: "line-demo-user", google: "test@gmail.com", apple: "test@icloud.com" };
   const mock_external_id = mockIds[provider] || `${provider}-demo-user`;
   const { data } = await api("/auth/oauth-login", {
@@ -1129,6 +1137,7 @@ async function oauthLogin(provider) {
     document.getElementById("mEmail").value = looksLikeEmail ? mock_external_id : "";
     document.getElementById("mEmail").readOnly = false;
     document.getElementById("memberCreateStatus").textContent = "";
+    document.getElementById("mPasswordFieldsWrap").style.display = "none";  // OAuth註冊不需要密碼欄位
     document.getElementById("memberCreateForm").style.display = "block";
     window._pendingProvider = provider;
     window._pendingExternalId = mock_external_id;
@@ -1145,42 +1154,48 @@ function toggleOtherLogin() {
   wrap.style.display = show ? "block" : "none";
   arrow.textContent = show ? "▴" : "▾";
 }
+// 2026-09重寫:改叫真正驗證密碼的/auth/member-login,取代舊的
+// /auth/oauth-login(provider='email')——那條路完全沒有驗證密碼,只要Email存在
+// 就能登入,等於任何人知道會員的Email就能登入該帳號,詳見auth.member_login說明。
 async function emailLogin() {
-  const email = document.getElementById("emailLoginInput").value;
-  if (!email) { alert("請輸入信箱"); return; }
-  await oauthLoginWithEmail(email);
-}
-async function oauthLoginWithEmail(email) {
-  const { data } = await api("/auth/oauth-login", {
-    method: "POST", body: JSON.stringify({ provider: "email", mock_external_id: email })
+  const email = document.getElementById("emailLoginInput").value.trim();
+  const password = document.getElementById("passwordLoginInput").value;
+  const statusEl = document.getElementById("emailLoginStatus");
+  statusEl.textContent = "";
+  if (!email) { statusEl.textContent = "請輸入信箱"; return; }
+  if (!password) { statusEl.textContent = "請輸入密碼"; return; }
+  const { ok, data } = await api("/auth/member-login", {
+    method: "POST", body: JSON.stringify({ email, password })
   });
-  if (data.is_new) {
-    // 這個路徑是先在登入畫面輸入信箱、系統查不到才視為新會員,Email已經確定
-    // 是這次登入/註冊的識別碼,鎖起來不能再改,避免跟後面is_new判斷的信箱不一致。
-    document.getElementById("mName").value = "";
-    document.getElementById("mPhone").value = "";
-    document.getElementById("mEmail").value = email;
-    document.getElementById("mEmail").readOnly = true;
-    document.getElementById("memberCreateStatus").textContent = "";
-    document.getElementById("memberCreateForm").style.display = "block";
-    window._pendingProvider = "email";
-    window._pendingExternalId = email;
-  } else {
-    currentMemberId = data.member.id;
-    currentMemberToken = data.token;
-    enterMainScreen(data.member);
+  if (!ok) {
+    statusEl.textContent = data.error || "登入失敗,請確認信箱/密碼是否正確";
+    return;
+  }
+  currentMemberId = data.member.id;
+  currentMemberToken = data.token;
+  await enterMainScreen(data.member);
+  if (data.needs_password_setup) {
+    // 這個帳號是這次正式上線前註冊的舊會員,從來沒有設定過密碼,系統暫時放行讓他
+    // 先登入,但強制導去「會員中心」既有的「修改登入密碼」卡片先設定一組新密碼。
+    switchPage("center", null);
+    document.querySelectorAll(".nav-top, .nav-flat").forEach(n => n.classList.remove("active-top"));
+    document.getElementById("navflat-center").classList.add("active-top");
+    alert("這是你第一次用新的Email登入方式登入,請先在下方「修改登入密碼」設定一組新密碼,之後登入才需要輸入這組密碼。");
   }
 }
 
-// 直接點「立即註冊」進來的路徑:還沒有先透過登入欄位確認過信箱是否為新會員,
-// 三個欄位(姓名/手機/Email)都是空白、可以自己填,送出時才交給後端做is_new判斷
-// (Email重複的話,create-member那支API會回傳錯誤訊息,而不是靜默覆蓋既有會員)。
+// 直接點「立即註冊」進來的路徑:三個欄位(姓名/手機/Email)都是空白、可以自己填,
+// 送出時才交給後端做Email是否重複的判斷(Email重複的話,create-member那支API會
+// 回傳錯誤訊息,而不是靜默覆蓋既有會員)。這是Email註冊,需要一併設定登入密碼。
 function openRegisterForm() {
   document.getElementById("mName").value = "";
   document.getElementById("mPhone").value = "";
   document.getElementById("mEmail").value = "";
   document.getElementById("mEmail").readOnly = false;
+  document.getElementById("mPassword").value = "";
+  document.getElementById("mPasswordConfirm").value = "";
   document.getElementById("memberCreateStatus").textContent = "";
+  document.getElementById("mPasswordFieldsWrap").style.display = "block";
   window._pendingProvider = "email";
   window._pendingExternalId = null;
   const form = document.getElementById("memberCreateForm");
@@ -1213,6 +1228,15 @@ async function createMember() {
   const body = { name, phone, email, auth_provider: window._pendingProvider };
   if (window._pendingProvider === "line") {
     body.line_user_id = window._pendingExternalId;
+  }
+  // 2026-09新增:Email註冊(目前唯一真正驗證密碼的登入方式)需要一併設定登入密碼;
+  // Google/LINE/Apple(模擬OAuth)沒有密碼欄位,不受影響。
+  if (window._pendingProvider === "email") {
+    const password = document.getElementById("mPassword").value;
+    const passwordConfirm = document.getElementById("mPasswordConfirm").value;
+    if (!password || password.length < 6) { statusEl.textContent = "請設定登入密碼(至少6碼)"; return; }
+    if (password !== passwordConfirm) { statusEl.textContent = "兩次輸入的密碼不一致,請重新輸入"; return; }
+    body.password = password;
   }
 
   const { ok, data } = await api("/auth/create-member", {
@@ -1439,15 +1463,18 @@ async function renderStaffPanel(staff) {
   const sidebar = document.getElementById("adminSidebarNav");
 
   if (["cs","manager","boss"].includes(staff.role)) {
-    // 2026-09權限改版:依「老闆權限全開;股東(角色值仍是cs)除了財務與分析、系統管理
-    // 兩大類不開放,其餘全開;主管只開放會員與訂課/代客訂課/待處理事項/報到管理/
-    // 訂單管理/團課教練指派/教練出勤管理/雪場管理這8項」的需求,後台每個分頁能不能看,
-    // 不再是「角色等級越高看到的越多」這種單純比大小,改成每個角色各自獨立列出看得到
-    // 哪幾塊(跟後端app.py的SECTION_ROLES是同一套規則,兩邊要保持一致)。
+    // 2026-09第二次改版(後台側邊欄重新分類/搬移/改名+權限重新設計):依「老闆權限
+    // 全開;股東(角色值仍是cs)除了管理報表這一大類(管理報表/薪資管理/月結損益/
+    // 價格設定/資料匯入/清除測試資料)不開放,其餘全開(含這次從財務與分析獨立出來
+    // 的合作單位);主管只開放共用班表日曆/每日資訊/待處理事項/設備管理/FAQ管理/
+    // 代客訂課/會員資料與訂單詳情這7項」的需求,後台每個分頁能不能看,不再是「角色
+    // 等級越高看到的越多」這種單純比大小,改成每個角色各自獨立列出看得到哪幾塊
+    // (跟後端app.py的SECTION_ROLES是同一套規則,兩邊要保持一致)。
     const SECTION_ROLES = {
-      dashboard: ["cs"], overview: ["cs","manager"], assist: ["cs","manager"], pending: ["cs","manager"],
-      checkin: ["cs","manager"], orders: ["cs","manager"], japanbookings: ["cs"], groupassign: ["cs","manager"],
-      equipment: ["cs"], faq: ["cs"], coachschedule: ["cs","manager"], resorts: ["cs","manager"], coaches: ["cs"],
+      coachschedule: ["cs","manager"], dashboard: ["cs","manager"], pending: ["cs","manager"],
+      equipment: ["cs","manager"], faq: ["cs","manager"], assist: ["cs","manager"], overview: ["cs","manager"],
+      orders: ["cs"], japanbookings: ["cs"], coaches: ["cs"], resorts: ["cs"], partners: ["cs"],
+      japanattendance: ["cs"], checkin: ["cs"], groupassign: ["cs"],
       finance: [], system: [],
     };
     const canSee = (sectionKey) => staff.role === "boss" || (SECTION_ROLES[sectionKey] || []).includes(staff.role);
@@ -1458,22 +1485,24 @@ async function renderStaffPanel(staff) {
     window.currentStaffId = staff.id;
 
     const navGroups = [
-      { title: "今日營運", items: [
-        ["dashboard", "營運中心"], ["overview", "會員與訂課"], ["assist", "代客訂課"], ["pending", "待處理事項"],
-        ["checkin", "報到管理"],
+      { title: "排程", items: [
+        ["coachschedule", "共用班表日曆"],
       ]},
-      { title: "訂單與收款", items: [
-        ["orders", "訂單管理"], ["japanbookings", "日本教練課訂單"],
+      { title: "每日資訊", items: [
+        ["dashboard", "每日資訊"], ["pending", "待處理事項"], ["equipment", "設備管理"], ["faq", "FAQ管理"],
       ]},
-      { title: "排程與資源", items: [
-        ["groupassign", "團課教練指派"], ["equipment", "設備管理"], ["faq", "FAQ管理"],
-        ["coachschedule", "教練出勤管理"], ["resorts", "雪場管理"], ["coaches", "教練管理"],
+      { title: "訂單資訊", items: [
+        ["assist", "代客訂課"], ["overview", "會員資料與訂單詳情"],
+        ["orders", "室內滑雪訂單管理"], ["japanbookings", "日本訂單管理"],
       ]},
-      { title: "財務與分析", items: [
-        ["reports", "管理報表", "finance"], ["payroll", "薪資管理", "finance"],
-        ["profitloss", "月結損益", "finance"], ["partners", "合作單位", "finance"],
+      { title: "教練及雪場管理", items: [
+        ["coaches", "教練管理"], ["resorts", "雪場管理"], ["partners", "合作單位"],
       ]},
-      { title: "系統管理", items: [
+      { title: "出勤管理", items: [
+        ["japanattendance", "日本教練出勤管理"], ["checkin", "學員報到管理"], ["groupassign", "教練指派管理"],
+      ]},
+      { title: "管理報表", items: [
+        ["reports", "管理報表", "finance"], ["payroll", "薪資管理", "finance"], ["profitloss", "月結損益", "finance"],
         ["pricing", "價格設定", "system"], ["import", "資料匯入", "system"], ["cleartest", "清除測試資料", "system"],
       ]},
     ].map(g => ({
@@ -1495,38 +1524,42 @@ async function renderStaffPanel(staff) {
           <button class="admin-sidebar-btn" id="navbtn-${key}" onclick="switchStaffTab('${key}')">${label}</button>
         `).join("")}
       `).join("")}
+      <div class="admin-sidebar-section">帳號</div>
+      <button class="admin-sidebar-btn" id="navbtn-account" onclick="switchStaffTab('account')">帳號安全(變更密碼)</button>
       <div class="admin-sidebar-footer">
         <div class="admin-sidebar-status"><span class="admin-sidebar-status-dot"></span> 系統運作正常</div>
       </div>
     `;
 
     body.innerHTML = `
-      <div id="staffTab-dashboard" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-overview" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-assist" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-orders" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-pending" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-checkin" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-japanbookings" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-faq" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-equipment" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-groupassign" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-coachschedule" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-resorts" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-dashboard" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-pending" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-equipment" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-faq" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-assist" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-overview" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-orders" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-japanbookings" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-coaches" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-resorts" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-partners" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-japanattendance" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-checkin" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-groupassign" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-reports" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-payroll" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-profitloss" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-pricing" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-import" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-cleartest" class="staff-tab" style="display:none;"></div>
-      <div id="staffTab-partners" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-account" class="staff-tab" style="display:none;"></div>
     `;
 
-    // 預設打開的分頁:優先選「營運中心」,如果這個角色看不到(例如主管),就選這個角色
-    // 實際看得到的第一個分頁,避免畫面一開始是空的。
+    // 預設打開的分頁:優先選「共用班表日曆」(移到後台第一欄後,也是預設最先看到的分頁),
+    // 如果這個角色看不到,就選這個角色實際看得到的第一個分頁,避免畫面一開始是空的。
     const firstVisibleKey = navGroups.length ? navGroups[0].items[0][0] : null;
-    const defaultTab = canSee("dashboard") ? "dashboard" : firstVisibleKey;
+    const defaultTab = canSee("coachschedule") ? "coachschedule" : firstVisibleKey;
     if (defaultTab) {
       document.getElementById(`staffTab-${defaultTab}`).style.display = "block";
       const navBtn = document.getElementById(`navbtn-${defaultTab}`);
@@ -1535,24 +1568,28 @@ async function renderStaffPanel(staff) {
 
     // 只呼叫這個角色實際看得到的分頁對應的初始化函式,看不到的分頁不用打對應的API
     // (打了也會被後端擋掉,但沒必要浪費請求、也避免畫面上出現不必要的錯誤訊息)。
+    if (canSee("coachschedule")) await renderTeamCalendarTools();
     if (canSee("dashboard")) await renderDashboardTab();
-    if (canSee("overview")) await renderStaffOverviewTab();
-    if (canSee("assist")) await renderStaffAssistTab();
-    if (canSee("orders")) await renderOrdersManageTab();
     if (canSee("pending")) await renderPendingActions();
-    if (canSee("checkin")) await renderCheckInTab();
-    if (canSee("japanbookings")) await renderJapanBookingsTools();
-    if (canSee("faq")) await renderFaqManageTab();
     if (canSee("equipment")) await renderEquipmentTab();
-    if (canSee("groupassign")) await renderGroupClassAssignTools();
-    if (canSee("coachschedule")) await renderCoachScheduleTools();
-    if (canSee("resorts")) await renderResortManageTools();
+    if (canSee("faq")) await renderFaqManageTab();
+    if (canSee("assist")) await renderStaffAssistTab();
+    if (canSee("overview")) await renderStaffOverviewTab();
+    if (canSee("orders")) await renderOrdersManageTab();
+    if (canSee("japanbookings")) await renderJapanBookingsTools();
     if (canSee("coaches")) await renderCoachManageTools();
+    if (canSee("resorts")) await renderResortManageTools();
+    if (canSee("partners")) await renderPartnerManageTools();
+    if (canSee("japanattendance")) await renderJapanAttendanceTools();
+    if (canSee("checkin")) await renderCheckInTab();
+    if (canSee("groupassign")) await renderGroupClassAssignTools();
+    // 2026-09新增:「帳號安全(變更密碼)」不屬於任何一個功能區塊,股東/主管/老闆
+    // 三種角色登入後台都應該能改自己的密碼,所以不透過canSee()篩選,一律都會渲染。
+    await renderStaffAccountTab();
     if (isBoss) {
       await renderReportsTools();
       await renderPayrollTools();
       await renderProfitLossTools();
-      await renderPartnerManageTools();
       await renderPricingConfigTools();
       await renderImportTools();
       await renderClearTestDataTools();
@@ -1574,6 +1611,7 @@ async function renderStaffPanel(staff) {
 }
 
 const STAFF_TAB_REFRESH = {
+  coachschedule: renderTeamCalendarTools,
   dashboard: renderDashboardTab,
   overview: renderStaffOverviewTab,
   assist: renderStaffAssistTab,
@@ -1584,16 +1622,17 @@ const STAFF_TAB_REFRESH = {
   faq: renderFaqManageTab,
   equipment: renderEquipmentTab,
   groupassign: renderGroupClassAssignTools,
-  coachschedule: renderCoachScheduleTools,
+  japanattendance: renderJapanAttendanceTools,
   resorts: renderResortManageTools,
   coaches: renderCoachManageTools,
+  partners: renderPartnerManageTools,
   reports: renderReportsTools,
   payroll: renderPayrollTools,
   profitloss: renderProfitLossTools,
   pricing: renderPricingConfigTools,
   import: renderImportTools,
   cleartest: renderClearTestDataTools,
-  partners: renderPartnerManageTools,
+  account: renderStaffAccountTab,
 };
 function switchStaffTab(tabName) {
   document.querySelectorAll(".staff-tab").forEach(el => el.style.display = "none");
@@ -1604,69 +1643,99 @@ function switchStaffTab(tabName) {
   if (STAFF_TAB_REFRESH[tabName]) STAFF_TAB_REFRESH[tabName]();
 }
 
+// 2026-09新增:股東/主管/老闆登入「員工後台管理」之前完全沒有地方可以改自己的密碼
+// (原本只有教練自助頁面才有「帳號安全(變更密碼)」這個區塊)。後端API其實本來就支援
+// 任何角色的本人變更密碼(/admin/staff/<id>/password,見app.py的admin_set_staff_password),
+// 只是後台這邊的畫面一直沒有補上對應的入口,這裡補上,呼叫方式跟教練頁面的
+// changeCoachOwnPassword()是同一套邏輯(都是打同一支API)。
+async function renderStaffAccountTab() {
+  const wrap = document.getElementById("staffTab-account");
+  wrap.innerHTML = `
+    <h3 style="font-size:14px;">帳號安全(變更密碼)</h3>
+    <p class="note">變更登入「員工後台管理」用的密碼,跟會員/客戶端的密碼是分開的兩回事。</p>
+    <label>目前密碼</label><input type="password" id="staffAccountCurrentPw">
+    <label>新密碼(至少6碼)</label><input type="password" id="staffAccountNewPw">
+    <label>再輸入一次新密碼</label><input type="password" id="staffAccountNewPwConfirm">
+    <button onclick="changeStaffOwnPassword()">變更密碼</button>
+    <div id="staffAccountPwStatus" style="margin-top:8px;"></div>
+  `;
+}
+async function changeStaffOwnPassword() {
+  const current_password = document.getElementById("staffAccountCurrentPw").value;
+  const new_password = document.getElementById("staffAccountNewPw").value;
+  const confirm_password = document.getElementById("staffAccountNewPwConfirm").value;
+  const statusEl = document.getElementById("staffAccountPwStatus");
+  if (!current_password || !new_password) {
+    statusEl.innerHTML = `<span class="status-tag warn">請填寫目前密碼與新密碼</span>`;
+    return;
+  }
+  if (new_password.length < 6) {
+    statusEl.innerHTML = `<span class="status-tag warn">新密碼至少需6碼</span>`;
+    return;
+  }
+  if (new_password !== confirm_password) {
+    statusEl.innerHTML = `<span class="status-tag warn">兩次輸入的新密碼不一致</span>`;
+    return;
+  }
+  const { ok, data } = await api(`/admin/staff/${window.currentStaffId}/password`, {
+    method: "PUT",
+    body: JSON.stringify({ current_password, new_password }),
+  });
+  if (ok) {
+    document.getElementById("staffAccountCurrentPw").value = "";
+    document.getElementById("staffAccountNewPw").value = "";
+    document.getElementById("staffAccountNewPwConfirm").value = "";
+    statusEl.innerHTML = `<span class="status-tag ok">密碼已變更,下次登入請用新密碼</span>`;
+  } else {
+    statusEl.innerHTML = `<span class="status-tag warn">${data.error || "變更失敗"}</span>`;
+  }
+}
+
 async function renderDashboardTab() {
+  // 2026-09第二次改版:「營運中心」改名為「每日資訊」,內容依指示重新設計——
+  // 今日課程改成區分室內滑雪/日本滑雪;今日報到改成今日營業額,並與金流(transactions)
+  // 串接,拆刷卡/匯款/現金三種金額;當日每位教練應收尾款移到「日本訂單管理」分頁、
+  // 待處理事項摘要卡片直接刪除(待處理事項本身分頁維持獨立,不在這裡重複)、共用班表
+  // 日曆移到後台第一欄獨立分頁,這三項都不再出現在這裡。
   const wrap = document.getElementById("staffTab-dashboard");
   const { data: d } = await api("/admin/dashboard-summary");
-  const [pendingPaymentsRes, reviewSessionsRes, pendingApplicationsRes, pendingBillingRes] = await Promise.all([
-    api("/admin/payments/pending"), api("/admin/sessions/needs-review"),
-    api("/admin/plan-applications"), api("/admin/plan-billing/pending"),
-  ]);
-  const pendingCount = (pendingPaymentsRes.data?.length || 0) + (reviewSessionsRes.data?.length || 0)
-    + (pendingApplicationsRes.data?.filter(a => a.status === "pending").length || 0)
-    + (pendingBillingRes.data?.length || 0);
 
   wrap.innerHTML = `
     <div class="admin-page-label">ERSKI OPERATIONS</div>
-    <div class="admin-page-title">今日營運中心</div>
-    <div class="admin-page-desc">先處理會影響今天課程的事情,再看營收與資源狀態。</div>
+    <div class="admin-page-title">每日資訊</div>
+    <div class="admin-page-desc">今天的課程量與營收概況,一眼掌握。</div>
 
     <div class="admin-metric-row">
       <div class="admin-metric-card">
-        <div class="admin-metric-icon">📅</div>
-        <div class="admin-metric-value">${d.today_sessions}</div>
-        <div class="admin-metric-label">今日課程</div>
+        <div class="admin-metric-icon">🏠</div>
+        <div class="admin-metric-value">${d.today_indoor_sessions}</div>
+        <div class="admin-metric-label">今日課程・室內滑雪</div>
       </div>
       <div class="admin-metric-card">
-        <div class="admin-metric-icon">✅</div>
-        <div class="admin-metric-value">${d.today_checked_in}</div>
-        <div class="admin-metric-label">今日已報到</div>
+        <div class="admin-metric-icon">🗻</div>
+        <div class="admin-metric-value">${d.today_japan_sessions}</div>
+        <div class="admin-metric-label">今日課程・日本滑雪</div>
       </div>
     </div>
 
     <div class="admin-card">
       <div class="admin-card-head">
         <div>
-          <div class="admin-card-title">當日每位教練應收尾款</div>
-          <div class="admin-card-desc">日本教練課採訂金+尾款制,這裡列出今天出團、尾款還沒收的教練,方便對帳。</div>
+          <div class="admin-card-title">今日營業額</div>
+          <div class="admin-card-desc">依金流(交易紀錄)已確認入帳的金額拆分,人工核發(非真實金流)、退款不計入。</div>
         </div>
       </div>
-      ${d.coach_receivables_today && d.coach_receivables_today.length
-        ? `<table style="width:100%; margin-top:6px; font-size:13px;">
-             <tr><th style="text-align:left;">教練</th><th style="text-align:right;">應收尾款</th><th style="text-align:right;">筆數</th></tr>
-             ${d.coach_receivables_today.map(r => `
-               <tr>
-                 <td>${r.coach_name}</td>
-                 <td style="text-align:right;">NT$ ${r.amount.toLocaleString()}</td>
-                 <td style="text-align:right;">${r.booking_count}</td>
-               </tr>`).join("")}
-           </table>`
-        : `<div class="list-item">今天沒有教練有應收尾款</div>`}
+      <table style="width:100%; margin-top:6px; font-size:13px;">
+        <tr><th style="text-align:left;">刷卡</th><th style="text-align:left;">匯款(含ATM/webATM)</th><th style="text-align:left;">現金(現場付款)</th><th style="text-align:left;">合計</th></tr>
+        <tr>
+          <td>NT$ ${d.today_revenue.card.toLocaleString()}</td>
+          <td>NT$ ${d.today_revenue.transfer.toLocaleString()}</td>
+          <td>NT$ ${d.today_revenue.cash.toLocaleString()}</td>
+          <td><b>NT$ ${d.today_revenue.total.toLocaleString()}</b></td>
+        </tr>
+      </table>
     </div>
-
-    <div class="admin-card">
-      <div class="admin-card-head">
-        <div>
-          <div class="admin-card-title">待處理事項</div>
-          <div class="admin-card-desc">依急迫程度排序,點左側「待處理事項」查看完整清單。</div>
-        </div>
-        <button class="small secondary" onclick="switchStaffTab('pending')">查看全部 ${pendingCount} 筆 →</button>
-      </div>
-      <p class="note">報到管理、訂單管理的即時狀態,已整合在左側對應分頁,點擊即可切換查看細節;共用班表日曆合併在下方。</p>
-    </div>
-
-    <div id="dashboardTeamCalendarWrap" style="margin-top:16px;"></div>
   `;
-  await renderTeamCalendarTools();
 }
 
 async function renderStaffAssistTab() {
@@ -1676,22 +1745,23 @@ async function renderStaffAssistTab() {
     <h3 style="font-size:14px;">代客訂課</h3>
     <p class="note">選擇會員與課程種類後,直接幫客戶完成預約(不受客戶自行預約的介面限制,仍會檢查時段衝突/額度)。</p>
     <label>選擇會員</label>
-    <select id="assistMember">${memberOptions}</select>
+    <select id="assistMember" onchange="renderAssistFields()">${memberOptions}</select>
     <label>課程種類</label>
     <select id="assistCategory" onchange="renderAssistFields()">
       <option value="trial">體驗課</option>
       <option value="self_practice">自主練習</option>
       <option value="jump">跳台體驗</option>
       <option value="group_class">團課</option>
+      <option value="charter">包機課</option>
     </select>
     <div id="assistFieldsWrap"></div>
     <button onclick="submitAssistBooking()">送出預約</button>
     <div id="assistStatus" style="margin-top:8px;"></div>
   `;
-  renderAssistFields();
+  await renderAssistFields();
 }
 
-function renderAssistFields() {
+async function renderAssistFields() {
   const cat = document.getElementById("assistCategory").value;
   const wrap = document.getElementById("assistFieldsWrap");
   const today = new Date().toISOString().slice(0,10);
@@ -1708,7 +1778,65 @@ function renderAssistFields() {
   if (cat === "jump") {
     html += `<label>時長(分鐘)</label><select id="assistDuration"><option value="60" selected>60</option><option value="120">120</option></select>`;
   }
+  // 2026-09第二次改版:「代客訂課」課程種類新增包機課。包機課跟其他種類不一樣,
+  // 客戶得先持有堂數包才能訂時段(見購買包機堂數包purchase_charter_pass/booking.book_charter
+  // 兩段式流程),所以這裡多一段:先顯示這位會員目前可用的堂數包供選擇,若沒有可用的,
+  // 提供一個小表單直接先幫會員購買一組。
+  if (cat === "charter") {
+    // assistCharterPurchaseStatus刻意獨立於assistCharterPassWrap之外,不會被
+    // loadAssistCharterPasses()整段innerHTML覆蓋掉——購買成功的訊息才不會才剛顯示
+    // 就馬上被下一次重新載入清掉,店員才看得到「請去訂單管理確認收款」的提示。
+    html += `<div id="assistCharterPassWrap"></div><div id="assistCharterPurchaseStatus" style="margin-top:6px;"></div>`;
+  }
   wrap.innerHTML = html;
+  if (cat === "charter") await loadAssistCharterPasses();
+}
+
+async function loadAssistCharterPasses() {
+  const memberId = parseInt(document.getElementById("assistMember").value);
+  const wrap = document.getElementById("assistCharterPassWrap");
+  if (!wrap) return;
+  wrap.innerHTML = `<p class="note">載入堂數包中...</p>`;
+  const { data } = await api(`/members/${memberId}`);
+  const passes = (data.charter_passes || []).filter(p => p.remaining > 0);
+  if (passes.length) {
+    wrap.innerHTML = `
+      <label>使用堂數包</label>
+      <select id="assistCharterPassSel">
+        ${passes.map(p => `<option value="${p.id}" data-equipment="${p.equipment_type||''}">1對${p.headcount_type}・${_equipLabel(p.equipment_type)}・${p.package_size}堂包(剩餘${p.remaining}堂)</option>`).join("")}
+      </select>
+    `;
+  } else {
+    wrap.innerHTML = `
+      <p class="note">這位會員目前沒有可用的包機堂數包,請先幫他購買一組:</p>
+      <div class="field-grid">
+        <div><label>1對幾</label><select id="assistCharterHeadcountType"><option value="1">1對1</option><option value="2">1對2</option></select></div>
+        <div><label>堂數</label><select id="assistCharterPkgSize"><option value="5">5堂</option><option value="10">10堂</option></select></div>
+        <div><label>滑行項目</label><select id="assistCharterEquip"><option value="ski">雙板</option><option value="snowboard">單板</option></select></div>
+      </div>
+      <button class="small" onclick="purchaseCharterPassForAssist()">先幫會員購買堂數包</button>
+    `;
+  }
+}
+async function purchaseCharterPassForAssist() {
+  const member_id = parseInt(document.getElementById("assistMember").value);
+  const headcount_type = parseInt(document.getElementById("assistCharterHeadcountType").value);
+  const package_size = parseInt(document.getElementById("assistCharterPkgSize").value);
+  const equipment_type = document.getElementById("assistCharterEquip").value;
+  const { ok, data } = await api("/charter/purchase", {
+    method: "POST", body: JSON.stringify({ member_id, headcount_type, package_size, equipment_type })
+  });
+  const statusEl = document.getElementById("assistCharterPurchaseStatus");
+  if (ok) {
+    // 2026-09:購買堂數包當下remaining固定是0(見booking.purchase_charter_pass),
+    // 一定要等這筆charter_pass訂單被確認收款(finalize_charter_purchase)後才會真的
+    // 產生可用堂數——跟會員自己在前台購買後走requestPayment()付款流程是同一套規則。
+    // 這裡不能講「已經可以訂時段」,避免店員誤以為馬上就能選這張堂數包訂課。
+    statusEl.innerHTML = `<span class="status-tag ok">已建立堂數包訂單(NT$${data.price})</span>
+      <p class="note" style="margin-top:4px;">請至「室內滑雪訂單管理」找到這筆「包機堂數包」訂單,記錄收款(現場付款/匯款/刷卡)完成後,回來這裡就能選到這張堂數包訂時段。</p>`;
+  } else {
+    statusEl.innerHTML = `<span class="status-tag warn">${data.error}</span>`;
+  }
 }
 
 async function submitAssistBooking() {
@@ -1729,6 +1857,13 @@ async function submitAssistBooking() {
   } else if (cat === "group_class") {
     path = "/booking/group-class";
     body = { member_id, booking_date, start_hour };
+  } else if (cat === "charter") {
+    const passSel = document.getElementById("assistCharterPassSel");
+    if (!passSel) { document.getElementById("assistStatus").innerHTML = `<span class="status-tag warn">請先幫會員購買堂數包</span>`; return; }
+    const charter_pass_id = parseInt(passSel.value);
+    const equipment_type = passSel.selectedOptions[0].dataset.equipment || undefined;
+    path = "/booking/charter";
+    body = { member_id, booking_date, start_hour, charter_pass_id, equipment_type };
   }
   const { ok, data } = await api(path, { method: "POST", body: JSON.stringify(body) });
   document.getElementById("assistStatus").innerHTML = ok
@@ -1875,7 +2010,7 @@ async function renderPartnerManageTools() {
   const wrap = document.getElementById("staffTab-partners");
   const { data: partners } = await api("/admin/partners");
 
-  let html = `<h3 style="margin-top:16px; font-size:14px;">合作單位管理(主管/老闆)</h3>
+  let html = `<h3 style="margin-top:16px; font-size:14px;">合作單位管理(股東/老闆)</h3>
     <p class="note">每個合作單位有專屬優惠碼,客戶第一次訂課前可填寫,供後續匯出資料計算回饋/回扣。</p>`;
 
   html += partners.map(p => `
@@ -2115,9 +2250,15 @@ async function renderJapanBookingsTools() {
   const isManagerUp = window.currentStaffHighTrust;
   const isBoss = window.currentStaffRole === "boss";
   wrap.innerHTML = `
-    <h3 style="margin-top:16px; font-size:14px;">日本教練課訂單管理</h3>
-    <p class="note">尾款收款、退佣(綁定合作單位)${isBoss ? "、轉介單" : ""}管理。${!isBoss ? "轉介單僅老闆能填寫。" : ""}</p>
-    <div class="row">
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">日本訂單管理</div>
+    <p class="note">尾款收款、退佣(綁定合作單位)${isBoss ? "、轉介單" : ""}管理,以教練分組顯示。${!isBoss ? "轉介單僅老闆能填寫。" : ""}</p>
+    <div class="admin-card">
+      <div class="admin-card-title">當日每位教練應收尾款</div>
+      <div class="admin-card-desc">日本教練課採訂金+尾款制,這裡列出今天出團、尾款還沒收的教練,方便對帳。</div>
+      <div id="jbReceivablesWrap" style="margin-top:6px;"></div>
+    </div>
+    <div class="row" style="margin-top:12px;">
       <input type="date" id="jbDateFrom">
       <input type="date" id="jbDateTo">
       <button class="small" onclick="loadJapanBookingsList()">查詢</button>
@@ -2126,6 +2267,19 @@ async function renderJapanBookingsTools() {
   `;
   const { data: partners } = await api("/admin/partners");
   window._partnerList = partners;
+  const { data: dashboardData } = await api("/admin/dashboard-summary");
+  const receivables = dashboardData.coach_receivables_today || [];
+  document.getElementById("jbReceivablesWrap").innerHTML = receivables.length
+    ? `<table style="width:100%; font-size:13px;">
+         <tr><th style="text-align:left;">教練</th><th style="text-align:right;">應收尾款</th><th style="text-align:right;">筆數</th></tr>
+         ${receivables.map(r => `
+           <tr>
+             <td>${r.coach_name}</td>
+             <td style="text-align:right;">NT$ ${r.amount.toLocaleString()}</td>
+             <td style="text-align:right;">${r.booking_count}</td>
+           </tr>`).join("")}
+       </table>`
+    : `<div class="list-item">今天沒有教練有應收尾款</div>`;
   await loadJapanBookingsList();
 }
 async function loadJapanBookingsList() {
@@ -2138,7 +2292,25 @@ async function loadJapanBookingsList() {
   const isManagerUp = window.currentStaffHighTrust;
   const isBoss = window.currentStaffRole === "boss";
   const wrap = document.getElementById("jbListWrap");
-  wrap.innerHTML = bookings.map(b => `
+
+  // 2026-09第二次改版:依指示「以教練來區分」,把訂單依教練分組顯示(而不是單純
+  // 一長串日期排序清單),同一組內再依日期排序;沒有指定教練的另外歸在最後一組。
+  const groups = {};
+  const order = [];
+  bookings.forEach(b => {
+    const key = b.coach_name || "尚未指派教練";
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(b);
+  });
+  order.sort((a, b) => (a === "尚未指派教練") - (b === "尚未指派教練") || a.localeCompare(b, "zh-Hant"));
+
+  wrap.innerHTML = order.map(coachName => `
+    <div class="sub-section-title" style="margin-top:14px;">${coachName}(${groups[coachName].length}筆)</div>
+    ${groups[coachName].map(b => renderJapanBookingCard(b, isManagerUp, isBoss)).join("")}
+  `).join("") || `<p class="note">查無日本教練課訂單</p>`;
+}
+function renderJapanBookingCard(b, isManagerUp, isBoss) {
+  return `
     <div class="person-card">
       <b>${b.booking_date} ${b.resort_name || ""} — ${b.member_name}</b>
       <p class="note" style="margin:4px 0;">${b.equipment_type==="ski"?"雙板":"單板"}・${b.day_type==="full"?"全日":"半日"}・${b.headcount}人・教練:${b.coach_name || "不指定"}${b.designate_fee ? "(指定費NT$"+b.designate_fee+")" : ""}</p>
@@ -2174,7 +2346,7 @@ async function loadJapanBookingsList() {
         <button class="small secondary" onclick="cancelJapanBookingAdmin('${b.group_key}', ${b.id})">取消此筆預約</button>
       </div>
     </div>
-  `).join("") || `<p class="note">查無日本教練課訂單</p>`;
+  `;
 }
 async function cancelJapanBookingAdmin(groupKey, bookingId) {
   if (!confirm("確定要取消這筆日本教練課預約嗎?此動作無法復原,若該筆為多天行程會整趟一併取消。")) return;
@@ -2213,25 +2385,93 @@ async function saveJapanReferral(bookingId) {
     ? `<span class="status-tag ok">轉介單已儲存</span>` : `<span class="status-tag warn">${data.error}</span>`;
 }
 
+// 2026-09第二次改版:「共用班表日曆」依指示從「營運中心」搬到後台第一欄,獨立成自己
+// 的分頁,並且分室內滑雪/日本滑雪檢視。這個分頁同時也是原本「教練出勤管理」分頁(key
+// 沿用"coachschedule")的「今日人力」「設定教練出勤」內容搬過來的地方——這兩塊都是
+// 顯示/設定同一份教練排班資料(coach_schedule表),跟月曆本來就是同一份資料的不同
+// 呈現方式,原本分開放在兩個分頁反而要來回切換才能對照,合併後更方便。
+// 「教練出勤管理」這個名字現在轉指到新的「日本教練出勤管理」分頁(見
+// renderJapanAttendanceTools),改成串上下課編碼、唯讀,不再有這裡的編輯功能。
+window._teamCalMode = "indoor";  // "indoor" 室內滑雪 / "japan" 日本滑雪
+function setTeamCalMode(mode) {
+  window._teamCalMode = mode;
+  document.getElementById("teamCalModeIndoorBtn").classList.toggle("active", mode === "indoor");
+  document.getElementById("teamCalModeJapanBtn").classList.toggle("active", mode === "japan");
+  loadTeamCalendar();
+}
 async function renderTeamCalendarTools() {
-  const wrap = document.getElementById("dashboardTeamCalendarWrap");
+  const wrap = document.getElementById("staffTab-coachschedule");
+  const { data: coaches } = await api("/coaches");
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+  const today = now.toISOString().slice(0,10);
+
   wrap.innerHTML = `
-    <h3 style="margin-top:16px; font-size:14px;">共用班表日曆</h3>
-    <p class="note">一眼看到所有教練當天的狀態:橘色=請假、紫色=出差、藍色=當天有幾堂課。正常上班且當天沒課的教練不會顯示,避免版面太亂。點擊任一天可直接建立日本教練課訂單。</p>
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">共用班表日曆</div>
+    <p class="note">一眼看到所有教練當天的狀態:橘色=請假、紫色=出差、藍色=當天有幾堂課。正常上班且當天沒課的教練不會顯示,避免版面太亂。可切換「室內滑雪」/「日本滑雪」檢視當天未指派教練的課程;日本滑雪模式下點擊任一天可直接建立日本教練課訂單,室內滑雪模式下點擊任一天會直接跳到「會員資料與訂單詳情」分頁查看/指派當天課表。</p>
     <div class="row">
+      <button class="small" id="teamCalModeIndoorBtn" onclick="setTeamCalMode('indoor')">室內滑雪</button>
+      <button class="small secondary" id="teamCalModeJapanBtn" onclick="setTeamCalMode('japan')">日本滑雪</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
       <input type="month" id="teamCalMonth" value="${defaultMonth}">
       <button class="small" onclick="loadTeamCalendar()">查詢</button>
     </div>
     <div id="japanQuickCreateWrap" style="margin-top:10px;"></div>
     <div id="teamCalWrap" style="margin-top:12px;"></div>
+
+    <h3 style="margin-top:24px; font-size:14px;">今日人力</h3>
+    <p class="note">依日期查看所有在職教練當天的狀態(上班/請假/出差)與當天課程數(室內+日本)。</p>
+    <div class="row">
+      <input type="date" id="rosterDate" value="${today}">
+      <button class="small" onclick="loadDailyRoster()">查詢</button>
+    </div>
+    <div id="dailyRosterWrap" style="margin-top:10px;"></div>
+
+    <h3 style="margin-top:24px; font-size:14px;">設定教練出勤</h3>
+    <p class="note">在這裡設定任一位教練的請假/出差/上班狀態,會直接反映在上面的月曆與今日人力,以及該教練薪資計算時的請假扣款。</p>
+
+    <div class="person-card">
+      <b>設定教練出勤</b>
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>教練</label><select id="csCoachSel">${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("") || `<option value="">(尚無教練)</option>`}</select></div>
+        <div><label>日期</label><input type="date" id="csWorkDate"></div>
+        <div><label>狀態</label><select id="csStatus">
+          <option value="working">上班</option>
+          <option value="personal_leave">事假</option>
+          <option value="sick_leave">病假</option>
+          <option value="annual_leave">特休</option>
+          <option value="business_trip">出差</option>
+        </select></div>
+        <div><label>備註(選填)</label><input id="csReason" placeholder="例如:代訓、返鄉等"></div>
+      </div>
+      <button class="small" style="margin-top:8px;" onclick="submitCoachScheduleAdmin()">儲存</button>
+      <div id="csSubmitStatus" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="person-card">
+      <div class="row">
+        <div><label>查詢月份</label><input type="month" id="csListMonth" value="${defaultMonth}"></div>
+        <div><label>教練(選填,不選=全部教練)</label><select id="csListCoachFilter">
+          <option value="">全部教練</option>
+          ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+        </select></div>
+        <button class="small secondary" style="align-self:flex-end;" onclick="loadCoachScheduleList()">查詢</button>
+      </div>
+      <div id="csListWrap" style="margin-top:10px;"></div>
+    </div>
   `;
+  document.getElementById("teamCalModeIndoorBtn").classList.add("active");
+  document.getElementById("csWorkDate").value = new Date().toISOString().slice(0,10);
   await loadTeamCalendar();
+  await loadCoachScheduleList();
+  await loadDailyRoster();
 }
 async function loadTeamCalendar() {
   const month = document.getElementById("teamCalMonth").value;
   if (!month) return;
+  const mode = window._teamCalMode || "indoor";
   const { data } = await api(`/admin/team-calendar?month=${month}`);
   const [year, mo] = month.split("-").map(Number);
   const firstDay = new Date(year, mo - 1, 1).getDay(); // 0=Sun
@@ -2244,10 +2484,16 @@ async function loadTeamCalendar() {
 
   for (let d = 1; d <= lastDate; d++) {
     const dateStr = `${year}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    const dayData = data.days[dateStr] || { entries: [], unassigned_japan: [] };
+    const dayData = data.days[dateStr] || { entries: [], unassigned_japan: [], unassigned_indoor: [] };
+    // 教練請假/出差/上班的狀態不分室內/日本(同一位教練的排班本來就是同一份資料),
+    // 兩種模式下都會顯示;差別在於「未指派教練」的提示只顯示目前檢視模式相關的那種。
     const entries = (dayData.entries || []).filter(e => e.status !== "working" || e.session_count > 0);
-    const unassigned = dayData.unassigned_japan || [];
-    html += `<div class="team-cal-day clickable-card" onclick="openJapanQuickCreate('${dateStr}')">
+    const unassignedJapan = mode === "japan" ? (dayData.unassigned_japan || []) : [];
+    const unassignedIndoor = mode === "indoor" ? (dayData.unassigned_indoor || []) : [];
+    const clickAction = mode === "japan"
+      ? `openJapanQuickCreate('${dateStr}')`
+      : `jumpToIndoorSchedule('${dateStr}')`;
+    html += `<div class="team-cal-day clickable-card" onclick="${clickAction}">
       <div class="team-cal-daynum">${d}</div>
       ${entries.map(e => {
         if (e.status !== "working") {
@@ -2257,11 +2503,30 @@ async function loadTeamCalendar() {
         const japanNote = e.japan_resort_name ? `(日本:${e.japan_resort_name})` : "";
         return `<div class="team-cal-entry session">${e.coach_name}・${e.session_count}堂課${japanNote}</div>`;
       }).join("")}
-      ${unassigned.map(u => `<div class="team-cal-entry session">未指定教練・日本${u.resort_name}・${u.count}組</div>`).join("")}
+      ${unassignedJapan.map(u => `<div class="team-cal-entry session">未指定教練・日本${u.resort_name}・${u.count}組</div>`).join("")}
+      ${unassignedIndoor.map(u => `<div class="team-cal-entry session">未指定教練・高雄${u.category_label}・${u.count}堂</div>`).join("")}
     </div>`;
   }
   html += `</div>`;
   document.getElementById("teamCalWrap").innerHTML = html;
+}
+// 室內滑雪模式下點擊某一天:直接切換到「會員資料與訂單詳情」分頁,並帶入該日期查詢
+// 當天課表(沿用該分頁既有的預約課表+指派教練功能,不重複做一套)。
+// 這裡刻意不呼叫switchStaffTab()(它會透過STAFF_TAB_REFRESH整個重新呼叫
+// renderStaffOverviewTab,跟這裡緊接著要做的「設定日期+查詢」有時序上的競速風險——
+// renderStaffOverviewTab是非同步、且switchStaffTab不等它),改成只做「切換分頁可見度」
+// 這個部份,分頁本身在登入時就已經渲染過一次,不需要整個重新渲染。
+async function jumpToIndoorSchedule(dateStr) {
+  document.querySelectorAll(".staff-tab").forEach(el => el.style.display = "none");
+  document.getElementById("staffTab-overview").style.display = "block";
+  document.querySelectorAll(".admin-sidebar-btn").forEach(btn => btn.classList.remove("active"));
+  const navBtn = document.getElementById("navbtn-overview");
+  if (navBtn) navBtn.classList.add("active");
+  const dateInput = document.getElementById("scheduleDate");
+  if (dateInput) {
+    dateInput.value = dateStr;
+    await loadDailySchedule();
+  }
 }
 
 let japanQuickCreateDate = null;
@@ -2358,7 +2623,7 @@ async function renderCheckInTab() {
   const today = new Date().toISOString().slice(0,10);
   const { data } = await api(`/admin/check-ins/pending?up_to_date=${today}`);
 
-  let html = `<h3 style="margin-top:16px; font-size:14px;">報到管理</h3>
+  let html = `<h3 style="margin-top:16px; font-size:14px;">學員報到管理</h3>
     <p class="note">列出日期已到但尚未報到的課程,確認學員是否有到場上課。報到後該筆預約將無法再取消/修改。</p>`;
 
   html += `<h4 style="font-size:13px;">室內課程</h4>`;
@@ -2513,15 +2778,25 @@ async function renderOrdersManageTab() {
     </div>
   ` : "";
 
-  wrap.innerHTML = `<p class="note">列出最近的訂單,可套用折扣、記錄收款(支援訂金/尾款分次)、辦理退款。</p>` +
+  wrap.innerHTML = `
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">室內滑雪訂單管理</div>
+    <p class="note">列出最近的訂單,可套用折扣、記錄收款(支援訂金/尾款分次)、辦理退款。若客戶已在前台選擇「現場付款」,下方收款金額/付款方式會自動帶入,不用再手動輸入或詢問客戶。</p>` +
     pendingRefundsHtml +
     orders.slice(0, 50).map(o => {
       const payable = o.amount - o.discount_amount;
       const remaining = payable - o.paid_amount;
+      // 2026-09第二次改版:依指示「原本收款記錄請與前台客戶結帳方式結合,若客戶點選
+      // 現場付款請自動帶入應結帳金額」——customer_payment_method是客戶自己在前台選的
+      // 付款方式(見admin_list_orders),是'onsite'的話直接把收款金額欄位帶入應付
+      // 金額(remaining),付款方式下拉也直接選現場付款,店員不用再自己算一次金額、
+      // 也不用另外詢問客戶選了什麼付款方式。
+      const prefillOnsite = o.customer_payment_method === "onsite" && remaining > 0;
       return `
         <div class="person-card">
           <b>#${o.id} ${o.member_name}</b> — ${catLabelMap[o.order_type] || o.order_type}
           <span class="status-tag ${o.status === 'paid' ? 'ok' : 'warn'}">${statusLabelMap[o.status] || o.status}</span>
+          ${o.customer_payment_method ? `<span class="status-tag ${o.customer_payment_method === 'onsite' ? 'ok' : 'warn'}">客戶已選:${{onsite:"現場付款",bank_transfer:"匯款轉帳",online_card:"線上刷卡",webatm:"網路ATM",atm:"ATM櫃員機"}[o.customer_payment_method] || o.customer_payment_method}</span>` : ""}
           <div class="list-item">
             原價NT$${o.amount} − 折扣NT$${o.discount_amount} = 應付NT$${payable}
             ・已收NT$${o.paid_amount}・已退NT$${o.refunded_amount}${remaining > 0 ? `・尚欠NT$${remaining}` : ""}
@@ -2531,14 +2806,14 @@ async function renderOrdersManageTab() {
             <button class="small secondary" onclick="applyOrderDiscount(${o.id})">套用折扣</button>
           </div>
           <div class="row">
-            <input id="orderPayAmount-${o.id}" type="number" placeholder="收款金額">
+            <input id="orderPayAmount-${o.id}" type="number" placeholder="收款金額" ${prefillOnsite ? `value="${remaining}"` : ""}>
             <select id="orderPayType-${o.id}">
               <option value="deposit">訂金</option>
               <option value="balance">尾款</option>
-              <option value="full">全額</option>
+              <option value="full" ${prefillOnsite ? "selected" : ""}>全額</option>
             </select>
             <select id="orderPayMethod-${o.id}">
-              <option value="onsite">現場付款</option>
+              <option value="onsite" ${prefillOnsite ? "selected" : ""}>現場付款</option>
               <option value="bank_transfer">匯款轉帳</option>
               <option value="online_card">線上刷卡</option>
             </select>
@@ -2605,12 +2880,73 @@ async function renderStaffOverviewTab() {
   const { data: members } = await api("/admin/members");
   staffAllMembers = members;
   const wrap = document.getElementById("staffTab-overview");
+  const today = new Date().toISOString().slice(0,10);
   wrap.innerHTML = `
-    <h3 style="font-size:14px;">會員管理</h3>
+    <h3 style="font-size:14px;">預約課表</h3>
+    <p class="note">依日期查看當天所有預約(體驗課/包機/自主練習/團課/跳台/日本教練課)。修正前只能點進單一會員資料才看得到他的預約,現在可以直接依日期瀏覽當天所有人的預約。室內課程(體驗課/包機/團課)可以直接在這裡指派/更換教練;自主練習本來就沒有教練的概念,不會出現指派欄位;日本教練課的教練指派請到「日本教練課訂單」分頁處理。</p>
+    <div class="row">
+      <input type="date" id="scheduleDate" value="${today}">
+      <button class="small" onclick="loadDailySchedule()">查詢</button>
+    </div>
+    <div id="dailyScheduleWrap" style="margin-top:10px;"></div>
+
+    <h3 style="font-size:14px; margin-top:24px;">會員管理</h3>
     <input class="search-box" id="memberSearchInput" placeholder="搜尋姓名/電話/Email..." oninput="renderMemberList()">
     <div id="memberListWrap"></div>
   `;
   renderMemberList();
+  await loadDailySchedule();
+}
+const _INDOOR_COACH_CATEGORIES = new Set(["trial", "charter", "group_class"]);
+async function loadDailySchedule() {
+  const dateInput = document.getElementById("scheduleDate");
+  const date = dateInput ? dateInput.value : new Date().toISOString().slice(0,10);
+  const wrap = document.getElementById("dailyScheduleWrap");
+  if (!date || !wrap) return;
+  wrap.innerHTML = `<p class="note">載入中...</p>`;
+  const [{ data: bookings }, { data: indoorCoaches }] = await Promise.all([
+    api(`/admin/bookings?date_from=${date}&date_to=${date}`),
+    api("/indoor-coaches"),
+  ]);
+  window._dailyScheduleIndoorCoaches = indoorCoaches;
+  if (!bookings || !bookings.length) {
+    wrap.innerHTML = `<p class="note">這天沒有任何預約</p>`;
+    return;
+  }
+  const sorted = [...bookings].sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  wrap.innerHTML = sorted.map(b => {
+    const statusTag = b.status === "cancelled" ? `<span class="status-tag warn">已取消</span>` : "";
+    const payTag = b.payment_label ? `<span class="status-tag ${b.payment_status === "confirmed" ? "ok" : "warn"}">${b.payment_label}</span>` : "";
+    let coachControl = "";
+    if (b.session_id && _INDOOR_COACH_CATEGORIES.has(b.category)) {
+      const options = [`<option value="">不指定</option>`].concat(
+        indoorCoaches.map(c => `<option value="${c.id}" ${b.coach_id === c.id ? "selected" : ""}>${c.name}</option>`)
+      );
+      coachControl = `
+        <span class="note" style="margin-left:8px;">教練:</span>
+        <select id="scheduleCoachSel-${b.session_id}">${options.join("")}</select>
+        <button id="scheduleAssignBtn-${b.session_id}" class="small secondary" style="margin-left:4px;" onclick="assignScheduleCoach(${b.session_id})">指派</button>
+        <span id="scheduleCoachStatus-${b.session_id}"></span>
+      `;
+    } else if (b.category === "japan") {
+      coachControl = `<span class="note" style="margin-left:8px;">教練:${b.coach_name || "不指定"}(日本教練課請至「日本教練課訂單」分頁調整)</span>`;
+    }
+    return `<div class="list-item">
+      <b>${b.time || ""}</b> — ${b.category_label} — ${b.member_name || ""}${b.member_phone ? "("+b.member_phone+")" : ""}
+      ${statusTag} ${payTag}
+      ${coachControl}
+    </div>`;
+  }).join("");
+}
+async function assignScheduleCoach(sessionId) {
+  const sel = document.getElementById(`scheduleCoachSel-${sessionId}`);
+  const statusEl = document.getElementById(`scheduleCoachStatus-${sessionId}`);
+  const coachId = sel && sel.value ? parseInt(sel.value) : null;
+  const { ok, data } = await api(`/admin/sessions/${sessionId}/assign-coach`, {
+    method: "POST", body: JSON.stringify({ coach_id: coachId }),
+  });
+  if (statusEl) statusEl.innerHTML = ok ? `<span class="status-tag ok">已更新</span>` : `<span class="status-tag warn">${(data && data.error) || "失敗"}</span>`;
+  if (ok) await loadDailySchedule();
 }
 function renderMemberList() {
   const keyword = (document.getElementById("memberSearchInput")?.value || "").trim().toLowerCase();
@@ -2705,6 +3041,16 @@ async function toggleMemberDetail(memberId) {
     <button class="small" onclick="saveMemberProfileAdmin(${memberId})">儲存以上資料</button>
     <div id="memberSaveStatus-${memberId}" style="margin-top:6px;"></div>
 
+    <div class="sub-section-title">登入帳號</div>
+    <div class="list-item">
+      Email:${m.email||"未設定"}
+      <span id="memberPasswordBadge-${memberId}">${m.has_password
+        ? '<span class="status-tag ok">已設定密碼</span>'
+        : '<span class="status-tag warn">尚未設定密碼(登入時會引導設定)</span>'}</span>
+      <button class="small" style="margin-left:8px;" onclick="resetMemberPasswordAdmin(${memberId})">重設登入密碼</button>
+    </div>
+    <div id="memberPasswordResetStatus-${memberId}" style="margin-top:6px;"></div>
+
     <div class="sub-section-title">方案與額度</div>
     ${m.plan
       ? `<div class="list-item">方案${m.plan.plan_name}(${m.plan.billing_cycle==="annual"?"年繳":"月繳"})
@@ -2755,6 +3101,22 @@ async function saveMemberProfileAdmin(memberId) {
   if (ok) {
     const { data: members } = await api("/admin/members");
     staffAllMembers = members;  // 靜默更新內部清單快取,不重繪畫面、不收合目前展開的詳情
+  }
+}
+async function resetMemberPasswordAdmin(memberId) {
+  // 2026-09新增:會員忘記登入密碼時,客服以上可以在這裡幫忙清除(不是設定新密碼——
+  // 員工不應該知道/決定會員實際使用的密碼)。清除後該會員下次登入會被引導直接設定一組
+  // 新密碼,效果等同一般系統的「忘記密碼」流程(詳見auth.py的admin_reset_member_password說明)。
+  if (!confirm("確定要清除此會員的登入密碼嗎?清除後,會員下次登入時系統會引導其重新設定一組新密碼。")) return;
+  const statusEl = document.getElementById(`memberPasswordResetStatus-${memberId}`);
+  statusEl.textContent = "處理中...";
+  const { ok, data } = await api(`/admin/members/${memberId}/reset-password`, { method: "POST" });
+  if (ok) {
+    statusEl.innerHTML = `<span class="status-tag ok">已清除,會員下次登入需重新設定密碼</span>`;
+    const badge = document.getElementById(`memberPasswordBadge-${memberId}`);
+    if (badge) badge.innerHTML = `<span class="status-tag warn">尚未設定密碼(登入時會引導設定)</span>`;
+  } else {
+    statusEl.innerHTML = `<span class="status-tag warn">${data.error || "清除失敗"}</span>`;
   }
 }
 
@@ -3423,7 +3785,8 @@ async function cancelSessionAsStaff(sessionId) {
   if (ok) { alert(`已取消,共${data.cancelled_count}筆預約`); renderPendingActions(); invalidateAllMachineCalendars(); }
 }
 
-// ---------------- 團課教練指派(客服以上) ----------------
+// ---------------- 教練指派管理(股東/老闆;原「團課教練指派」,2026-09第二次改版
+// 更名,並新增可指派日本滑雪雪場的教練) ----------------
 async function renderGroupClassAssignTools() {
   const wrap = document.getElementById("staffTab-groupassign");
   const { data: sessions } = await api("/admin/group-classes");
@@ -3431,7 +3794,10 @@ async function renderGroupClassAssignTools() {
   const coachOptions = '<option value="">不指定</option>' +
     coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
 
-  wrap.innerHTML = `<h3 style="margin-top:14px; font-size:14px;">團課教練指派</h3>` +
+  wrap.innerHTML = `
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">教練指派管理</div>
+    <h3 style="margin-top:14px; font-size:14px;">室內滑雪・團課指派</h3>` +
     (sessions.length ? sessions.map(s => `
       <div class="list-item">
         ${s.booking_date} ${s.start_hour}:00 — ${s.enrolled_count}人已成班
@@ -3439,11 +3805,17 @@ async function renderGroupClassAssignTools() {
         <select id="groupCoachSel-${s.id}">${coachOptions}</select>
         <button class="small" onclick="assignGroupCoach(${s.id})">指派</button>
       </div>
-    `).join("") : `<div class="list-item">目前沒有已成班待指派教練的團課場次</div>`);
+    `).join("") : `<div class="list-item">目前沒有已成班待指派教練的團課場次</div>`) + `
+    <h3 style="margin-top:24px; font-size:14px;">日本滑雪・雪場指派</h3>
+    <p class="note">列出未來日期、尚未指派教練的日本教練課訂單;已經有教練的訂單如需更換,請到「日本訂單管理」分頁查看整體訂單資訊後,回到這裡用同一組操作重新指派。</p>
+    <div id="japanAssignWrap"></div>
+  `;
 
   sessions.forEach(s => {
     if (s.coach_id) document.getElementById(`groupCoachSel-${s.id}`).value = s.coach_id;
   });
+  window._groupAssignCoachOptions = coachOptions;
+  await loadJapanNeedsCoachList();
 }
 async function assignGroupCoach(sessionId) {
   const coachVal = document.getElementById(`groupCoachSel-${sessionId}`).value;
@@ -3451,6 +3823,33 @@ async function assignGroupCoach(sessionId) {
     method: "POST", body: JSON.stringify({ coach_id: coachVal ? parseInt(coachVal) : null })
   });
   if (ok) { alert("已指派"); renderGroupClassAssignTools(); }
+}
+async function loadJapanNeedsCoachList() {
+  const wrap = document.getElementById("japanAssignWrap");
+  const { data: rows } = await api("/admin/japan-bookings/needs-coach");
+  const coachOptions = window._groupAssignCoachOptions || "";
+  wrap.innerHTML = rows.length ? rows.map(r => `
+    <div class="list-item">
+      ${r.booking_date} ${r.resort_name} — ${r.member_name}
+      ・${r.equipment_type==="ski"?"雙板":"單板"}・${r.day_type==="full"?"全日":"半日"}・${r.headcount}人
+      <select id="japanAssignCoachSel-${r.id}">${coachOptions}</select>
+      <button class="small" onclick="assignJapanBookingCoach(${r.id})">指派</button>
+      <span id="japanAssignStatus-${r.id}"></span>
+    </div>
+  `).join("") : `<div class="list-item">目前沒有尚未指派教練的日本教練課訂單</div>`;
+}
+async function assignJapanBookingCoach(bookingId) {
+  const coachVal = document.getElementById(`japanAssignCoachSel-${bookingId}`).value;
+  const statusEl = document.getElementById(`japanAssignStatus-${bookingId}`);
+  const { ok, data } = await api(`/admin/japan-bookings/${bookingId}/assign-coach`, {
+    method: "POST", body: JSON.stringify({ coach_id: coachVal ? parseInt(coachVal) : null })
+  });
+  if (ok) {
+    if (statusEl) statusEl.innerHTML = `<span class="status-tag ok">已指派</span>`;
+    await loadJapanNeedsCoachList();
+  } else if (statusEl) {
+    statusEl.innerHTML = `<span class="status-tag warn">${data.error}</span>`;
+  }
 }
 
 // ---------------- 管理報表/營收統計(主管/老闆) ----------------
@@ -3737,7 +4136,9 @@ async function renderResortManageTools() {
                 <input id="editResortName-${r.id}" placeholder="新名稱" style="width:auto; display:inline-block; margin:4px 4px;">
                 <button class="small secondary" onclick="editResortAdmin(${r.id}, ${region.id})">修改名稱</button>
                 <button class="small secondary" onclick="deleteResortAdmin(${r.id}, ${region.id})">刪除雪場</button>
-              ` : ""}
+              ` : `
+                <button class="small" onclick="reactivateResortAdmin(${r.id}, ${region.id})">重新啟用</button>
+              `}
               <div style="margin-top:6px;">
                 <div class="note">駐點教練:</div>
                 ${assigned.length
@@ -3777,48 +4178,87 @@ async function removeResortCoachAdmin(assignmentId, regionId) {
 }
 
 // ---------------- 教練出勤管理(客服/主管皆可使用,設定任一位教練的請假/出差/上班狀態) ----------------
-async function renderCoachScheduleTools() {
-  const wrap = document.getElementById("staffTab-coachschedule");
+// 2026-09第二次改版:「教練出勤管理」改名為「日本教練出勤管理」,原本這裡的「今日
+// 人力」「設定教練出勤」編輯功能已經搬到「共用班表日曆」分頁(renderTeamCalendarTools)。
+// 這個分頁改成串上下課編碼(attendance_codes),只呈現每一筆日本教練課「學員是否已用
+// 上/下課碼完成報到」的完成狀態,不提供任何編輯——排休/出差請到「共用班表日曆」設定。
+async function renderJapanAttendanceTools() {
+  const wrap = document.getElementById("staffTab-japanattendance");
   const { data: coaches } = await api("/coaches");
-  const now = new Date();
-  const defaultMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
-
+  const today = new Date().toISOString().slice(0,10);
   wrap.innerHTML = `
-    <h3 style="margin-top:16px; font-size:14px;">教練出勤管理</h3>
-    <p class="note">在這裡設定任一位教練的請假/出差/上班狀態,會直接反映在「營運中心」的共用班表日曆,以及該教練薪資計算時的請假扣款。</p>
-
-    <div class="person-card">
-      <b>設定教練出勤</b>
-      <div class="field-grid" style="margin-top:8px;">
-        <div><label>教練</label><select id="csCoachSel">${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("") || `<option value="">(尚無教練)</option>`}</select></div>
-        <div><label>日期</label><input type="date" id="csWorkDate"></div>
-        <div><label>狀態</label><select id="csStatus">
-          <option value="working">上班</option>
-          <option value="personal_leave">事假</option>
-          <option value="sick_leave">病假</option>
-          <option value="annual_leave">特休</option>
-          <option value="business_trip">出差</option>
-        </select></div>
-        <div><label>備註(選填)</label><input id="csReason" placeholder="例如:代訓、返鄉等"></div>
-      </div>
-      <button class="small" style="margin-top:8px;" onclick="submitCoachScheduleAdmin()">儲存</button>
-      <div id="csSubmitStatus" style="margin-top:6px;"></div>
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">日本教練出勤管理</div>
+    <p class="note">串接學員上/下課編碼(教練頁面輸入學員提供的編碼以完成報到),這裡只唯讀顯示每一筆日本教練課目前的完成狀態,不提供編輯;如需設定教練請假/出差/上班,請至「共用班表日曆」分頁。</p>
+    <div class="row">
+      <input type="date" id="jaDateFrom" value="${today}">
+      <input type="date" id="jaDateTo" value="${today}">
+      <select id="jaCoachFilter">
+        <option value="">全部教練</option>
+        ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+      </select>
+      <button class="small" onclick="loadJapanAttendanceOverview()">查詢</button>
     </div>
-
-    <div class="person-card">
-      <div class="row">
-        <div><label>查詢月份</label><input type="month" id="csListMonth" value="${defaultMonth}"></div>
-        <div><label>教練(選填,不選=全部教練)</label><select id="csListCoachFilter">
-          <option value="">全部教練</option>
-          ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
-        </select></div>
-        <button class="small secondary" style="align-self:flex-end;" onclick="loadCoachScheduleList()">查詢</button>
-      </div>
-      <div id="csListWrap" style="margin-top:10px;"></div>
-    </div>
+    <div id="jaOverviewWrap" style="margin-top:10px;"></div>
   `;
-  document.getElementById("csWorkDate").value = new Date().toISOString().slice(0,10);
-  await loadCoachScheduleList();
+  await loadJapanAttendanceOverview();
+}
+async function loadJapanAttendanceOverview() {
+  const dateFrom = document.getElementById("jaDateFrom").value;
+  const dateTo = document.getElementById("jaDateTo").value;
+  const coachId = document.getElementById("jaCoachFilter").value;
+  const wrap = document.getElementById("jaOverviewWrap");
+  const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  if (coachId) params.set("coach_id", coachId);
+  const { data: rows } = await api(`/admin/japan-attendance-overview?${params.toString()}`);
+  if (!rows.length) { wrap.innerHTML = `<p class="note">這段期間沒有日本教練課訂單</p>`; return; }
+  const slotLabel = { morning: "上午", afternoon: "下午" };
+  wrap.innerHTML = rows.map(r => `
+    <div class="list-item">
+      <b>${r.booking_date}</b> ${r.resort_name} — ${r.member_name} — 教練:${r.coach_name || "尚未指派"}
+      ${r.session_slot ? `(${slotLabel[r.session_slot] || r.session_slot})` : `<span class="note">(尚未產生上下課碼,通常是訂單還沒完成付款確認)</span>`}
+      ${r.session_slot ? `
+        <span class="status-tag ${r.checkin_done ? "ok" : "warn"}">上課${r.checkin_done ? "已完成" : "未完成"}</span>
+        <span class="status-tag ${r.checkout_done ? "ok" : "warn"}">下課${r.checkout_done ? "已完成" : "未完成"}</span>
+      ` : ""}
+    </div>
+  `).join("");
+}
+
+async function loadDailyRoster() {
+  const dateInput = document.getElementById("rosterDate");
+  const date = dateInput ? dateInput.value : new Date().toISOString().slice(0,10);
+  const wrap = document.getElementById("dailyRosterWrap");
+  if (!date || !wrap) return;
+  wrap.innerHTML = `<p class="note">載入中...</p>`;
+  const { ok, data } = await api(`/admin/coach-schedule/roster?date=${date}`);
+  if (!ok) {
+    wrap.innerHTML = `<p class="note">${(data && data.error) || "查詢失敗"}</p>`;
+    return;
+  }
+  const roster = data.roster || [];
+  const working = roster.filter(r => r.status === "working");
+  const off = roster.filter(r => r.status !== "working");
+  let html = "";
+  html += `<div class="list-item"><b>上班中(${working.length}位)</b></div>`;
+  html += working.length
+    ? working.map(r => {
+        const japanNote = r.japan_resort_name ? `・日本:${r.japan_resort_name}` : "";
+        return `<div class="list-item">${r.coach_name} — ${r.session_count}堂課${japanNote}</div>`;
+      }).join("")
+    : `<div class="list-item note">(無)</div>`;
+  html += `<div class="list-item" style="margin-top:8px;"><b>請假/出差(${off.length}位)</b></div>`;
+  html += off.length
+    ? off.map(r => `<div class="list-item">${r.coach_name} — <span class="status-tag ${r.status === "business_trip" ? "ok" : "warn"}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>${r.reason ? `(${r.reason.replace(/</g,"&lt;")})` : ""}</div>`).join("")
+    : `<div class="list-item note">(無)</div>`;
+  const unassignedIndoor = data.unassigned_indoor || [];
+  const unassignedJapan = data.unassigned_japan || [];
+  if (unassignedIndoor.length || unassignedJapan.length) {
+    html += `<div class="list-item" style="margin-top:8px;"><b>未指派教練</b></div>`;
+    html += unassignedIndoor.map(u => `<div class="list-item">高雄・${u.category_label} — ${u.count}堂</div>`).join("");
+    html += unassignedJapan.map(u => `<div class="list-item">日本・${u.resort_name || ""} — ${u.count}組</div>`).join("");
+  }
+  wrap.innerHTML = html;
 }
 
 async function loadCoachScheduleList() {
@@ -3881,6 +4321,10 @@ const CONTRACT_TYPE_LABEL = {
 async function renderCoachManageTools() {
   const wrap = document.getElementById("staffTab-coaches");
   const { data: coaches } = await api("/coaches");
+  // 2026-09新增:測試「刪除教練」流程時發現,停用後的教練會從/api/coaches(公開清單,
+  // 只回傳在職教練)整個消失,先前完全沒有畫面可以再把停用的教練找回來、重新啟用——
+  // 這裡另外抓一份「已停用教練」清單(見後端admin_list_inactive_coaches),補上對應區塊。
+  const { data: inactiveCoaches } = await api("/admin/coaches/inactive");
 
   let coachHtml = `<h3 style="margin-top:16px; font-size:14px;">教練團隊管理(主管/老闆)</h3>
     <button class="small secondary" onclick="downloadExport('/admin/coaches/export.xlsx')">📥 匯出教練資料(Excel)</button>`;
@@ -3915,8 +4359,29 @@ async function renderCoachManageTools() {
     </div>
   `;
 
+  if (inactiveCoaches.length) {
+    coachHtml += `
+      <div class="person-card">
+        <b>已停用教練</b>
+        <p class="note">「刪除教練」實際上是停用帳號(保留歷史紀錄),不是真的刪掉資料——這裡可以把停用的教練重新啟用。</p>
+        ${inactiveCoaches.map(c => `
+          <div class="list-item">
+            ${c.name}(工號${c.work_id}${c.branch ? "・" + c.branch : ""})<span class="status-tag warn" style="margin-left:6px;">已停用</span>
+            <button class="small" style="margin-left:8px;" onclick="reactivateCoachAdmin(${c.id}, '${(c.name||"").replace(/'/g,"")}')">重新啟用</button>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
   wrap.innerHTML = coachHtml;
   populateBirthDateSelects("newCoachBirthYear", "newCoachBirthMonth", "newCoachBirthDay");
+}
+async function reactivateCoachAdmin(coachId, coachName) {
+  if (!confirm(`確定要重新啟用教練「${coachName}」嗎?啟用後這位教練可以再次登入。`)) return;
+  const { ok, data } = await api(`/admin/staff/${coachId}/reactivate`, { method: "POST" });
+  if (ok) { await renderCoachManageTools(); loadCoachTeam(); }
+  else alert(data.error || "重新啟用失敗");
 }
 
 async function toggleCoachEdit(coachId) {
@@ -4193,6 +4658,16 @@ async function deleteResortAdmin(resortId, regionId) {
   if (!confirm("確定要刪除(停用)這個雪場嗎?")) return;
   await api(`/admin/resorts/${resortId}`, { method: "DELETE" });
   await renderResortManageTools();
+}
+// 2026-09新增:測試雪場管理時發現,雪場停用後畫面上完全沒有按鈕能再啟用回來——後端
+// PUT /admin/resorts/<id>其實原本就支援帶is_active參數,只是前端一直沒有補上對應的
+// 按鈕,這裡補上(不需要新增後端API,單純是前端少做的部分)。
+async function reactivateResortAdmin(resortId, regionId) {
+  const { ok, data } = await api(`/admin/resorts/${resortId}`, {
+    method: "PUT", body: JSON.stringify({ is_active: 1 })
+  });
+  if (ok) await renderResortManageTools();
+  else alert(data.error || "重新啟用失敗");
 }
 async function editResortAdmin(resortId, regionId) {
   const newName = document.getElementById(`editResortName-${resortId}`).value.trim();

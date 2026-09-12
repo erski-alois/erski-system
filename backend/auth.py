@@ -79,15 +79,54 @@ def mock_oauth_login(provider: str, mock_external_id: str) -> dict:
     return {"is_new": True, "member": None}
 
 
+def member_login(email: str, password: str):
+    """2026-09新增:Email+密碼登入(正式上線用的會員登入)。這之前系統完全沒有這條路——
+    舊的「用Email登入」其實是呼叫mock_oauth_login(provider='email'),只要Email存在
+    就直接放行,完全沒有驗證密碼,等於任何人知道會員的Email就能登入該帳號。
+
+    回傳三種結果(用一個dict表示,呼叫端app.py依內容組對應的HTTP狀態碼):
+      - 找不到這個Email的會員:{"error": "..."}
+      - 找到會員,但這個帳號是2026-09正式上線前註冊的舊帳號,從來沒有設定過密碼
+        (password_hash是NULL):{"member": dict, "needs_password_setup": True}——
+        這種情況刻意不擋密碼(反正對方本來就沒有密碼可以驗證),直接視為登入成功,
+        但標記needs_password_setup,前端看到這個旗標要導去「會員中心」的
+        「修改登入密碼」卡片,強制先設定一組密碼再繼續使用其他功能。
+        (這是唯一目前能讓舊會員「恢復登入」的辦法——系統目前沒有真的寄送Email/簡訊
+        驗證信的能力,沒辦法做正規的「忘記密碼,寄重設連結」流程,詳見README說明。)
+      - 找到會員,且已經設定過密碼:密碼正確才回傳{"member": dict, "needs_password_setup": False},
+        密碼不對回傳{"error": "..."}。"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE email=?", ((email or "").strip(),)).fetchone()
+    conn.close()
+    if not row:
+        return {"error": "查無此Email的會員帳號,請確認輸入是否正確,或先完成註冊"}
+    member = dict(row)
+    if not member.get("password_hash"):
+        member.pop("password_hash", None)
+        return {"member": member, "needs_password_setup": True}
+    if not verify_password(member["password_hash"], password or ""):
+        return {"error": "密碼不正確"}
+    member.pop("password_hash", None)
+    return {"member": member, "needs_password_setup": False}
+
+
 def create_member(data: dict) -> dict:
     """建立新會員(正式註冊,不是demo快速登入)。姓名/手機/Email是前台註冊表單一定會
     收集的三項基本資料,這裡統一做格式驗證,不能只靠前端檢查——前端的檢查繞得過去
     (例如直接呼叫API),後端才是真正把關的地方。驗證不過一律丟ValueError,呼叫端
-    (app.py)接住後回傳400跟錯誤訊息給前端顯示。"""
+    (app.py)接住後回傳400跟錯誤訊息給前端顯示。
+
+    2026-09新增:auth_provider='email'(用Email註冊/登入,目前唯一真正驗證密碼的
+    登入方式)這種情況下,註冊時一併要求設定登入密碼(至少6碼),不再讓帳號一開始
+    就是「沒有密碼」的狀態——這是配合「全部進入正式上線狀況,會員登入得以正式帳號
+    密碼登入」這個需求的一部分。line/google/apple這3種目前還是模擬OAuth按鈕
+    (還沒有串接真正的第三方OAuth,詳見mock_oauth_login的說明),沒有密碼欄位,
+    維持原本「OAuth完成=身分驗證完成」的邏輯不變,不受這次改動影響。"""
     name = (data.get("name") or "").strip()
     phone = re.sub(r"[\s-]", "", data.get("phone") or "")
     email = (data.get("email") or "").strip()
     auth_provider = data.get("auth_provider")
+    password = data.get("password")
 
     if not name:
         raise ValueError("請輸入姓名")
@@ -95,6 +134,9 @@ def create_member(data: dict) -> dict:
         raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
     if not is_valid_email(email):
         raise ValueError("Email格式不正確,請重新輸入")
+    if auth_provider == "email":
+        if not password or len(password) < 6:
+            raise ValueError("請設定登入密碼(至少6碼)")
 
     conn = get_conn()
     existing = conn.execute("SELECT id FROM members WHERE email=?", (email,)).fetchone()
@@ -102,12 +144,13 @@ def create_member(data: dict) -> dict:
         conn.close()
         raise ValueError("此Email已經註冊過會員,請直接使用登入方式登入,或改用其他Email註冊")
 
+    password_hash = new_password_hash(password) if (auth_provider == "email" and password) else None
     cur = conn.execute(
-        """INSERT INTO members (name, phone, line_user_id, email, auth_provider)
-           VALUES (?, ?, ?, ?, ?)""",
+        """INSERT INTO members (name, phone, line_user_id, email, auth_provider, password_hash)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
             name, phone,
-            data.get("line_user_id"), email, auth_provider,
+            data.get("line_user_id"), email, auth_provider, password_hash,
         ),
     )
     conn.commit()
@@ -149,6 +192,22 @@ def set_member_password(member_id: int, new_password: str, current_password: str
     conn.close()
 
 
+def admin_reset_member_password(member_id: int):
+    """2026-09新增:員工端(客服以上)幫會員清除登入密碼,用於「會員忘記密碼,聯繫客服
+    協助」這個情境。直接把password_hash清成NULL,不是「員工幫會員設一組新密碼」
+    (員工不應該知道/決定會員實際使用的密碼)。清除後這個帳號回到「尚未設定過密碼」
+    狀態,會員下次用Email登入(見member_login)會被引導直接設定一組新密碼,
+    效果等同於一般系統的「忘記密碼」流程。"""
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM members WHERE id=?", (member_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("找不到此會員")
+    conn.execute("UPDATE members SET password_hash=NULL WHERE id=?", (member_id,))
+    conn.commit()
+    conn.close()
+
+
 def set_staff_password(staff_id: int, new_password: str, current_password: str = None, require_current: bool = True):
     """
     設定/變更員工(含教練)登入密碼。require_current=True(本人變更自己的密碼)時,一定要先
@@ -183,13 +242,11 @@ def staff_login(work_id: str, password: str):
         return None
     if not row["is_active"]:
         return None
-    # 2026-08:依需求「後台登入不進去，在上線之前不用再驗證」——
-    # 正式上線(對外開放給真實客戶使用)之前,後台登入先不驗證密碼,只要工號正確、
-    # 帳號是啟用中即可登入,密碼欄位打對打錯或留空都不影響,所有角色(教練/客服/
-    # 主管/老闆)皆適用。⚠️正式上線前務必把下面這段密碼驗證加回來,不然任何人只要
-    # 猜到工號就能直接登入後台,是很明顯的資安風險。
-    # if not verify_password(row["password_hash"], password):
-    #     return None
+    # 2026-09:依需求「全部進入正式上線狀況」,把先前刻意註解掉的密碼驗證加回來。
+    # 教練登入(教練專屬頁面)跟後台登入(股東/主管/老闆的員工後台管理)共用這同一支
+    # 函式,這裡修好,兩種登入的密碼驗證會同時恢復,不用分開改兩次。
+    if not verify_password(row["password_hash"], password):
+        return None
     staff = dict(row)
     staff.pop("password_hash")
     return staff

@@ -79,7 +79,15 @@ class _PGCursorWrapper:
         self.lastrowid = None
 
     def execute(self, sql, params=()):
-        translated = sql.replace("?", "%s")
+        # 2026-09修正(正式環境Postgres實際噴錯才發現的既有bug):psycopg2的cursor.execute
+        # 把SQL字串當成printf風格的樣板解析,字串裡任何字面上的「%」(不是我們自己要插入的
+        # %s參數)都必須先跳脫成「%%」,否則psycopg2內部计算參數個數會算錯,導致
+        # 「IndexError: tuple index out of range」——SQLite的?參數完全沒有這個限制,
+        # 本機用SQLite測試永遠測不出來,只有接正式Postgres才會炸(例如WHERE欄位 LIKE
+        # 'xxx%'這種SQL萬用字元寫法)。修法是:在把?換成%s「之前」,先把原本SQL裡所有
+        # 字面的%都跳脫成%%,這樣psycopg2看到的%只有我們自己插入的%s是合法佔位符,其餘
+        # 都是跳脫過的字面%,不會被誤判參數數量。
+        translated = sql.replace("%", "%%").replace("?", "%s")
         translated = _GROUP_CONCAT_RE.sub("STRING_AGG(", translated)
         params = _sanitize_params(params)
         stripped_upper = translated.strip().upper()

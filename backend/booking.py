@@ -1977,8 +1977,15 @@ def verify_attendance_code(ref_type, ref_id, code, staff_id):
 def get_pending_check_ins(up_to_date):
     """列出日期已到(<=up_to_date)但尚未報到的所有場次/預約,供後台報到作業使用。"""
     conn = get_conn()
+    # 2026-09修正(正式環境Postgres實際噴錯才發現的既有bug):st.name是join進來的staff表
+    # 欄位,GROUP BY只寫了s.id(indoor_sessions自己的主鍵)——SQLite對這種寫法很寬鬆,
+    # 允許直接選st.name(反正LEFT JOIN每個s.id最多對到一位教練,結果不會錯,只是不符合
+    # 嚴格SQL標準);但Postgres嚴格要求SELECT出來的每個非聚合欄位都要嘛在GROUP BY裡、
+    # 要嘔包在聚合函式裡,st.name兩者都不是,直接噴GroupingError。改成MAX(st.name)
+    # 包起來(功能上完全等價,因為每個s.id本來就最多對應一位教練,不會有多值可選的問題),
+    # 不用去動GROUP BY子句本身。
     indoor = conn.execute(
-        """SELECT s.id, s.booking_date, s.start_hour, s.category, st.name AS coach_name,
+        """SELECT s.id, s.booking_date, s.start_hour, s.category, MAX(st.name) AS coach_name,
                GROUP_CONCAT(m.name, '、') AS member_names
            FROM indoor_sessions s
            JOIN indoor_session_members sm ON sm.session_id = s.id AND sm.status='enrolled'
