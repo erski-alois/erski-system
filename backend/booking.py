@@ -605,6 +605,35 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
 # ------------------------------------------------------------------
 # 團課(會員限定,滿2人開課,滿4人截止,可指定教練)
 # ------------------------------------------------------------------
+def _create_group_class_payment_order(conn, member_id, session_member_id):
+    """2026-09新增(修正團課刷卡/付款一直404的bug):團課(group_class)如果後台設定了
+    額外收費(pricing.GROUP_CLASS_PRICE非空非0),幫這位「正式入班」(非候補)的會員
+    建立一筆待付款訂單。
+
+    這裡刻意不比照trial/self_practice/jump_booking直接用「這堂課本身的id」
+    (也就是indoor_sessions.id/session_id)當ref_id,而是改用這位會員自己這筆
+    報名記錄的id(indoor_session_members.id)——因為同一場團課session最多可以有
+    4位會員各自報名、各自可能都要付款,如果用session_id當ref_id,
+    _lookup_authoritative_order()/mark_order_paid()這兩個函式都是用
+    「ref_type+ref_id去查最新一筆status='pending'的訂單」,同一個session_id
+    底下如果同時有好幾位會員各自的pending訂單,會查到別人的訂單(金額可能剛好
+    一樣、但member_id對不上,輕則害其中幾位會員的付款頁一直顯示404找不到訂單,
+    重則可能把別人的訂單誤標記成付款完成)。改用每位會員自己這筆報名記錄的id
+    當ref_id,保證每位會員的訂單彼此獨立、互不干擾。
+
+    團課目前額度是null(不額外收費),這個函式在GROUP_CLASS_PRICE為空/0時
+    直接跳過、不建立訂單,維持現有(目前唯一在使用中)的免費行為不變。
+    """
+    price = pricing.GROUP_CLASS_PRICE or 0
+    if not price:
+        return
+    conn.execute(
+        """INSERT INTO orders (member_id, order_type, amount, status, ref_type, ref_id)
+           VALUES (?, 'group_class', ?, 'pending', 'indoor_session_member', ?)""",
+        (member_id, price, session_member_id),
+    )
+
+
 def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None, participant=None):
     """
     團課:多位會員各自報名同一時段,滿2人開課、滿4人截止。
@@ -667,7 +696,12 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
            VALUES (?, ?, 1, ?, ?, ?)""",
         (session_id, member_id, equipment_type, pricing.GROUP_CLASS_PRICE or 0, member_status),
     )
-    _insert_participants(conn, "indoor_session_member", cur.lastrowid, [participant] if participant else None)
+    session_member_id = cur.lastrowid
+    _insert_participants(conn, "indoor_session_member", session_member_id, [participant] if participant else None)
+    if not is_waitlist:
+        # 候補名單的會員還沒確定有名額,不先建立付款訂單;等候補遞補成正式名額時
+        # (見cancel_indoor_booking裡的候補遞補邏輯)才會補建立。
+        _create_group_class_payment_order(conn, member_id, session_member_id)
     new_count = current_count if is_waitlist else current_count + 1
     just_confirmed = (not is_waitlist) and new_count >= pricing.GROUP_CLASS_MIN and current_count < pricing.GROUP_CLASS_MIN
     if not is_waitlist and new_count >= pricing.GROUP_CLASS_MIN:
@@ -689,6 +723,7 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
     conn.close()
     return {
         "session_id": session_id,
+        "enrollment_id": session_member_id,  # 付款時要用這個id當ref_id(見_create_group_class_payment_order說明),不是session_id
         "enrolled_count": new_count,
         "min_required": pricing.GROUP_CLASS_MIN,
         "max_capacity": pricing.GROUP_CLASS_MAX,
@@ -1268,7 +1303,14 @@ def get_all_bookings(member_id=None, category=None, date_from=None, date_to=None
     for r in conn.execute(q, params).fetchall():
         if category and r["category"] != category:
             continue
-        pay_status, pay_method = _payment_info(conn, "indoor_session", r["session_id"])
+        if r["category"] == "group_class":
+            # 團課:同一場次(session_id)可能同時有好幾位會員各自報名、各自付款,
+            # 付款紀錄的ref_type/ref_id是用每位會員自己的報名記錄id(member_ref_id),
+            # 不是session_id共用的那個(理由同_create_group_class_payment_order的說明),
+            # 這裡查付款狀態要用同一組id,才不會查到同場次別的會員的付款狀態。
+            pay_status, pay_method = _payment_info(conn, "indoor_session_member", r["member_ref_id"])
+        else:
+            pay_status, pay_method = _payment_info(conn, "indoor_session", r["session_id"])
         if r["category"] == "charter":
             payment_label = "已預約・已付款(堂數包)"
         elif r["category"] == "group_class" and not r["price"]:
@@ -1484,6 +1526,9 @@ def cancel_indoor_booking(member_ref_id, is_staff=False):
                 conn.execute(
                     "UPDATE indoor_session_members SET status='enrolled' WHERE id=?", (waitlisted["id"],)
                 )
+                # 候補遞補成正式名額,補建立這位會員自己的付款訂單(如果團課有額外收費的話)——
+                # 候補當初報名時因為還不確定有沒有名額,並未先建立訂單(見enroll_group_class)。
+                _create_group_class_payment_order(conn, waitlisted["member_id"], waitlisted["id"])
                 log_notification(
                     conn, waitlisted["member_id"], "waitlist_promoted",
                     f"{row['booking_date']} 團課候補遞補成功,已確認為正式名額,請留意上課時間",

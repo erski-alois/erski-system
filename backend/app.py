@@ -1951,6 +1951,18 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
                     conn, member_id, "booking_confirmed",
                     f"已收到您的{label}預約,{row['booking_date']} {row['start_hour']}:00,款項確認完成。",
                 )
+        elif ref_type == "indoor_session_member":
+            row = conn.execute(
+                """SELECT s.booking_date, s.start_hour FROM indoor_session_members sm
+                   JOIN indoor_sessions s ON sm.session_id = s.id
+                   WHERE sm.id=?""",
+                (ref_id,),
+            ).fetchone()
+            if row:
+                booking.log_notification(
+                    conn, member_id, "booking_confirmed",
+                    f"已收到您的團課預約,{row['booking_date']} {row['start_hour']}:00,款項確認完成。",
+                )
         elif ref_type == "jump_booking":
             row = conn.execute(
                 "SELECT booking_date, start_time FROM jump_bookings WHERE id=?", (ref_id,)
@@ -1985,14 +1997,23 @@ def _lookup_authoritative_order(conn, ref_type, ref_id):
       (b) 冒用別人的ref_id去繳費、把別人的訂單標記成自己付的款
     charter_order:前端傳來的ref_id其實是orders.id本身(見purchase_charter_pass/
     finalize_charter_purchase的呼叫慣例);其餘(indoor_session/jump_booking/
-    japan_booking)則是比照booking.mark_order_paid()同一套查法,用ref_type+ref_id
-    去orders表對應的欄位查(pending狀態、且同一組合下取最新一筆)。
+    japan_booking/indoor_session_member)則是比照booking.mark_order_paid()同一套
+    查法,用ref_type+ref_id去orders表對應的欄位查(pending狀態、且同一組合下取
+    最新一筆)。
+
+    indoor_session_member(2026-09新增,團課專用):注意這裡ref_id不是
+    indoor_sessions.id(session_id),而是indoor_session_members.id——因為同一場
+    團課session最多可以有4位會員各自報名付款,如果沿用session_id當ref_id,
+    「同一組合下取最新一筆」就會在有多位會員同時有pending訂單時查到別人的
+    訂單。用每位會員自己這筆報名記錄的id當ref_id,才能保證查到的一定是這位
+    會員自己的訂單(細節見booking._create_group_class_payment_order的說明)。
+
     找不到符合的訂單回傳None。"""
     if ref_type == "charter_order":
         return conn.execute(
             "SELECT * FROM orders WHERE id=? AND ref_type='charter_pass'", (ref_id,)
         ).fetchone()
-    elif ref_type in ("indoor_session", "jump_booking", "japan_booking"):
+    elif ref_type in ("indoor_session", "jump_booking", "japan_booking", "indoor_session_member"):
         return conn.execute(
             """SELECT * FROM orders WHERE ref_type=? AND ref_id=? AND status='pending'
                ORDER BY id DESC LIMIT 1""",
@@ -2005,6 +2026,7 @@ def _ecpay_item_name_for(ref_type):
     return {
         "charter_order": "包機課堂數包",
         "indoor_session": "室內滑雪課程",
+        "indoor_session_member": "室內滑雪團課",
         "jump_booking": "跳台課程",
         "japan_booking": "日本滑雪教練行程訂金",
     }.get(ref_type, "捷可思滑雪學校訂單")
@@ -2024,11 +2046,24 @@ def _online_card_eligible(conn, ref_type, ref_id):
 
     注意:這個限制目前只套用在「信用卡」(online_card)這個付款方式本身,
     不影響「網路ATM」(webatm)——如果之後也要比照辦理,呼叫端記得一併調整。
+
+    2026-09新增:團課(group_class)的付款訂單ref_type是'indoor_session_member'
+    (見booking._create_group_class_payment_order的說明,不是session本身的id),
+    這裡一樣查回資料庫實際的session種類做確認,不信任前端傳來的ref_type字面上
+    看起來是不是團課。
     """
-    if ref_type != "indoor_session":
-        return False
-    row = conn.execute("SELECT category FROM indoor_sessions WHERE id=?", (ref_id,)).fetchone()
-    return bool(row) and row["category"] == "group_class"
+    if ref_type == "indoor_session":
+        row = conn.execute("SELECT category FROM indoor_sessions WHERE id=?", (ref_id,)).fetchone()
+        return bool(row) and row["category"] == "group_class"
+    if ref_type == "indoor_session_member":
+        row = conn.execute(
+            """SELECT s.category FROM indoor_session_members sm
+               JOIN indoor_sessions s ON sm.session_id = s.id
+               WHERE sm.id=?""",
+            (ref_id,),
+        ).fetchone()
+        return bool(row) and row["category"] == "group_class"
+    return False
 
 
 @app.route("/api/payments/create", methods=["POST"])
@@ -2106,7 +2141,7 @@ def create_payment():
         if result["status"] == "confirmed" and ref_type == "charter_order":
             booking.finalize_charter_purchase(ref_id, conn=conn)
             _log_purchase_notification(conn, member_id, ref_type, ref_id)
-        elif result["status"] == "confirmed" and ref_type in ("indoor_session", "jump_booking", "japan_booking"):
+        elif result["status"] == "confirmed" and ref_type in ("indoor_session", "indoor_session_member", "jump_booking", "japan_booking"):
             booking.mark_order_paid(ref_type, ref_id, conn=conn, payment_method=payment_method)
             _log_purchase_notification(conn, member_id, ref_type, ref_id)
         conn.commit()
@@ -2201,7 +2236,7 @@ def ecpay_return_webhook():
             )
             if tx["ref_type"] == "charter_order":
                 booking.finalize_charter_purchase(tx["ref_id"], conn=conn)
-            elif tx["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
+            elif tx["ref_type"] in ("indoor_session", "indoor_session_member", "jump_booking", "japan_booking"):
                 booking.mark_order_paid(tx["ref_type"], tx["ref_id"], conn=conn, payment_method=tx["payment_method"])
             _log_purchase_notification(conn, tx["member_id"], tx["ref_type"], tx["ref_id"])
         else:
@@ -2451,7 +2486,7 @@ def confirm_payment(tx_id):
         )
         if tx and tx["ref_type"] == "charter_order":
             booking.finalize_charter_purchase(tx["ref_id"], conn=conn)
-        elif tx and tx["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
+        elif tx and tx["ref_type"] in ("indoor_session", "indoor_session_member", "jump_booking", "japan_booking"):
             booking.mark_order_paid(tx["ref_type"], tx["ref_id"], conn=conn)
         conn.commit()
     except Exception:
@@ -3375,7 +3410,7 @@ def admin_record_order_payment(order_id):
         if new_status == "paid" and order["status"] != "paid":
             if order["ref_type"] == "charter_pass":
                 booking.finalize_charter_purchase(order_id, conn=conn)
-            elif order["ref_type"] in ("indoor_session", "jump_booking", "japan_booking"):
+            elif order["ref_type"] in ("indoor_session", "indoor_session_member", "jump_booking", "japan_booking"):
                 booking.mark_order_paid(order["ref_type"], order["ref_id"], conn=conn)
 
         conn.execute("UPDATE orders SET paid_amount=?, status=? WHERE id=?", (new_paid, new_status, order_id))

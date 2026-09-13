@@ -2756,7 +2756,7 @@ async function renderOrdersManageTab() {
   const wrap = document.getElementById("staffTab-orders");
   const { data: orders } = await api("/admin/orders");
   const { data: pendingRefunds } = await api("/admin/orders/refunds/pending");
-  const catLabelMap = { charter_pass:"包機堂數包", trial:"體驗課", self_practice:"自主練習", jump:"跳台體驗", japan_trip:"日本教練課", plan_subscription:"團課方案" };
+  const catLabelMap = { charter_pass:"包機堂數包", trial:"體驗課", self_practice:"自主練習", group_class:"團課", jump:"跳台體驗", japan_trip:"日本教練課", plan_subscription:"團課方案" };
   const statusLabelMap = { pending:"待付款", paid:"已付款", refunded:"已退款", cancelled:"已取消" };
 
   const pendingRefundsHtml = pendingRefunds.length ? `
@@ -5496,7 +5496,13 @@ async function joinGroupClass(dateStr, hour) {
   });
   if (ok) {
     alert(`報名成功!目前 ${data.enrolled_count}/${data.min_required} 人(滿${data.min_required}開課)`);
-    requestPayment(data.price, "indoor_session", data.session_id, true);  // 室內滑雪團課:目前唯一開放直接刷卡的項目
+    // 2026-09修正:團課付款訂單是用「這位會員自己的報名記錄id」(enrollment_id)當ref_id,
+    // 不是session_id(同一場團課session最多4人各自報名,用session_id會查到別人的訂單)。
+    // 候補名單(waitlisted)還沒有正式名額,後端還不會建立付款訂單,先不跳付款彈窗——
+    // 遞補成正式名額後,系統會用通知告知,屆時再從「我的預約」引導付款。
+    if (!data.waitlisted) {
+      requestPayment(data.price, "indoor_session_member", data.enrollment_id, true);  // 室內滑雪團課:目前唯一開放直接刷卡的項目
+    }
     invalidateAllMachineCalendars(); loadAccountOverview();
   }
   else { alert(data.error); loadMyPlanStatus(); }

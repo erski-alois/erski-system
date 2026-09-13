@@ -608,7 +608,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     member_id INTEGER NOT NULL REFERENCES members(id),
     order_type TEXT CHECK(order_type IN (
-        'charter_pass', 'trial', 'self_practice', 'jump', 'japan_trip', 'plan_subscription'
+        'charter_pass', 'trial', 'self_practice', 'jump', 'japan_trip', 'plan_subscription', 'group_class'
     )) NOT NULL,
     amount INTEGER NOT NULL,
     discount_amount INTEGER DEFAULT 0,      -- 客服/主管後台核准的折扣金額
