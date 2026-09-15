@@ -106,8 +106,8 @@
   .note { font-size: 12px; color: #7d8794; line-height:1.6; }
 
   label { display:block; font-size: 12px; color: #5a6472; margin: 10px 0 4px; }
-  input:not([type="checkbox"]), select { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid #d0d7de;
-                  background: white; font-size: 14px; }
+  input:not([type="checkbox"]), select, textarea { width: 100%; padding: 9px; border-radius: 8px; border: 1px solid #d0d7de;
+                  background: white; font-size: 14px; font-family: inherit; }
   input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
   button { background: #000; color: white; border: none; border-radius: 8px;
            padding: 10px 16px; font-size: 13px; margin-top: 10px; cursor: pointer; }
@@ -715,6 +715,127 @@
         </div>
       </div>
 
+      <div id="page-csia" class="page">
+        <div class="card">
+          <h3>CSIA滑雪教練考照專區</h3>
+          <p class="note">
+            場地:宮城鬼首滑雪場(Onikoube, Miyagi)。課程語言依場次不同分為中文翻譯班/英文班,
+            開班人數<b>5人成班・上限8人</b>,交通與住宿請自行安排,ER Ski不代訂。<br>
+            <b>Level 1</b>:須年滿18歲、具備一定滑行程度;<b>Level 2</b>:須已持有CSIA Level 1證照。
+            正式資格條件請依CSIA官方規定為準,報名前請詳閱下方各場次說明。
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>課程場次</h3>
+          <div id="csiaCourseListWrap">載入中...</div>
+        </div>
+
+        <div class="card">
+          <h3>線上報名</h3>
+          <p class="note">
+            報名前請先完成CSIA官方Waiver線上填寫、CSIA會員加入(Level 1)或會員更新(Level 2),
+            並準備好2026/27雪季CSIA會員卡圖檔,填妥下方資料後一併送出。
+          </p>
+
+          <label>① 選擇報名場次</label>
+          <select id="csiaCourseSelect" onchange="onCsiaCourseSelectChange()"></select>
+          <div id="csiaCourseSelectHint" class="note"></div>
+
+          <label style="margin-top:16px;">② 考生基本資料</label>
+          <div class="row">
+            <div style="flex:1;"><label>職稱/身分(選填)</label><input id="csiaDesignation" placeholder="例:滑雪教練/學生"></div>
+            <div style="flex:1;"><label>性別</label>
+              <select id="csiaGender"><option value="">未填寫</option><option value="male">男</option><option value="female">女</option><option value="other">其他</option></select>
+            </div>
+          </div>
+          <label>中文姓名<span style="color:#c0392b;">*</span></label>
+          <input id="csiaChineseName" placeholder="請填寫身分證上的中文姓名">
+          <div class="row">
+            <div style="flex:1;"><label>護照姓名/其他姓名(選填)</label><input id="csiaKanjiOrOtherName"></div>
+            <div style="flex:1;"><label>考官稱呼(選填)</label><input id="csiaExaminerCallName" placeholder="希望考官如何稱呼你"></div>
+          </div>
+          <label>出生日期(選填)</label>
+          <input type="date" id="csiaBirthDate">
+
+          <label style="margin-top:16px;">③ 聯絡資料</label>
+          <label>通訊地址(中文,選填)</label>
+          <input id="csiaAddressChinese" placeholder="例:高雄市...">
+          <div class="row">
+            <div style="flex:1;"><label>Street(選填)</label><input id="csiaAddressStreet"></div>
+            <div style="flex:1;"><label>City(選填)</label><input id="csiaAddressCity"></div>
+          </div>
+          <div class="row">
+            <div style="flex:1;"><label>Province/State(選填)</label><input id="csiaAddressProvince"></div>
+            <div style="flex:1;"><label>Country(選填)</label><input id="csiaAddressCountry"></div>
+            <div style="flex:1;"><label>Postal Code(選填)</label><input id="csiaAddressPostalCode"></div>
+          </div>
+          <label>其他地址補充(選填)</label>
+          <input id="csiaAddressOther">
+          <div class="row">
+            <div style="flex:1;"><label>手機號碼(選填)</label><input id="csiaMobileNumber"></div>
+            <div style="flex:1;"><label>Email(選填)</label><input id="csiaEmail" type="email"></div>
+          </div>
+          <label>LINE ID / WhatsApp(選填)</label>
+          <input id="csiaLineOrWhatsapp">
+
+          <label style="margin-top:16px;">④ CSIA會員與緊急聯絡人</label>
+          <div class="row">
+            <div style="flex:1;"><label>CSIA會員編號(選填)</label><input id="csiaMemberNumber"></div>
+            <div style="flex:1;"><label>職業(選填)</label><input id="csiaOccupation"></div>
+          </div>
+          <div class="row">
+            <div style="flex:1;"><label>緊急聯絡人姓名(選填)</label><input id="csiaEmergencyContactName"></div>
+            <div style="flex:1;"><label>緊急聯絡人電話(選填)</label><input id="csiaEmergencyContactPhone"></div>
+          </div>
+
+          <label style="margin-top:16px;">⑤ 已持有證照 / 滑雪與教學經驗</label>
+          <label>已持有相關證照(選填)</label>
+          <textarea id="csiaExistingCertifications" rows="2" placeholder="例:SAJ 1級、CSIA Level 1(2024取得)..."></textarea>
+          <label>滑雪經驗(選填)</label>
+          <textarea id="csiaSkiExperience" rows="2" placeholder="滑雪年資、程度、曾滑過的雪場等"></textarea>
+          <label>教學經驗(選填)</label>
+          <textarea id="csiaTeachingExperience" rows="2" placeholder="是否曾任教練、教學時數等"></textarea>
+
+          <label style="margin-top:16px;">⑥ 報考原因(可複選)</label>
+          <div id="csiaReasonOptions"></div>
+          <div id="csiaReasonOtherWrap" style="display:none;">
+            <label>其他原因</label>
+            <input id="csiaReasonOther">
+          </div>
+
+          <label style="margin-top:16px;">⑦ 上傳2026/27雪季CSIA會員卡</label>
+          <input type="file" accept="image/*,application/pdf" id="csiaMembershipCardFile" onchange="onCsiaMembershipCardFileChange()">
+          <div id="csiaMembershipCardPreview" class="note"></div>
+
+          <label style="margin-top:16px;">⑧ 確認事項</label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="csiaWaiverConfirmed" style="width:auto;">
+            我已完成CSIA Waiver線上填寫
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="csiaMembershipActionConfirmed" style="width:auto;">
+            我已完成CSIA會員加入(Level 1)或會員更新(Level 2)
+          </label>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="csiaEligibilityConfirmed" style="width:auto;">
+            我確認自己的年齡、滑行程度、教學經驗及證照已符合這個等級的報名資格
+          </label>
+
+          <label style="margin-top:16px;">⑨ 匯款帳號(報名費一律匯款轉帳)</label>
+          <div id="csiaBankAccountWrap" class="note" style="padding:10px; background:#f6f7f9; border-radius:8px;"></div>
+          <p class="note" style="margin-top:4px;">⑩ 送出報名後,客服核對匯款入帳後會更新報名狀態,請留意會員中心通知。</p>
+
+          <button onclick="submitCsiaRegistration()">送出報名</button>
+          <div id="csiaRegisterStatus" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card">
+          <h3>我的CSIA報名紀錄</h3>
+          <div id="csiaMyRegistrationsWrap">尚未查詢</div>
+        </div>
+      </div>
+
       <div id="page-coaches" class="page">
         <div class="card">
           <h3>教練團隊</h3>
@@ -897,6 +1018,9 @@
       <div class="nav-group">
         <div class="nav-top" id="navtop-japan" onclick="toggleNavGroup('japan')">日本滑雪 ▾</div>
         <div id="navsub-japan" style="display:none;"></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-flat" onclick="switchPage('csia', null)">CSIA滑雪教練考照專區</div>
       </div>
       <div class="nav-group">
         <div class="nav-flat" onclick="switchPage('coaches', null)">教練團隊</div>
@@ -1474,7 +1598,7 @@ async function renderStaffPanel(staff) {
       coachschedule: ["cs","manager"], dashboard: ["cs","manager"], pending: ["cs","manager"],
       equipment: ["cs","manager"], faq: ["cs","manager"], assist: ["cs","manager"], overview: ["cs","manager"],
       orders: ["cs"], japanbookings: ["cs"], coaches: ["cs"], resorts: ["cs"], partners: ["cs"],
-      japanattendance: ["cs"], checkin: ["cs"], groupassign: ["cs"],
+      japanattendance: ["cs"], checkin: ["cs"], groupassign: ["cs"], csia: ["cs"],
       finance: [], system: [],
     };
     const canSee = (sectionKey) => staff.role === "boss" || (SECTION_ROLES[sectionKey] || []).includes(staff.role);
@@ -1493,7 +1617,7 @@ async function renderStaffPanel(staff) {
       ]},
       { title: "訂單資訊", items: [
         ["assist", "代客訂課"], ["overview", "會員資料與訂單詳情"],
-        ["orders", "室內滑雪訂單管理"], ["japanbookings", "日本訂單管理"],
+        ["orders", "室內滑雪訂單管理"], ["japanbookings", "日本訂單管理"], ["csia", "CSIA報名管理"],
       ]},
       { title: "教練及雪場管理", items: [
         ["coaches", "教練管理"], ["resorts", "雪場管理"], ["partners", "合作單位"],
@@ -1541,6 +1665,7 @@ async function renderStaffPanel(staff) {
       <div id="staffTab-overview" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-orders" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-japanbookings" class="staff-tab" style="display:none;"></div>
+      <div id="staffTab-csia" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-coaches" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-resorts" class="staff-tab" style="display:none;"></div>
       <div id="staffTab-partners" class="staff-tab" style="display:none;"></div>
@@ -1577,6 +1702,7 @@ async function renderStaffPanel(staff) {
     if (canSee("overview")) await renderStaffOverviewTab();
     if (canSee("orders")) await renderOrdersManageTab();
     if (canSee("japanbookings")) await renderJapanBookingsTools();
+    if (canSee("csia")) await renderCsiaManageTab();
     if (canSee("coaches")) await renderCoachManageTools();
     if (canSee("resorts")) await renderResortManageTools();
     if (canSee("partners")) await renderPartnerManageTools();
@@ -1616,6 +1742,7 @@ const STAFF_TAB_REFRESH = {
   overview: renderStaffOverviewTab,
   assist: renderStaffAssistTab,
   orders: renderOrdersManageTab,
+  csia: renderCsiaManageTab,
   pending: renderPendingActions,
   checkin: renderCheckInTab,
   japanbookings: renderJapanBookingsTools,
@@ -2679,8 +2806,8 @@ async function doCheckIn(kind, id, attendance_status, hasCodeProgress) {
   else alert(data.error);
 }
 
-const _BANK_ACCOUNT_CONFIG_KEYS = ["bank_account_indoor", "bank_account_japan"];
-const _BANK_ACCOUNT_LABELS = { bank_account_indoor: "室內雪機/包機/體驗課/跳台體驗/團課", bank_account_japan: "日本教練課" };
+const _BANK_ACCOUNT_CONFIG_KEYS = ["bank_account_indoor", "bank_account_japan", "bank_account_csia"];
+const _BANK_ACCOUNT_LABELS = { bank_account_indoor: "室內雪機/包機/體驗課/跳台體驗/團課", bank_account_japan: "日本教練課", bank_account_csia: "CSIA滑雪教練考照報名費" };
 
 async function renderPricingConfigTools() {
   const wrap = document.getElementById("staffTab-pricing");
@@ -2873,6 +3000,196 @@ async function rejectRefund(orderId) {
   const { ok, data } = await api(`/admin/orders/${orderId}/refund/reject`, { method: "POST", body: JSON.stringify({ note }) });
   if (!ok) { alert(data.error); return; }
   await renderOrdersManageTab();
+}
+
+// ---------------- CSIA滑雪教練考照專區:報名管理(股東/老闆) ----------------
+async function renderCsiaManageTab() {
+  const wrap = document.getElementById("staffTab-csia");
+  const [{ data: courses }, { data: registrations }] = await Promise.all([
+    api("/admin/csia/courses"),
+    api("/admin/csia/registrations"),
+  ]);
+  window._csiaAdminCourses = courses;
+  window._csiaAllRegistrations = registrations;
+
+  const levelLabel = { L1: "Level 1", L2: "Level 2" };
+  const statusLabel = { open: "開放報名", confirmed: "已確定開班", cancelled: "已取消", closed: "已截止報名" };
+
+  let html = `
+    <div class="admin-page-label">ERSKI OPERATIONS</div>
+    <div class="admin-page-title">CSIA報名管理</div>
+    <p class="note">課程場次的價格/名額/開班狀態在這裡調整;匯款帳號請到「價格設定」分頁的「匯款帳號設定」填寫。</p>
+    <h3 style="margin-top:16px; font-size:14px;">課程場次</h3>
+  `;
+
+  html += courses.map(c => `
+    <div class="person-card">
+      <b>${levelLabel[c.level] || c.level} ${c.batch_label} ${c.course_name}</b>
+      <span class="status-tag ${c.status === "cancelled" ? "warn" : "ok"}">${statusLabel[c.status] || c.status}</span>
+      <div class="list-item">${c.date_label}・${c.language === "chinese" ? "中文翻譯班" : "英文班"}${c.format_note ? `・${c.format_note}` : ""}</div>
+      <div class="list-item">目前報名人數:${c.registered_count}人</div>
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>價格(留空=金額洽詢)</label><input id="csiaCoursePrice-${c.id}" type="number" value="${c.price === null || c.price === undefined ? "" : c.price}"></div>
+        <div><label>最少開班人數</label><input id="csiaCourseMin-${c.id}" type="number" value="${c.min_headcount}"></div>
+        <div><label>上限人數</label><input id="csiaCourseMax-${c.id}" type="number" value="${c.max_headcount}"></div>
+        <div><label>狀態</label>
+          <select id="csiaCourseStatus-${c.id}">
+            <option value="open" ${c.status==="open"?"selected":""}>開放報名</option>
+            <option value="confirmed" ${c.status==="confirmed"?"selected":""}>已確定開班</option>
+            <option value="closed" ${c.status==="closed"?"selected":""}>已截止報名</option>
+            <option value="cancelled" ${c.status==="cancelled"?"selected":""}>已取消</option>
+          </select>
+        </div>
+      </div>
+      <label style="margin-top:8px;">備註(選填,會顯示給會員看)</label>
+      <input id="csiaCourseNotes-${c.id}" value="${(c.notes || "").replace(/"/g,'&quot;')}">
+      <button class="small" style="margin-top:8px;" onclick="saveCsiaCourse(${c.id})">儲存</button>
+      <div id="csiaCourseStatus2-${c.id}" style="margin-top:6px;"></div>
+    </div>
+  `).join("") || `<p class="note">尚無課程場次</p>`;
+
+  html += `
+    <div class="person-card">
+      <b>新增課程場次</b>
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>等級</label><select id="newCsiaLevel"><option value="L1">Level 1</option><option value="L2">Level 2</option></select></div>
+        <div><label>語言</label><select id="newCsiaLanguage"><option value="chinese">中文翻譯班</option><option value="english">英文班</option></select></div>
+      </div>
+      <label>梯次</label><input id="newCsiaBatchLabel" placeholder="例:第一梯(中文翻譯班)">
+      <label>課程名稱</label><input id="newCsiaCourseName" placeholder="例:Level 1 course">
+      <label>課程形式備註(選填)</label><input id="newCsiaFormatNote" placeholder="例:考前班＋考試">
+      <label>日期顯示文字</label><input id="newCsiaDateLabel" placeholder="例:Jan 9-11">
+      <label>日期排序用(選填,用來決定場次顯示順序)</label><input id="newCsiaDateSortKey" type="date">
+      <label>場地(選填,預設宮城鬼首滑雪場)</label><input id="newCsiaVenue">
+      <div class="field-grid" style="margin-top:8px;">
+        <div><label>價格(選填)</label><input id="newCsiaPrice" type="number"></div>
+        <div><label>最少開班人數</label><input id="newCsiaMin" type="number" value="5"></div>
+        <div><label>上限人數</label><input id="newCsiaMax" type="number" value="8"></div>
+      </div>
+      <button class="small" style="margin-top:8px;" onclick="createCsiaCourse()">新增場次</button>
+      <div id="newCsiaCourseStatus" style="margin-top:6px;"></div>
+    </div>
+  `;
+
+  html += `<h3 style="margin-top:20px; font-size:14px;">報名名單</h3>
+    <div class="row">
+      <select id="csiaRegFilterCourse" onchange="filterCsiaRegistrations()">
+        <option value="">全部場次</option>
+        ${courses.map(c => `<option value="${c.id}">${levelLabel[c.level]||c.level} ${c.batch_label} ${c.course_name}(${c.date_label})</option>`).join("")}
+      </select>
+    </div>
+    <div id="csiaRegistrationsWrap"></div>
+  `;
+
+  wrap.innerHTML = html;
+  renderCsiaRegistrationsList(registrations);
+}
+
+function renderCsiaRegistrationsList(registrations) {
+  const wrap = document.getElementById("csiaRegistrationsWrap");
+  if (!wrap) return;
+  const paymentLabel = { unpaid: "未付款", paid: "已付款", refunded: "已退款" };
+  const regStatusLabel = { submitted: "已送出,待確認", confirmed: "已確認", cancelled: "已取消" };
+  const reasonLabelMap = { want_job: "想應徵滑雪教練工作", know_level: "想知道自己的程度如何", need_visa: "想申請日本工作簽證", improve_ski: "想精進滑行能力", improve_teaching: "想精進教學能力", other: "其他" };
+
+  if (!registrations.length) { wrap.innerHTML = `<p class="note">目前沒有報名資料</p>`; return; }
+
+  wrap.innerHTML = registrations.map(r => {
+    let reasons = [];
+    try { reasons = JSON.parse(r.reasons || "[]"); } catch (e) { reasons = []; }
+    const reasonText = reasons.map(k => reasonLabelMap[k] || k).join("、") + (r.reason_other ? `(${r.reason_other})` : "");
+    return `
+    <div class="person-card">
+      <b>${r.chinese_name}</b>${r.designation ? `(${r.designation})` : ""}
+      <span class="status-tag ${r.status === "cancelled" ? "warn" : "ok"}">${regStatusLabel[r.status] || r.status}</span>
+      <span class="status-tag ${r.payment_status === "paid" ? "ok" : "warn"}">${paymentLabel[r.payment_status] || r.payment_status}</span>
+      <div class="list-item">場次:${r.level} ${r.batch_label} ${r.course_name}(${r.date_label})</div>
+      <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `NT$${r.amount}`}</div>
+      <div class="list-item">聯絡方式:手機 ${r.mobile_number || "-"}・Email ${r.email || "-"}・LINE/WhatsApp ${r.line_or_whatsapp_id || "-"}</div>
+      <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${r.csia_member_number || "未填寫"}</div>
+      <div class="list-item">報考原因:${reasonText || "未填寫"}</div>
+      ${r.existing_certifications ? `<div class="list-item">已持有證照:${r.existing_certifications}</div>` : ""}
+      ${r.ski_experience ? `<div class="list-item">滑雪經驗:${r.ski_experience}</div>` : ""}
+      ${r.teaching_experience ? `<div class="list-item">教學經驗:${r.teaching_experience}</div>` : ""}
+      ${r.membership_card_image ? `<div style="margin-top:6px;"><img src="${r.membership_card_image}" alt="會員卡" style="width:140px; max-height:100px; object-fit:contain; border-radius:6px; border:1px solid var(--line); display:block;"></div>` : `<div class="note" style="margin-top:6px;">尚未上傳會員卡</div>`}
+      <div class="row" style="margin-top:8px;">
+        <select id="csiaRegPayment-${r.id}">
+          <option value="unpaid" ${r.payment_status==="unpaid"?"selected":""}>未付款</option>
+          <option value="paid" ${r.payment_status==="paid"?"selected":""}>已付款</option>
+          <option value="refunded" ${r.payment_status==="refunded"?"selected":""}>已退款</option>
+        </select>
+        <select id="csiaRegStatus-${r.id}">
+          <option value="submitted" ${r.status==="submitted"?"selected":""}>已送出,待確認</option>
+          <option value="confirmed" ${r.status==="confirmed"?"selected":""}>已確認</option>
+          <option value="cancelled" ${r.status==="cancelled"?"selected":""}>已取消</option>
+        </select>
+      </div>
+      <label>客服備註(選填)</label>
+      <input id="csiaRegNote-${r.id}" value="${(r.staff_note || "").replace(/"/g,'&quot;')}">
+      <button class="small" style="margin-top:8px;" onclick="saveCsiaRegistration(${r.id})">儲存</button>
+      <div id="csiaRegStatusMsg-${r.id}" style="margin-top:6px;"></div>
+    </div>`;
+  }).join("");
+}
+
+function filterCsiaRegistrations() {
+  const courseId = document.getElementById("csiaRegFilterCourse").value;
+  const all = window._csiaAllRegistrations || [];
+  const filtered = courseId ? all.filter(r => String(r.course_id) === courseId) : all;
+  renderCsiaRegistrationsList(filtered);
+}
+
+async function saveCsiaCourse(courseId) {
+  const priceRaw = document.getElementById(`csiaCoursePrice-${courseId}`).value;
+  const payload = {
+    price: priceRaw === "" ? null : parseInt(priceRaw),
+    min_headcount: parseInt(document.getElementById(`csiaCourseMin-${courseId}`).value) || 5,
+    max_headcount: parseInt(document.getElementById(`csiaCourseMax-${courseId}`).value) || 8,
+    status: document.getElementById(`csiaCourseStatus-${courseId}`).value,
+    notes: document.getElementById(`csiaCourseNotes-${courseId}`).value || null,
+  };
+  const { ok, data } = await api(`/admin/csia/courses/${courseId}`, { method: "PUT", body: JSON.stringify(payload) });
+  const statusEl = document.getElementById(`csiaCourseStatus2-${courseId}`);
+  statusEl.innerHTML = ok ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) renderCsiaManageTab();
+}
+
+async function createCsiaCourse() {
+  const statusEl = document.getElementById("newCsiaCourseStatus");
+  const batch_label = document.getElementById("newCsiaBatchLabel").value.trim();
+  const course_name = document.getElementById("newCsiaCourseName").value.trim();
+  const date_label = document.getElementById("newCsiaDateLabel").value.trim();
+  if (!batch_label || !course_name || !date_label) {
+    statusEl.innerHTML = `<span class="status-tag warn">請填寫梯次/課程名稱/日期顯示文字</span>`;
+    return;
+  }
+  const priceRaw = document.getElementById("newCsiaPrice").value;
+  const payload = {
+    level: document.getElementById("newCsiaLevel").value,
+    language: document.getElementById("newCsiaLanguage").value,
+    batch_label, course_name, date_label,
+    format_note: document.getElementById("newCsiaFormatNote").value || null,
+    date_sort_key: document.getElementById("newCsiaDateSortKey").value || null,
+    venue: document.getElementById("newCsiaVenue").value || undefined,
+    price: priceRaw === "" ? null : parseInt(priceRaw),
+    min_headcount: parseInt(document.getElementById("newCsiaMin").value) || 5,
+    max_headcount: parseInt(document.getElementById("newCsiaMax").value) || 8,
+  };
+  const { ok, data } = await api("/admin/csia/courses", { method: "POST", body: JSON.stringify(payload) });
+  statusEl.innerHTML = ok ? `<span class="status-tag ok">新增成功</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) renderCsiaManageTab();
+}
+
+async function saveCsiaRegistration(regId) {
+  const payload = {
+    payment_status: document.getElementById(`csiaRegPayment-${regId}`).value,
+    status: document.getElementById(`csiaRegStatus-${regId}`).value,
+    staff_note: document.getElementById(`csiaRegNote-${regId}`).value || null,
+  };
+  const { ok, data } = await api(`/admin/csia/registrations/${regId}`, { method: "PUT", body: JSON.stringify(payload) });
+  const statusEl = document.getElementById(`csiaRegStatusMsg-${regId}`);
+  statusEl.innerHTML = ok ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) renderCsiaManageTab();
 }
 
 let staffAllMembers = [];
@@ -4728,6 +5045,172 @@ async function createCoachAdmin() {
   if (statusEl) statusEl.innerHTML = `<span class="status-tag ok">${successMsg}</span>`;
 }
 
+// ------------------------------------------------------------------
+// CSIA滑雪教練考照專區(會員端)
+// ------------------------------------------------------------------
+const CSIA_REASON_OPTIONS = [
+  { key: "want_job", label: "想應徵滑雪教練工作" },
+  { key: "know_level", label: "想知道自己的程度如何" },
+  { key: "need_visa", label: "想申請日本工作簽證" },
+  { key: "improve_ski", label: "想精進滑行能力" },
+  { key: "improve_teaching", label: "想精進教學能力" },
+  { key: "other", label: "其他" },
+];
+let _csiaCourses = [];
+let _csiaMembershipCardData = null; // {file_name, mime_type, image} 或 null
+
+function _csiaPriceLabel(course) {
+  return (course.price === null || course.price === undefined) ? "金額洽詢" : `NT$${course.price}`;
+}
+function _csiaStatusLabel(status) {
+  return { open: "開放報名", confirmed: "已確定開班", cancelled: "已取消", closed: "已截止報名" }[status] || status;
+}
+function renderCsiaReasonOptions() {
+  const wrap = document.getElementById("csiaReasonOptions");
+  wrap.innerHTML = CSIA_REASON_OPTIONS.map(r => `
+    <label style="display:flex; align-items:center; gap:8px;">
+      <input type="checkbox" class="csiaReasonCheckbox" value="${r.key}" style="width:auto;" onchange="onCsiaReasonChange()">
+      ${r.label}
+    </label>`).join("");
+}
+function onCsiaReasonChange() {
+  const otherChecked = Array.from(document.querySelectorAll(".csiaReasonCheckbox")).some(el => el.checked && el.value === "other");
+  document.getElementById("csiaReasonOtherWrap").style.display = otherChecked ? "block" : "none";
+}
+
+async function loadCsiaPage() {
+  if (!document.getElementById("csiaReasonOptions").innerHTML) renderCsiaReasonOptions();
+  await ensurePricing();
+  document.getElementById("csiaBankAccountWrap").innerHTML = bankAccountHintHtml(pricingData.bank_account_csia);
+
+  const { ok, data } = await api("/csia/courses");
+  if (!ok) { document.getElementById("csiaCourseListWrap").innerHTML = `<p class="note">${data.error || "載入失敗"}</p>`; return; }
+  _csiaCourses = data;
+  renderCsiaCourseList(_csiaCourses);
+  renderCsiaCourseSelect(_csiaCourses);
+
+  if (currentMemberToken) {
+    loadMyCsiaRegistrations();
+  } else {
+    document.getElementById("csiaMyRegistrationsWrap").innerHTML = `<p class="note">請先登入會員帳號後查詢報名紀錄</p>`;
+  }
+}
+
+function renderCsiaCourseList(courses) {
+  const wrap = document.getElementById("csiaCourseListWrap");
+  if (!courses.length) { wrap.innerHTML = `<p class="note">目前尚無公告場次</p>`; return; }
+  const byLevel = {};
+  courses.forEach(c => (byLevel[c.level] || (byLevel[c.level] = [])).push(c));
+  const levelLabel = { L1: "Level 1", L2: "Level 2" };
+  wrap.innerHTML = Object.keys(byLevel).sort().map(level => `
+    <div style="margin-bottom:10px;">
+      <b>${levelLabel[level] || level}</b>
+      ${byLevel[level].map(c => `
+        <div class="list-item">
+          <div><b>${c.batch_label}</b>・${c.course_name}${c.format_note ? `(${c.format_note})` : ""}</div>
+          <div class="note">日期:${c.date_label}・語言:${c.language === "chinese" ? "中文翻譯班" : "英文班"}・地點:${c.venue}</div>
+          <div class="note">費用:${_csiaPriceLabel(c)}・名額:${c.registered_count}/${c.max_headcount}(最少開班${c.min_headcount}人)・狀態:${_csiaStatusLabel(c.status)}${c.is_full ? "・已額滿" : ""}</div>
+          ${c.notes ? `<div class="note">${c.notes}</div>` : ""}
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+function renderCsiaCourseSelect(courses) {
+  const sel = document.getElementById("csiaCourseSelect");
+  const openCourses = courses.filter(c => c.status === "open" || c.status === "confirmed");
+  if (!openCourses.length) {
+    sel.innerHTML = `<option value="">目前無可報名場次</option>`;
+    document.getElementById("csiaCourseSelectHint").textContent = "";
+    return;
+  }
+  sel.innerHTML = openCourses.map(c =>
+    `<option value="${c.id}" ${c.is_full ? "disabled" : ""}>${c.level} ${c.batch_label} ${c.course_name}(${c.date_label})${c.is_full ? " - 已額滿" : ""}</option>`
+  ).join("");
+  onCsiaCourseSelectChange();
+}
+function onCsiaCourseSelectChange() {
+  const sel = document.getElementById("csiaCourseSelect");
+  const course = _csiaCourses.find(c => String(c.id) === sel.value);
+  document.getElementById("csiaCourseSelectHint").textContent = course
+    ? `費用:${_csiaPriceLabel(course)}・尚可報名:${Math.max(0, course.max_headcount - course.registered_count)}人`
+    : "";
+}
+
+async function onCsiaMembershipCardFileChange() {
+  const input = document.getElementById("csiaMembershipCardFile");
+  const file = input.files && input.files[0];
+  if (!file) { _csiaMembershipCardData = null; document.getElementById("csiaMembershipCardPreview").textContent = ""; return; }
+  const image = await _readFileAsDataUrl(file);
+  _csiaMembershipCardData = { file_name: file.name, mime_type: file.type, image };
+  document.getElementById("csiaMembershipCardPreview").textContent = `已選擇檔案:${file.name}`;
+}
+
+async function submitCsiaRegistration() {
+  const statusEl = document.getElementById("csiaRegisterStatus");
+  if (!currentMemberToken) { statusEl.innerHTML = `<span class="status-tag warn">請先登入會員帳號才能報名</span>`; return; }
+  const courseId = document.getElementById("csiaCourseSelect").value;
+  if (!courseId) { statusEl.innerHTML = `<span class="status-tag warn">請選擇報名場次</span>`; return; }
+  const chineseName = document.getElementById("csiaChineseName").value.trim();
+  if (!chineseName) { statusEl.innerHTML = `<span class="status-tag warn">請填寫中文姓名</span>`; return; }
+
+  const reasons = Array.from(document.querySelectorAll(".csiaReasonCheckbox")).filter(el => el.checked).map(el => el.value);
+
+  const payload = {
+    course_id: Number(courseId),
+    designation: document.getElementById("csiaDesignation").value || null,
+    chinese_name: chineseName,
+    kanji_or_other_name: document.getElementById("csiaKanjiOrOtherName").value || null,
+    examiner_call_name: document.getElementById("csiaExaminerCallName").value || null,
+    birth_date: document.getElementById("csiaBirthDate").value || null,
+    gender: document.getElementById("csiaGender").value || null,
+    address_chinese: document.getElementById("csiaAddressChinese").value || null,
+    address_street: document.getElementById("csiaAddressStreet").value || null,
+    address_city: document.getElementById("csiaAddressCity").value || null,
+    address_country: document.getElementById("csiaAddressCountry").value || null,
+    address_province: document.getElementById("csiaAddressProvince").value || null,
+    address_postal_code: document.getElementById("csiaAddressPostalCode").value || null,
+    address_other: document.getElementById("csiaAddressOther").value || null,
+    mobile_number: document.getElementById("csiaMobileNumber").value || null,
+    email: document.getElementById("csiaEmail").value || null,
+    line_or_whatsapp_id: document.getElementById("csiaLineOrWhatsapp").value || null,
+    csia_member_number: document.getElementById("csiaMemberNumber").value || null,
+    occupation: document.getElementById("csiaOccupation").value || null,
+    emergency_contact_name: document.getElementById("csiaEmergencyContactName").value || null,
+    emergency_contact_phone: document.getElementById("csiaEmergencyContactPhone").value || null,
+    existing_certifications: document.getElementById("csiaExistingCertifications").value || null,
+    ski_experience: document.getElementById("csiaSkiExperience").value || null,
+    teaching_experience: document.getElementById("csiaTeachingExperience").value || null,
+    reasons,
+    reason_other: reasons.includes("other") ? (document.getElementById("csiaReasonOther").value || null) : null,
+    waiver_confirmed: document.getElementById("csiaWaiverConfirmed").checked,
+    membership_action_confirmed: document.getElementById("csiaMembershipActionConfirmed").checked,
+    eligibility_confirmed: document.getElementById("csiaEligibilityConfirmed").checked,
+    membership_card_file_name: _csiaMembershipCardData ? _csiaMembershipCardData.file_name : null,
+    membership_card_mime_type: _csiaMembershipCardData ? _csiaMembershipCardData.mime_type : null,
+    membership_card_image: _csiaMembershipCardData ? _csiaMembershipCardData.image : null,
+  };
+
+  const { ok, data } = await api("/csia/registrations", { method: "POST", body: JSON.stringify(payload) });
+  if (!ok) { statusEl.innerHTML = `<span class="status-tag warn">${data.error || "送出失敗"}</span>`; return; }
+  statusEl.innerHTML = `<span class="status-tag ok">報名已送出,請依上方匯款帳號完成繳費,客服核對入帳後會更新報名狀態</span>`;
+  loadCsiaPage();
+}
+
+async function loadMyCsiaRegistrations() {
+  const wrap = document.getElementById("csiaMyRegistrationsWrap");
+  const { ok, data } = await api("/csia/registrations");
+  if (!ok) { wrap.innerHTML = `<p class="note">${data.error || "查詢失敗"}</p>`; return; }
+  if (!data.length) { wrap.innerHTML = `<p class="note">尚無報名紀錄</p>`; return; }
+  const paymentLabel = { unpaid: "未付款", paid: "已付款", refunded: "已退款" };
+  const statusLabel = { submitted: "已送出,待確認", confirmed: "已確認", cancelled: "已取消" };
+  wrap.innerHTML = data.map(r => `
+    <div class="list-item">
+      <div><b>${r.level} ${r.batch_label} ${r.course_name}</b>(${r.date_label})</div>
+      <div class="note">報名狀態:${statusLabel[r.status] || r.status}・付款狀態:${paymentLabel[r.payment_status] || r.payment_status}</div>
+      ${r.staff_note ? `<div class="note">客服備註:${r.staff_note}</div>` : ""}
+    </div>`).join("");
+}
+
 function toggleNavGroup(name) {
   const sub = document.getElementById("navsub-" + name);
   sub.style.display = sub.style.display === "none" ? "block" : "none";
@@ -4749,7 +5232,7 @@ function switchPage(pageName, groupName, force) {
     event.target.classList.add("active-top");
   }
 
-  const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay };
+  const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay, csia: loadCsiaPage };
   if (refreshMap[pageName]) refreshMap[pageName]();
 }
 let _profileBannerShownOnce = false;

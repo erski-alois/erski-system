@@ -12,6 +12,7 @@ import booking
 import pricing
 import payroll
 import config
+import csia
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
@@ -266,6 +267,7 @@ SECTION_ROLES = {
     "groupassign":     {"cs"},              # 教練指派管理(原團課教練指派,主管不再開放;新增可指派日本滑雪雪場)
     "finance":         set(),               # 管理報表/薪資管理/月結損益:僅老闆
     "system":          set(),               # 價格設定/資料匯入/清除測試資料:僅老闆
+    "csia":            {"cs"},              # CSIA報名管理(新增,金流/報名資料相關,主管不開放,比照orders/japanbookings)
     # partners_list(合作單位「名單」,不是完整分頁)另外開放給股東,因為「日本訂單
     # 管理」分頁選合作單位篩選條件需要用到這份名單,跟上面完整的"partners"分頁權限
     # (可新增/編輯合作單位、看財務報表)是兩回事,股東兩者現在都開放,這裡維持不動。
@@ -859,6 +861,8 @@ def get_pricing():
         # 跑過,也不會整支/api/pricing直接壞掉,只是先顯示成空白帳號。
         "bank_account_indoor": pricing.get_config("bank_account_indoor", dict(_EMPTY_BANK_ACCOUNT)),
         "bank_account_japan": pricing.get_config("bank_account_japan", dict(_EMPTY_BANK_ACCOUNT)),
+        # 2026-09新增:CSIA滑雪教練考照專區報名費匯款帳號(報名一律用匯款轉帳,不走線上刷卡)
+        "bank_account_csia": pricing.get_config("bank_account_csia", dict(_EMPTY_BANK_ACCOUNT)),
         # 2026-09新增:線上刷卡/網路ATM是否真的有串接綠界(config.ECPAY_CONFIGURED)。
         # 沒有串接時,MockPaymentProvider選「線上刷卡」會直接回傳confirmed(沒有真的收到錢
         # 就標記已付款)——這是回報「付款時沒有地方可以刷卡」的根本原因之一:因為根本沒有
@@ -866,6 +870,92 @@ def get_pricing():
         # 避免客戶選了之後訂單被誤標記為已付款、但校方實際上沒收到錢。
         "online_card_available": config.ECPAY_CONFIGURED,
     })
+
+
+# ------------------------------------------------------------------
+# CSIA滑雪教練考照專區(2026-09新增)
+# 會員端:瀏覽課程場次、送出報名、查詢自己的報名紀錄。
+# 後台:課程場次管理(新增/編輯)、報名名單管理(標記匯款已收到/取消)。
+# 報名費一律匯款轉帳,不走orders/transactions/綠界那套線上刷卡機制(理由見
+# csia.py檔案開頭說明),所以這裡完全不用碰_require_member_id_from_token()以外
+# 的付款相關輔助函式。
+# ------------------------------------------------------------------
+@app.route("/api/csia/courses", methods=["GET"])
+def csia_list_courses():
+    """會員瀏覽課程場次,不需要登入也看得到(比照/api/pricing,讓還沒登入的訪客
+    也能先看課表內容;真的要報名時才需要登入)。"""
+    return jsonify(csia.list_courses_for_members())
+
+
+@app.route("/api/csia/registrations", methods=["GET"])
+def csia_my_registrations():
+    """會員查詢自己的CSIA報名紀錄,需要登入(用token內的member_id,不信任查詢參數)。"""
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
+    return jsonify(csia.get_member_registrations(member_id))
+
+
+@app.route("/api/csia/registrations", methods=["POST"])
+def csia_create_registration():
+    """會員送出CSIA報名。跟代客訂課一樣共用_require_member_id_from_token(),
+    所以客服也可以在「代客訂課」畫面幫會員送出CSIA報名(目前前端還沒做這個入口,
+    但後端邏輯本來就相容,不用另外處理)。"""
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
+    d = request.json or {}
+    try:
+        reg = csia.create_registration(member_id, d)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(reg), 201
+
+
+@app.route("/api/admin/csia/courses", methods=["GET"])
+@require_section("csia")
+def admin_csia_list_courses():
+    return jsonify(csia.admin_list_courses())
+
+
+@app.route("/api/admin/csia/courses", methods=["POST"])
+@require_section("csia")
+def admin_csia_create_course():
+    d = request.json or {}
+    try:
+        new_id = csia.admin_create_course(d)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"id": new_id}), 201
+
+
+@app.route("/api/admin/csia/courses/<int:course_id>", methods=["PUT"])
+@require_section("csia")
+def admin_csia_update_course(course_id):
+    d = request.json or {}
+    try:
+        csia.admin_update_course(course_id, d)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/csia/registrations", methods=["GET"])
+@require_section("csia")
+def admin_csia_list_registrations():
+    course_id = request.args.get("course_id", type=int)
+    return jsonify(csia.admin_list_registrations(course_id))
+
+
+@app.route("/api/admin/csia/registrations/<int:reg_id>", methods=["PUT"])
+@require_section("csia")
+def admin_csia_update_registration(reg_id):
+    d = request.json or {}
+    try:
+        csia.admin_update_registration(reg_id, d, staff_id=request.current_staff["id"])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
 
 
 # ------------------------------------------------------------------
@@ -4447,6 +4537,7 @@ _TEST_DATA_TABLES = [
     ("indoor_sessions", "室內雪機時段(體驗/包機/團課/自主練習)"),
     ("jump_bookings", "跳台預約"),
     ("japan_bookings", "日本滑雪預約"),
+    ("csia_registrations", "CSIA滑雪教練考照報名資料"),
     ("charter_pass_requests", "包機課堂數包異動申請"),
     ("charter_passes", "包機課堂數包"),
     ("plan_billing_records", "月繳方案繳費紀錄"),

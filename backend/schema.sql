@@ -653,6 +653,74 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- ============================================================
+-- CSIA滑雪教練考照專區(2026-09新增)
+-- ============================================================
+
+-- CSIA課程場次(後台自行新增/編輯,例如「第一梯(中文翻譯班)Level 1 Pre course + course」)
+CREATE TABLE IF NOT EXISTS csia_courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT CHECK(level IN ('L1','L2')) NOT NULL,           -- CSIA Level 1 / Level 2
+    batch_label TEXT NOT NULL,        -- 梯次,例如「第一梯(中文翻譯班)」
+    language TEXT CHECK(language IN ('chinese','english')) NOT NULL,  -- 上課語言:僅Level 1部分梯次有中文翻譯,其餘一律英文授課無翻譯
+    course_name TEXT NOT NULL,        -- 課程名稱,例如「Level 1 Pre course + course」
+    format_note TEXT,                 -- 課程內容說明,例如「考前班+考試」
+    date_label TEXT NOT NULL,         -- 日期(對照CSIA官方梯次原文,可能是不連續日期如"Jan 21-22, 25-26",故存文字而非單一起訖日)
+    date_sort_key TEXT,               -- 排序/篩選用的起始日期(YYYY-MM-DD),不一定等於date_label的第一天,僅供畫面排序
+    venue TEXT DEFAULT '宮城鬼首滑雪場 Onikoube, Miyagi',
+    price INTEGER,                    -- 報名費金額(NT$或JPY,由後台自行填寫;尚未填寫前顯示「金額洽詢」)
+    min_headcount INTEGER NOT NULL DEFAULT 5,   -- 開班門檻(未達此人數,主辦單位保留取消課程/考試之權利)
+    max_headcount INTEGER NOT NULL DEFAULT 8,   -- 最大名額(額滿後不開放報名)
+    status TEXT CHECK(status IN ('open','confirmed','cancelled','closed')) NOT NULL DEFAULT 'open',
+    notes TEXT,                       -- 後台備註(不對外顯示)
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- CSIA報名資料(對應CSIA官方報名流程需要的完整考生資訊,一位會員可報名多筆不同課程)
+CREATE TABLE IF NOT EXISTS csia_registrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id),
+    course_id INTEGER NOT NULL REFERENCES csia_courses(id),
+    waiver_confirmed INTEGER NOT NULL DEFAULT 0,             -- 是否已確認完成CSIA Waiver線上填寫
+    membership_action_confirmed INTEGER NOT NULL DEFAULT 0,  -- 是否已確認完成CSIA會員加入(LV1)/更新(LV2)
+    membership_card_file_name TEXT,
+    membership_card_mime_type TEXT,
+    membership_card_image TEXT,       -- 2026/27 Current Paid CSIA Membership Card,base64(含data URI前綴)
+    designation TEXT,                 -- 稱謂:Mx./Mr./Ms./Miss/Mrs./其他
+    chinese_name TEXT NOT NULL,
+    kanji_or_other_name TEXT,         -- 日文漢字或其他文字姓名(若有)
+    examiner_call_name TEXT,          -- 希望考官如何稱呼(外文)
+    birth_date TEXT,                  -- YYYY-MM-DD
+    gender TEXT CHECK(gender IN ('male','female','other')),
+    address_chinese TEXT,
+    address_street TEXT,              -- 外文地址門牌號碼和街道名稱
+    address_city TEXT,
+    address_country TEXT,
+    address_province TEXT,
+    address_postal_code TEXT,
+    address_other TEXT,               -- 其他地址,如PO Box
+    mobile_number TEXT,               -- 含國碼,不含開頭+
+    email TEXT,
+    line_or_whatsapp_id TEXT,
+    csia_member_number TEXT,
+    occupation TEXT,
+    emergency_contact_name TEXT,
+    emergency_contact_phone TEXT,
+    existing_certifications TEXT,     -- 已持有的滑雪教練證照(名稱/級數/取得年月)
+    ski_experience TEXT,              -- 滑雪經驗與程度說明
+    teaching_experience TEXT,         -- 教學經驗與能力說明
+    reasons TEXT,                     -- 報考原因,JSON陣列(可複選),例如["want_job","improve_ski"]
+    reason_other TEXT,                -- 報考原因「其他」的補充文字
+    eligibility_confirmed INTEGER NOT NULL DEFAULT 0,  -- 是否已確認年齡/程度/教學經驗/證照符合報名資格
+    amount INTEGER,                   -- 報名當下課程價格快照(避免後台事後改價影響已報名者應付金額)
+    payment_status TEXT CHECK(payment_status IN ('unpaid','paid','refunded')) NOT NULL DEFAULT 'unpaid',
+    paid_at TEXT,
+    status TEXT CHECK(status IN ('submitted','confirmed','cancelled')) NOT NULL DEFAULT 'submitted',
+    staff_note TEXT,                  -- 後台備註
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- 日本滑雪分區種子資料
 INSERT INTO japan_regions (code, name, requires_resort_selection, allow_designate_coach, requires_accommodation_option, resort_list_editable, display_order) VALUES
  ('zao', '藏王溫泉滑雪場', 0, 1, 0, 0, 1),
@@ -713,7 +781,22 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
  ('min_advance_booking_hours', '2', '當天課程最少須提前幾小時預約'),
  ('booking_window_days', '30', '體驗/自主練習/團課開放未來幾天內預約'),
  ('bank_account_indoor', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(室內雪機/包機/體驗課/跳台體驗/團課,匯款轉帳付款時顯示給客戶)'),
- ('bank_account_japan', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(日本教練課,匯款轉帳付款時顯示給客戶)');
+ ('bank_account_japan', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(日本教練課,匯款轉帳付款時顯示給客戶)'),
+ ('bank_account_csia', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(CSIA滑雪教練考照報名費,匯款轉帳付款時顯示給客戶)');
+
+-- CSIA課程場次種子資料(依你提供的2026/27雪季梯次;日期年份依「2026/27雪季」慣例推算為2027年1月,
+-- 報名費金額目前尚未提供,price先留NULL,顯示「金額洽詢」,請於後台「CSIA報名管理」分頁自行填入)
+INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key) VALUES
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1 Pre course + course', '考前班＋考試', 'Jan 8-11', '2027-01-08'),
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1 course', '考試', 'Jan 9-11', '2027-01-09'),
+ ('L1', '第二梯(英文班)', 'english', 'Level 1', NULL, 'Jan 12-14', '2027-01-12'),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1 Pre course + course', '考前班＋考試', 'Jan 15-18', '2027-01-15'),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '考試', 'Jan 16-18', '2027-01-16'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2 Pre course + Course', '考前班＋滑行課程＋教學課程＋考試', 'Jan 20-26', '2027-01-20'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2 Ski + Tech + Exam', '滑行課程＋教學課程＋考試', 'Jan 21-26', '2027-01-21'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2 Ski + Exam', '滑行課程＋考試', 'Jan 21-22, 25-26', '2027-01-21'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2 Teach + Exam', '教學課程考試＋教學考試', 'Jan 23-26', '2027-01-23'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2 Exam', NULL, 'Jan 25-26', '2027-01-25');
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES
