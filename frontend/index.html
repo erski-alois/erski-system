@@ -5136,6 +5136,15 @@ function renderCsiaCourseList(courses) {
     </div>`).join("");
 }
 
+function _csiaOptionPriceLabel(course) {
+  // 下拉選項用的精簡價格顯示:兩個方案都沒有金額時顯示「金額洽詢」,否則用
+  // 「課程本身JPY.../含住宿JPY...」這種精簡格式,讓會員不用先選進去才看得到價格,
+  // 可以直接在選單裡比較不同場次。完整金額(含新台幣換算)還是看下方的提示文字。
+  if (course.price_jpy_basic === null && course.price_jpy_with_stay === null) return "金額洽詢";
+  const basicText = course.price_jpy_basic === null || course.price_jpy_basic === undefined ? "-" : course.price_jpy_basic.toLocaleString();
+  const withStayText = course.price_jpy_with_stay === null || course.price_jpy_with_stay === undefined ? "-" : course.price_jpy_with_stay.toLocaleString();
+  return `課程本身JPY${basicText}/含住宿JPY${withStayText}`;
+}
 function renderCsiaCourseSelect(courses) {
   const sel = document.getElementById("csiaCourseSelect");
   const openCourses = courses.filter(c => c.status === "open" || c.status === "confirmed");
@@ -5145,7 +5154,7 @@ function renderCsiaCourseSelect(courses) {
     return;
   }
   sel.innerHTML = openCourses.map(c =>
-    `<option value="${c.id}" ${c.is_full ? "disabled" : ""}>${c.level} ${c.batch_label} ${c.course_name}(${c.date_label})${c.is_full ? " - 已額滿" : ""}</option>`
+    `<option value="${c.id}" ${c.is_full ? "disabled" : ""}>${c.level} ${c.batch_label} ${c.course_name}(${c.date_label})・${_csiaOptionPriceLabel(c)}${c.is_full ? " - 已額滿" : ""}</option>`
   ).join("");
   onCsiaCourseSelectChange();
 }

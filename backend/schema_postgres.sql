@@ -797,16 +797,19 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
 -- CSIA課程場次種子資料(2026-09第二次改版:依你提供的最新7個場次整批取代原本10筆;
 -- 日期年份沿用「2026/27雪季」推算為2027年1月;價格為CSIA官方日圓報價,含「課程本身」
 -- 與「含住宿+早餐+晚餐」兩種方案,前端依匯率1:5同時換算顯示NT$。
--- 注意:第7筆(Jan 21-26 Level 2)你給的方案一金額寫的是JPY33000,對照其他場次的價格級距
--- (其餘場次兩個方案都落在20~46萬日圓區間,33000明顯偏低、也和方案二的438000落差過大),
--- 判斷應該是筆誤漏打一個0,這裡先當作330000處理,請務必確認金額是否正確,不對的話告訴我再改。
+-- 2026-09第三次改版:Jan 8-11/Jan 15-18/Jan 20-26這3個含「1 Day Pre course」的場次,
+-- 梯次名稱(batch_label)加註「含預備課程」,跟同語言/同Level但不含預備課程的場次做區別
+-- (原本兩者梯次名稱相同,會員在報名下拉選單分不出差異)。
+-- 2026-09第四次改版:依你最新提供的價格整批更新7個場次的price_jpy_basic/
+-- price_jpy_with_stay(第7筆Jan 21-26你這次直接給的金額是330000,確認了上一版
+-- 「疑似JPY33000筆誤、先當作330000處理」的判斷是對的)。
 INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay) VALUES
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 300000),
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 205000, 265000),
- ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 205000, 265000),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 300000),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 205000, 265000),
- ('L2', '第一梯(英文班)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 390000, 456000),
+ ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000),
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000),
+ ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000),
+ ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 262000),
+ ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000),
  ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000);
 
 -- FAQ示範資料
