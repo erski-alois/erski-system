@@ -673,7 +673,11 @@ CREATE TABLE IF NOT EXISTS csia_courses (
     date_label TEXT NOT NULL,         -- 日期(對照CSIA官方梯次原文,可能是不連續日期如"Jan 21-22, 25-26",故存文字而非單一起訖日)
     date_sort_key TEXT,               -- 排序/篩選用的起始日期(YYYY-MM-DD),不一定等於date_label的第一天,僅供畫面排序
     venue TEXT DEFAULT '宮城鬼首滑雪場 Onikoube, Miyagi',
-    price INTEGER,                    -- 報名費金額(NT$或JPY,由後台自行填寫;尚未填寫前顯示「金額洽詢」)
+    -- 2026-09第二次改版:報名費金額改成日圓計價的兩種方案(價格由CSIA官方以日圓報價),
+    -- 原本單一的price欄位(NT$/JPY不分)已移除,改成下面這兩個JPY金額欄位,前端畫面
+    -- 讓會員從下拉選單挑選其中一種方案,並依匯率1:5(1新台幣=5日圓)同時換算顯示NT$。
+    price_jpy_basic INTEGER,          -- 方案一:課程本身費用(不含住宿餐食),日圓
+    price_jpy_with_stay INTEGER,      -- 方案二:含住宿+早餐+晚餐,日圓(尚未填寫前顯示「金額洽詢」)
     min_headcount INTEGER NOT NULL DEFAULT 5,   -- 開班門檻(未達此人數,主辦單位保留取消課程/考試之權利)
     max_headcount INTEGER NOT NULL DEFAULT 8,   -- 最大名額(額滿後不開放報名)
     status TEXT CHECK(status IN ('open','confirmed','cancelled','closed')) NOT NULL DEFAULT 'open',
@@ -718,7 +722,8 @@ CREATE TABLE IF NOT EXISTS csia_registrations (
     reasons TEXT,                     -- 報考原因,JSON陣列(可複選),例如["want_job","improve_ski"]
     reason_other TEXT,                -- 報考原因「其他」的補充文字
     eligibility_confirmed INTEGER NOT NULL DEFAULT 0,  -- 是否已確認年齡/程度/教學經驗/證照符合報名資格
-    amount INTEGER,                   -- 報名當下課程價格快照(避免後台事後改價影響已報名者應付金額)
+    price_option TEXT CHECK(price_option IN ('basic','with_stay')),  -- 2026-09第二次改版新增:會員報名時選擇的價格方案(課程本身/含住宿餐食)
+    amount INTEGER,                   -- 報名當下課程價格快照,日圓金額(避免後台事後改價影響已報名者應付金額)
     payment_status TEXT CHECK(payment_status IN ('unpaid','paid','refunded')) NOT NULL DEFAULT 'unpaid',
     paid_at TEXT,
     status TEXT CHECK(status IN ('submitted','confirmed','cancelled')) NOT NULL DEFAULT 'submitted',
@@ -789,19 +794,20 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
  ('bank_account_japan', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(日本教練課,匯款轉帳付款時顯示給客戶)'),
  ('bank_account_csia', '{"bank_name":"","bank_code":"","account_number":"","account_name":"","note":""}', '匯款帳號(CSIA滑雪教練考照報名費,匯款轉帳付款時顯示給客戶)');
 
--- CSIA課程場次種子資料(依你提供的2026/27雪季梯次;日期年份依「2026/27雪季」慣例推算為2027年1月,
--- 報名費金額目前尚未提供,price先留NULL,顯示「金額洽詢」,請於後台「CSIA報名管理」分頁自行填入)
-INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key) VALUES
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1 Pre course + course', '考前班＋考試', 'Jan 8-11', '2027-01-08'),
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1 course', '考試', 'Jan 9-11', '2027-01-09'),
- ('L1', '第二梯(英文班)', 'english', 'Level 1', NULL, 'Jan 12-14', '2027-01-12'),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1 Pre course + course', '考前班＋考試', 'Jan 15-18', '2027-01-15'),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '考試', 'Jan 16-18', '2027-01-16'),
- ('L2', '第一梯(英文班)', 'english', 'Level 2 Pre course + Course', '考前班＋滑行課程＋教學課程＋考試', 'Jan 20-26', '2027-01-20'),
- ('L2', '第一梯(英文班)', 'english', 'Level 2 Ski + Tech + Exam', '滑行課程＋教學課程＋考試', 'Jan 21-26', '2027-01-21'),
- ('L2', '第一梯(英文班)', 'english', 'Level 2 Ski + Exam', '滑行課程＋考試', 'Jan 21-22, 25-26', '2027-01-21'),
- ('L2', '第一梯(英文班)', 'english', 'Level 2 Teach + Exam', '教學課程考試＋教學考試', 'Jan 23-26', '2027-01-23'),
- ('L2', '第一梯(英文班)', 'english', 'Level 2 Exam', NULL, 'Jan 25-26', '2027-01-25');
+-- CSIA課程場次種子資料(2026-09第二次改版:依你提供的最新7個場次整批取代原本10筆;
+-- 日期年份沿用「2026/27雪季」推算為2027年1月;價格為CSIA官方日圓報價,含「課程本身」
+-- 與「含住宿+早餐+晚餐」兩種方案,前端依匯率1:5同時換算顯示NT$。
+-- 注意:第7筆(Jan 21-26 Level 2)你給的方案一金額寫的是JPY33000,對照其他場次的價格級距
+-- (其餘場次兩個方案都落在20~46萬日圓區間,33000明顯偏低、也和方案二的438000落差過大),
+-- 判斷應該是筆誤漏打一個0,這裡先當作330000處理,請務必確認金額是否正確,不對的話告訴我再改。
+INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay) VALUES
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 300000),
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 205000, 265000),
+ ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 205000, 265000),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 300000),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 205000, 265000),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 390000, 456000),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000);
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES

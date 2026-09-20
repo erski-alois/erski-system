@@ -742,6 +742,10 @@
           <select id="csiaCourseSelect" onchange="onCsiaCourseSelectChange()"></select>
           <div id="csiaCourseSelectHint" class="note"></div>
 
+          <label style="margin-top:10px;">①-2 選擇價格方案</label>
+          <select id="csiaPriceOption" onchange="onCsiaPriceOptionChange()"></select>
+          <div id="csiaPriceOptionHint" class="note"></div>
+
           <label style="margin-top:16px;">② 考生基本資料</label>
           <div class="row">
             <div style="flex:1;"><label>職稱/身分(選填)</label><input id="csiaDesignation" placeholder="例:滑雪教練/學生"></div>
@@ -3029,7 +3033,11 @@ async function renderCsiaManageTab() {
       <div class="list-item">${c.date_label}・${c.language === "chinese" ? "中文翻譯班" : "英文班"}${c.format_note ? `・${c.format_note}` : ""}</div>
       <div class="list-item">目前報名人數:${c.registered_count}人</div>
       <div class="field-grid" style="margin-top:8px;">
-        <div><label>價格(留空=金額洽詢)</label><input id="csiaCoursePrice-${c.id}" type="number" value="${c.price === null || c.price === undefined ? "" : c.price}"></div>
+        <div><label>價格-課程本身(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceBasic-${c.id}" type="number" value="${c.price_jpy_basic === null || c.price_jpy_basic === undefined ? "" : c.price_jpy_basic}"></div>
+        <div><label>價格-含住宿+早餐+晚餐(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceWithStay-${c.id}" type="number" value="${c.price_jpy_with_stay === null || c.price_jpy_with_stay === undefined ? "" : c.price_jpy_with_stay}"></div>
+      </div>
+      <p class="note" style="margin-top:2px;">新台幣參考金額(1:5匯率):課程本身約NT$${c.price_twd_basic === null || c.price_twd_basic === undefined ? "-" : c.price_twd_basic.toLocaleString()}・含住宿+早餐+晚餐約NT$${c.price_twd_with_stay === null || c.price_twd_with_stay === undefined ? "-" : c.price_twd_with_stay.toLocaleString()}</p>
+      <div class="field-grid" style="margin-top:8px;">
         <div><label>最少開班人數</label><input id="csiaCourseMin-${c.id}" type="number" value="${c.min_headcount}"></div>
         <div><label>上限人數</label><input id="csiaCourseMax-${c.id}" type="number" value="${c.max_headcount}"></div>
         <div><label>狀態</label>
@@ -3062,7 +3070,8 @@ async function renderCsiaManageTab() {
       <label>日期排序用(選填,用來決定場次顯示順序)</label><input id="newCsiaDateSortKey" type="date">
       <label>場地(選填,預設宮城鬼首滑雪場)</label><input id="newCsiaVenue">
       <div class="field-grid" style="margin-top:8px;">
-        <div><label>價格(選填)</label><input id="newCsiaPrice" type="number"></div>
+        <div><label>價格-課程本身(JPY,選填)</label><input id="newCsiaPriceBasic" type="number"></div>
+        <div><label>價格-含住宿+早餐+晚餐(JPY,選填)</label><input id="newCsiaPriceWithStay" type="number"></div>
         <div><label>最少開班人數</label><input id="newCsiaMin" type="number" value="5"></div>
         <div><label>上限人數</label><input id="newCsiaMax" type="number" value="8"></div>
       </div>
@@ -3104,7 +3113,7 @@ function renderCsiaRegistrationsList(registrations) {
       <span class="status-tag ${r.status === "cancelled" ? "warn" : "ok"}">${regStatusLabel[r.status] || r.status}</span>
       <span class="status-tag ${r.payment_status === "paid" ? "ok" : "warn"}">${paymentLabel[r.payment_status] || r.payment_status}</span>
       <div class="list-item">場次:${r.level} ${r.batch_label} ${r.course_name}(${r.date_label})</div>
-      <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `NT$${r.amount}`}</div>
+      <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・價格方案:${{basic:"課程本身",with_stay:"含住宿+早餐+晚餐"}[r.price_option] || r.price_option || "未選擇"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `JPY ${r.amount.toLocaleString()}${r.amount_twd === null || r.amount_twd === undefined ? "" : `(約NT$${r.amount_twd.toLocaleString()})`}`}</div>
       <div class="list-item">聯絡方式:手機 ${r.mobile_number || "-"}・Email ${r.email || "-"}・LINE/WhatsApp ${r.line_or_whatsapp_id || "-"}</div>
       <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${r.csia_member_number || "未填寫"}</div>
       <div class="list-item">報考原因:${reasonText || "未填寫"}</div>
@@ -3140,9 +3149,11 @@ function filterCsiaRegistrations() {
 }
 
 async function saveCsiaCourse(courseId) {
-  const priceRaw = document.getElementById(`csiaCoursePrice-${courseId}`).value;
+  const priceBasicRaw = document.getElementById(`csiaCoursePriceBasic-${courseId}`).value;
+  const priceWithStayRaw = document.getElementById(`csiaCoursePriceWithStay-${courseId}`).value;
   const payload = {
-    price: priceRaw === "" ? null : parseInt(priceRaw),
+    price_jpy_basic: priceBasicRaw === "" ? null : parseInt(priceBasicRaw),
+    price_jpy_with_stay: priceWithStayRaw === "" ? null : parseInt(priceWithStayRaw),
     min_headcount: parseInt(document.getElementById(`csiaCourseMin-${courseId}`).value) || 5,
     max_headcount: parseInt(document.getElementById(`csiaCourseMax-${courseId}`).value) || 8,
     status: document.getElementById(`csiaCourseStatus-${courseId}`).value,
@@ -3163,7 +3174,8 @@ async function createCsiaCourse() {
     statusEl.innerHTML = `<span class="status-tag warn">請填寫梯次/課程名稱/日期顯示文字</span>`;
     return;
   }
-  const priceRaw = document.getElementById("newCsiaPrice").value;
+  const priceBasicRaw = document.getElementById("newCsiaPriceBasic").value;
+  const priceWithStayRaw = document.getElementById("newCsiaPriceWithStay").value;
   const payload = {
     level: document.getElementById("newCsiaLevel").value,
     language: document.getElementById("newCsiaLanguage").value,
@@ -3171,7 +3183,8 @@ async function createCsiaCourse() {
     format_note: document.getElementById("newCsiaFormatNote").value || null,
     date_sort_key: document.getElementById("newCsiaDateSortKey").value || null,
     venue: document.getElementById("newCsiaVenue").value || undefined,
-    price: priceRaw === "" ? null : parseInt(priceRaw),
+    price_jpy_basic: priceBasicRaw === "" ? null : parseInt(priceBasicRaw),
+    price_jpy_with_stay: priceWithStayRaw === "" ? null : parseInt(priceWithStayRaw),
     min_headcount: parseInt(document.getElementById("newCsiaMin").value) || 5,
     max_headcount: parseInt(document.getElementById("newCsiaMax").value) || 8,
   };
@@ -5059,8 +5072,16 @@ const CSIA_REASON_OPTIONS = [
 let _csiaCourses = [];
 let _csiaMembershipCardData = null; // {file_name, mime_type, image} 或 null
 
+function _csiaJpyTwdLabel(jpy, twd) {
+  // 日圓金額為null時代表「金額洽詢」,新台幣是用1:5匯率換算的參考金額,不是正式報價
+  if (jpy === null || jpy === undefined) return "金額洽詢";
+  const twdText = (twd === null || twd === undefined) ? "" : `(約NT$${twd.toLocaleString()})`;
+  return `JPY ${jpy.toLocaleString()}${twdText}`;
+}
 function _csiaPriceLabel(course) {
-  return (course.price === null || course.price === undefined) ? "金額洽詢" : `NT$${course.price}`;
+  // 課程列表用:同時列出「課程本身」與「含住宿+早餐+晚餐」兩種方案的日圓/新台幣參考金額
+  return `課程本身 ${_csiaJpyTwdLabel(course.price_jpy_basic, course.price_twd_basic)}・`
+       + `含住宿+早餐+晚餐 ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}`;
 }
 function _csiaStatusLabel(status) {
   return { open: "開放報名", confirmed: "已確定開班", cancelled: "已取消", closed: "已截止報名" }[status] || status;
@@ -5134,6 +5155,27 @@ function onCsiaCourseSelectChange() {
   document.getElementById("csiaCourseSelectHint").textContent = course
     ? `費用:${_csiaPriceLabel(course)}・尚可報名:${Math.max(0, course.max_headcount - course.registered_count)}人`
     : "";
+
+  const optSel = document.getElementById("csiaPriceOption");
+  if (!course) {
+    optSel.innerHTML = `<option value="">請先選擇報名場次</option>`;
+    document.getElementById("csiaPriceOptionHint").textContent = "";
+    return;
+  }
+  optSel.innerHTML = `
+    <option value="basic">課程本身 - ${_csiaJpyTwdLabel(course.price_jpy_basic, course.price_twd_basic)}</option>
+    <option value="with_stay">含住宿+早餐+晚餐 - ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}</option>`;
+  onCsiaPriceOptionChange();
+}
+function onCsiaPriceOptionChange() {
+  const sel = document.getElementById("csiaCourseSelect");
+  const course = _csiaCourses.find(c => String(c.id) === sel.value);
+  const optSel = document.getElementById("csiaPriceOption");
+  const hintEl = document.getElementById("csiaPriceOptionHint");
+  if (!course || !optSel.value) { hintEl.textContent = ""; return; }
+  const jpy = optSel.value === "basic" ? course.price_jpy_basic : course.price_jpy_with_stay;
+  const twd = optSel.value === "basic" ? course.price_twd_basic : course.price_twd_with_stay;
+  hintEl.textContent = `新台幣金額為依日圓匯率1:5換算的參考金額,實際請以日圓金額為準:${_csiaJpyTwdLabel(jpy, twd)}`;
 }
 
 async function onCsiaMembershipCardFileChange() {
@@ -5150,6 +5192,8 @@ async function submitCsiaRegistration() {
   if (!currentMemberToken) { statusEl.innerHTML = `<span class="status-tag warn">請先登入會員帳號才能報名</span>`; return; }
   const courseId = document.getElementById("csiaCourseSelect").value;
   if (!courseId) { statusEl.innerHTML = `<span class="status-tag warn">請選擇報名場次</span>`; return; }
+  const priceOption = document.getElementById("csiaPriceOption").value;
+  if (!priceOption) { statusEl.innerHTML = `<span class="status-tag warn">請選擇價格方案</span>`; return; }
   const chineseName = document.getElementById("csiaChineseName").value.trim();
   if (!chineseName) { statusEl.innerHTML = `<span class="status-tag warn">請填寫中文姓名</span>`; return; }
 
@@ -5157,6 +5201,7 @@ async function submitCsiaRegistration() {
 
   const payload = {
     course_id: Number(courseId),
+    price_option: priceOption,
     designation: document.getElementById("csiaDesignation").value || null,
     chinese_name: chineseName,
     kanji_or_other_name: document.getElementById("csiaKanjiOrOtherName").value || null,
@@ -5203,9 +5248,11 @@ async function loadMyCsiaRegistrations() {
   if (!data.length) { wrap.innerHTML = `<p class="note">尚無報名紀錄</p>`; return; }
   const paymentLabel = { unpaid: "未付款", paid: "已付款", refunded: "已退款" };
   const statusLabel = { submitted: "已送出,待確認", confirmed: "已確認", cancelled: "已取消" };
+  const priceOptionLabel = { basic: "課程本身", with_stay: "含住宿+早餐+晚餐" };
   wrap.innerHTML = data.map(r => `
     <div class="list-item">
       <div><b>${r.level} ${r.batch_label} ${r.course_name}</b>(${r.date_label})</div>
+      <div class="note">價格方案:${priceOptionLabel[r.price_option] || r.price_option || "未選擇"}・金額:${_csiaJpyTwdLabel(r.amount, r.amount_twd)}</div>
       <div class="note">報名狀態:${statusLabel[r.status] || r.status}・付款狀態:${paymentLabel[r.payment_status] || r.payment_status}</div>
       ${r.staff_note ? `<div class="note">客服備註:${r.staff_note}</div>` : ""}
     </div>`).join("");

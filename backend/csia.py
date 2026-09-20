@@ -27,6 +27,28 @@ REASON_OPTIONS = (
 
 _REQUIRED_TEXT_FIELDS = ("chinese_name",)
 
+# 2026-09第二次改版:報名費金額改成CSIA官方的日圓報價,每個場次有兩種方案。
+# JPY_TO_TWD_RATE:依你的指示「以日元匯率1:5與台幣共同顯示」,1新台幣=5日圓,
+# 換算新台幣時直接把日圓金額除以這個倍率——僅供畫面上參考對照用,不影響實際
+# 報名費金額仍以日圓計價/收費為準(CSIA原始報價就是日圓)。
+JPY_TO_TWD_RATE = 5
+PRICE_OPTIONS = ("basic", "with_stay")
+_PRICE_OPTION_COLUMN = {"basic": "price_jpy_basic", "with_stay": "price_jpy_with_stay"}
+
+
+def _to_twd(jpy_amount):
+    """日圓金額換算新台幣(四捨五入取整數),金額是None時原樣回傳None(代表「金額洽詢」)。"""
+    if jpy_amount is None:
+        return None
+    return round(jpy_amount / JPY_TO_TWD_RATE)
+
+
+def _with_price_display(course_dict):
+    """幫課程場次dict補上兩種方案換算後的新台幣金額,方便前端直接顯示,不用自己再算一次。"""
+    course_dict["price_twd_basic"] = _to_twd(course_dict.get("price_jpy_basic"))
+    course_dict["price_twd_with_stay"] = _to_twd(course_dict.get("price_jpy_with_stay"))
+    return course_dict
+
 
 def _course_registered_count(conn, course_id):
     """這個課程場次目前有效(未取消)的報名人數。"""
@@ -48,7 +70,7 @@ def list_courses_for_members():
         d = dict(r)
         d["registered_count"] = _course_registered_count(conn, r["id"])
         d["is_full"] = d["registered_count"] >= r["max_headcount"]
-        result.append(d)
+        result.append(_with_price_display(d))
     conn.close()
     return result
 
@@ -63,7 +85,10 @@ def get_member_registrations(member_id):
         (member_id,),
     ).fetchall()
     conn.close()
-    return rows_to_dicts(rows)
+    result = rows_to_dicts(rows)
+    for r in result:
+        r["amount_twd"] = _to_twd(r.get("amount"))
+    return result
 
 
 def create_registration(member_id, data):
@@ -101,6 +126,11 @@ def create_registration(member_id, data):
         conn.close()
         raise ValueError("請確認你的年齡、滑行程度、教學經驗及證照已符合這個等級的報名資格")
 
+    price_option = data.get("price_option")
+    if price_option not in PRICE_OPTIONS:
+        conn.close()
+        raise ValueError("請選擇報名費的價格方案(課程本身 / 含住宿+早餐+晚餐)")
+
     if _course_registered_count(conn, course["id"]) >= course["max_headcount"]:
         conn.close()
         raise ValueError(f"這個課程場次名額已滿(上限{course['max_headcount']}人),請選擇其他場次或洽詢客服")
@@ -109,6 +139,11 @@ def create_registration(member_id, data):
     if not isinstance(reasons, list):
         reasons = []
     reasons = [r for r in reasons if r in REASON_OPTIONS]
+
+    # 報名費金額快照:依會員選的價格方案,從課程場次目前設定的日圓金額取值(可能是
+    # None,代表這個方案的金額後台還沒填,畫面上會顯示「金額洽詢」),避免後台事後
+    # 改價影響已經報名者原本看到、同意的金額。
+    amount = course[_PRICE_OPTION_COLUMN[price_option]]
 
     cur = conn.execute(
         """INSERT INTO csia_registrations (
@@ -119,8 +154,8 @@ def create_registration(member_id, data):
             address_postal_code, address_other, mobile_number, email, line_or_whatsapp_id,
             csia_member_number, occupation, emergency_contact_name, emergency_contact_phone,
             existing_certifications, ski_experience, teaching_experience, reasons, reason_other,
-            eligibility_confirmed, amount
-        ) VALUES (?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?)""",
+            eligibility_confirmed, price_option, amount
+        ) VALUES (?,?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?)""",
         (
             member_id, course["id"], 1, 1,
             data.get("membership_card_file_name"), data.get("membership_card_mime_type"), data.get("membership_card_image"),
@@ -132,7 +167,7 @@ def create_registration(member_id, data):
             data.get("csia_member_number"), data.get("occupation"), data.get("emergency_contact_name"), data.get("emergency_contact_phone"),
             data.get("existing_certifications"), data.get("ski_experience"), data.get("teaching_experience"),
             json.dumps(reasons), data.get("reason_other"),
-            1, course["price"],
+            1, price_option, amount,
         ),
     )
     reg_id = cur.lastrowid
@@ -158,15 +193,15 @@ def admin_list_courses():
     for r in rows:
         d = dict(r)
         d["registered_count"] = _course_registered_count(conn, r["id"])
-        result.append(d)
+        result.append(_with_price_display(d))
     conn.close()
     return result
 
 
 _COURSE_EDITABLE_FIELDS = (
     "level", "batch_label", "language", "course_name", "format_note",
-    "date_label", "date_sort_key", "venue", "price", "min_headcount",
-    "max_headcount", "status", "notes",
+    "date_label", "date_sort_key", "venue", "price_jpy_basic", "price_jpy_with_stay",
+    "min_headcount", "max_headcount", "status", "notes",
 )
 
 
@@ -186,12 +221,13 @@ def admin_create_course(data):
     cur = conn.execute(
         """INSERT INTO csia_courses
            (level, batch_label, language, course_name, format_note, date_label, date_sort_key,
-            venue, price, min_headcount, max_headcount, status, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            venue, price_jpy_basic, price_jpy_with_stay, min_headcount, max_headcount, status, notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get("level"), data.get("batch_label"), data.get("language"), data.get("course_name"),
             data.get("format_note"), data.get("date_label"), data.get("date_sort_key"),
-            data.get("venue") or "宮城鬼首滑雪場 Onikoube, Miyagi", data.get("price"),
+            data.get("venue") or "宮城鬼首滑雪場 Onikoube, Miyagi",
+            data.get("price_jpy_basic"), data.get("price_jpy_with_stay"),
             data.get("min_headcount") or 5, data.get("max_headcount") or 8,
             data.get("status") or "open", data.get("notes"),
         ),
@@ -240,7 +276,10 @@ def admin_list_registrations(course_id=None):
     q += " ORDER BY r.created_at DESC"
     rows = conn.execute(q, params).fetchall()
     conn.close()
-    return rows_to_dicts(rows)
+    result = rows_to_dicts(rows)
+    for r in result:
+        r["amount_twd"] = _to_twd(r.get("amount"))
+    return result
 
 
 def admin_update_registration(reg_id, data, staff_id=None):
