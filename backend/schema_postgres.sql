@@ -687,6 +687,9 @@ CREATE TABLE IF NOT EXISTS csia_courses (
 );
 
 -- CSIA報名資料(對應CSIA官方報名流程需要的完整考生資訊,一位會員可報名多筆不同課程)
+-- 2026-09第六次改版:「同一姓名只能報名一次」這條規則是在應用層(csia.py的
+-- create_registration)檢查的,不是這裡的DB結構限制(既有production資料已經
+-- 有一筆同名重複報名,無法安全加UNIQUE INDEX,詳見README對應章節說明)。
 CREATE TABLE IF NOT EXISTS csia_registrations (
     id SERIAL PRIMARY KEY,
     member_id INTEGER NOT NULL REFERENCES members(id),
@@ -707,18 +710,23 @@ CREATE TABLE IF NOT EXISTS csia_registrations (
     examiner_call_name TEXT,          -- 希望考官如何稱呼(外文)
     birth_date TEXT,                  -- YYYY-MM-DD
     gender TEXT CHECK(gender IN ('male','female','other')),
+    address_country TEXT,             -- 2026-09第六次改版新增:國家/地區,前端用下拉選單讓學員選
+                                       -- (台灣/日本/香港/澳門/中國/新加坡/馬來西亞/其他),地址本身
+                                       -- (以下address_chinese/address_english)還是由學員自行輸入文字,
+                                       -- 這個下拉選單只是拿來做分類用。報名時為必填。
     address_chinese TEXT,             -- 中文通訊地址
     address_english TEXT,             -- 2026-09第五次改版:原本Street/City/Province/Country/Postal Code
                                        -- 5個子欄位整合成這一欄英文地址(當時production還是0筆報名資料,
                                        -- 確認可以安全整併,不會影響任何既有報名紀錄)
     address_other TEXT,               -- 其他地址,如PO Box
-    mobile_number TEXT,               -- 含國碼,不含開頭+
+    mobile_number TEXT,               -- 含國碼,不含開頭+。2026-09第六次改版:選填,但有填的話後端
+                                       -- 會做格式防呆檢查(只能是數字,可含開頭+國碼,8~15碼)
     email TEXT,
     line_or_whatsapp_id TEXT,
-    csia_member_number TEXT,
+    csia_member_number TEXT,          -- 2026-09第六次改版:報名時改為必填
     occupation TEXT,
-    emergency_contact_name TEXT,
-    emergency_contact_phone TEXT,
+    emergency_contact_name TEXT,      -- 2026-09第六次改版:報名時改為必填
+    emergency_contact_phone TEXT,     -- 2026-09第六次改版:報名時改為必填,並做格式防呆檢查
     existing_certifications TEXT,     -- 已持有的滑雪教練證照(名稱/級數/取得年月)
     ski_experience TEXT,              -- 滑雪經驗與程度說明
     teaching_experience TEXT,         -- 教學經驗與能力說明

@@ -965,6 +965,40 @@ def admin_csia_update_registration(reg_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/csia/registrations/<int:reg_id>", methods=["DELETE"])
+@require_section("csia")
+def admin_csia_delete_registration(reg_id):
+    """後台刪除一筆CSIA報名資料(2026-09第三次改版新增,依你的指示)。硬刪除,
+    前端務必在按下這個按鈕前跳出確認對話框,避免手滑刪掉。"""
+    try:
+        csia.admin_delete_registration(reg_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/csia/registrations/<int:reg_id>/export", methods=["GET"])
+@require_section("csia")
+def admin_csia_export_registration(reg_id):
+    """後台把單一考生的整筆報名資料匯出成CSV下載(2026-09第三次改版新增,依你
+    的指示「資料每個人整筆匯出」)。"""
+    from io import BytesIO
+    try:
+        filename, csv_bytes = csia.export_registration_csv(reg_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    # 檔名含中文,用send_file(download_name=...)讓Werkzeug自動處理Content-Disposition
+    # 標頭的編碼(RFC 5987 filename*=UTF-8''...),不要自己手動組Response header字串
+    # ——HTTP header只能塞latin-1字元,中文檔名直接塞進去會丟UnicodeEncodeError,
+    # 比照既有的薪資單PDF下載(admin_download_payslip)同樣用send_file的做法。
+    return send_file(
+        BytesIO(csv_bytes),
+        as_attachment=True,
+        download_name=filename,
+        mimetype="text/csv",
+    )
+
+
 # ------------------------------------------------------------------
 # 室內滑雪:日曆可用性(某月/某日的機台狀況 + 跳台預約)
 # ------------------------------------------------------------------

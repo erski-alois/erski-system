@@ -776,6 +776,18 @@
           <input type="date" id="csiaBirthDate">
 
           <label style="margin-top:16px;">③ 聯絡資料</label>
+          <label>國家/地區</label>
+          <select id="csiaAddressCountry">
+            <option value="">請選擇</option>
+            <option value="台灣">台灣</option>
+            <option value="日本">日本</option>
+            <option value="香港">香港</option>
+            <option value="澳門">澳門</option>
+            <option value="中國">中國</option>
+            <option value="新加坡">新加坡</option>
+            <option value="馬來西亞">馬來西亞</option>
+            <option value="其他">其他</option>
+          </select>
           <label>中文通訊地址(選填)</label>
           <input id="csiaAddressChinese" placeholder="例:高雄市...">
           <label>英文地址(選填)</label>
@@ -783,7 +795,7 @@
           <label>其他地址補充(選填)</label>
           <input id="csiaAddressOther">
           <div class="row">
-            <div style="flex:1;"><label>手機號碼(選填)</label><input id="csiaMobileNumber"></div>
+            <div style="flex:1;"><label>手機號碼(選填)</label><input id="csiaMobileNumber" placeholder="例:0912345678 或 +886912345678"></div>
             <div style="flex:1;"><label>Email(選填)</label><input id="csiaEmail" type="email"></div>
           </div>
           <label>LINE ID / WhatsApp(選填)</label>
@@ -791,12 +803,12 @@
 
           <label style="margin-top:16px;">④ CSIA會員與緊急聯絡人</label>
           <div class="row">
-            <div style="flex:1;"><label>CSIA會員編號(選填)</label><input id="csiaMemberNumber"></div>
+            <div style="flex:1;"><label>CSIA會員編號</label><input id="csiaMemberNumber"></div>
             <div style="flex:1;"><label>職業(選填)</label><input id="csiaOccupation"></div>
           </div>
           <div class="row">
-            <div style="flex:1;"><label>緊急聯絡人姓名(選填)</label><input id="csiaEmergencyContactName"></div>
-            <div style="flex:1;"><label>緊急聯絡人電話(選填)</label><input id="csiaEmergencyContactPhone"></div>
+            <div style="flex:1;"><label>緊急聯絡人姓名</label><input id="csiaEmergencyContactName"></div>
+            <div style="flex:1;"><label>緊急聯絡人電話</label><input id="csiaEmergencyContactPhone" placeholder="例:0912345678 或 +886912345678"></div>
           </div>
 
           <label style="margin-top:16px;">⑤ 已持有證照 / 滑雪與教學經驗</label>
@@ -3109,6 +3121,13 @@ async function renderCsiaManageTab() {
   renderCsiaRegistrationsList(registrations);
 }
 
+function _csiaEsc(value) {
+  // 後台編輯表單的input value屬性用,把雙引號跟角括號都轉成HTML entity,避免考生
+  // 資料裡剛好有雙引號或角括號時把畫面弄壞(既有程式碼原本只轉雙引號,這裡一併
+  // 補上角括號比較保險)。
+  return String(value || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function renderCsiaRegistrationsList(registrations) {
   const wrap = document.getElementById("csiaRegistrationsWrap");
   if (!wrap) return;
@@ -3131,7 +3150,8 @@ function renderCsiaRegistrationsList(registrations) {
       <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・價格方案:${{basic:"課程本身",with_stay:"含住宿+早餐+晚餐"}[r.price_option] || r.price_option || "未選擇"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `JPY ${r.amount.toLocaleString()}${r.amount_twd === null || r.amount_twd === undefined ? "" : `(約NT$${r.amount_twd.toLocaleString()})`}`}</div>
       <div class="list-item">聯絡方式:手機 ${r.mobile_number || "-"}・Email ${r.email || "-"}・LINE/WhatsApp ${r.line_or_whatsapp_id || "-"}</div>
       <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${r.csia_member_number || "未填寫"}</div>
-      <div class="list-item">中文通訊地址:${r.address_chinese || "未填寫"}・英文地址:${r.address_english || "未填寫"}</div>
+      <div class="list-item">國家/地區:${r.address_country || "未填寫"}・中文通訊地址:${r.address_chinese || "未填寫"}・英文地址:${r.address_english || "未填寫"}</div>
+      <div class="list-item">緊急聯絡人:${r.emergency_contact_name || "未填寫"}・電話:${r.emergency_contact_phone || "未填寫"}</div>
       <div class="list-item">報考原因:${reasonText || "未填寫"}</div>
       ${r.existing_certifications ? `<div class="list-item">已持有證照:${r.existing_certifications}</div>` : ""}
       ${r.ski_experience ? `<div class="list-item">滑雪經驗:${r.ski_experience}</div>` : ""}
@@ -3162,6 +3182,85 @@ function renderCsiaRegistrationsList(registrations) {
       <input id="csiaRegNote-${r.id}" value="${(r.staff_note || "").replace(/"/g,'&quot;')}">
       <button class="small" style="margin-top:8px;" onclick="saveCsiaRegistration(${r.id})">儲存</button>
       <div id="csiaRegStatusMsg-${r.id}" style="margin-top:6px;"></div>
+
+      <div class="row" style="margin-top:10px; gap:8px;">
+        <button class="small secondary" onclick="toggleCsiaRegEdit(${r.id})">編輯考生資料</button>
+        <button class="small secondary" onclick="downloadExport('/admin/csia/registrations/${r.id}/export', 'CSIA報名資料_${r.id}.csv')">匯出這筆資料</button>
+        <button class="small" style="background:#c0392b;" onclick="deleteCsiaRegistration(${r.id})">刪除這筆報名</button>
+      </div>
+
+      <div id="csiaRegEditForm-${r.id}" style="display:none; margin-top:10px; border-top:1px solid var(--line); padding-top:10px;">
+        <div class="row">
+          <div style="flex:1;"><label>職稱/身分</label>
+            <select id="csiaEditDesignation-${r.id}">
+              <option value="" ${!r.designation?"selected":""}>未填寫</option>
+              <option value="滑雪教練" ${r.designation==="滑雪教練"?"selected":""}>滑雪教練</option>
+              <option value="尚未成為滑雪教練" ${r.designation==="尚未成為滑雪教練"?"selected":""}>尚未成為滑雪教練</option>
+            </select>
+          </div>
+          <div style="flex:1;"><label>性別</label>
+            <select id="csiaEditGender-${r.id}">
+              <option value="" ${!r.gender?"selected":""}>未填寫</option>
+              <option value="male" ${r.gender==="male"?"selected":""}>男</option>
+              <option value="female" ${r.gender==="female"?"selected":""}>女</option>
+              <option value="other" ${r.gender==="other"?"selected":""}>其他</option>
+            </select>
+          </div>
+        </div>
+        <label>中文姓名</label>
+        <input id="csiaEditChineseName-${r.id}" value="${_csiaEsc(r.chinese_name)}">
+        <div class="row">
+          <div style="flex:1;"><label>護照姓名/其他姓名</label><input id="csiaEditKanjiOrOtherName-${r.id}" value="${_csiaEsc(r.kanji_or_other_name)}"></div>
+          <div style="flex:1;"><label>考官稱呼</label><input id="csiaEditExaminerCallName-${r.id}" value="${_csiaEsc(r.examiner_call_name)}"></div>
+        </div>
+        <label>出生日期</label>
+        <input type="date" id="csiaEditBirthDate-${r.id}" value="${r.birth_date || ""}">
+        <label>國家/地區</label>
+        <select id="csiaEditAddressCountry-${r.id}">
+          <option value="" ${!r.address_country?"selected":""}>請選擇</option>
+          ${["台灣","日本","香港","澳門","中國","新加坡","馬來西亞","其他"].map(o => `<option value="${o}" ${r.address_country===o?"selected":""}>${o}</option>`).join("")}
+        </select>
+        <label>中文通訊地址</label>
+        <input id="csiaEditAddressChinese-${r.id}" value="${_csiaEsc(r.address_chinese)}">
+        <label>英文地址</label>
+        <input id="csiaEditAddressEnglish-${r.id}" value="${_csiaEsc(r.address_english)}">
+        <label>其他地址補充</label>
+        <input id="csiaEditAddressOther-${r.id}" value="${_csiaEsc(r.address_other)}">
+        <div class="row">
+          <div style="flex:1;"><label>手機號碼</label><input id="csiaEditMobileNumber-${r.id}" value="${_csiaEsc(r.mobile_number)}"></div>
+          <div style="flex:1;"><label>Email</label><input id="csiaEditEmail-${r.id}" value="${_csiaEsc(r.email)}"></div>
+        </div>
+        <label>LINE ID / WhatsApp</label>
+        <input id="csiaEditLineOrWhatsapp-${r.id}" value="${_csiaEsc(r.line_or_whatsapp_id)}">
+        <div class="row">
+          <div style="flex:1;"><label>CSIA會員編號</label><input id="csiaEditMemberNumber-${r.id}" value="${_csiaEsc(r.csia_member_number)}"></div>
+          <div style="flex:1;"><label>職業</label><input id="csiaEditOccupation-${r.id}" value="${_csiaEsc(r.occupation)}"></div>
+        </div>
+        <div class="row">
+          <div style="flex:1;"><label>緊急聯絡人姓名</label><input id="csiaEditEmergencyContactName-${r.id}" value="${_csiaEsc(r.emergency_contact_name)}"></div>
+          <div style="flex:1;"><label>緊急聯絡人電話</label><input id="csiaEditEmergencyContactPhone-${r.id}" value="${_csiaEsc(r.emergency_contact_phone)}"></div>
+        </div>
+        <label>已持有相關證照</label>
+        <textarea id="csiaEditExistingCertifications-${r.id}" rows="2">${_csiaEsc(r.existing_certifications)}</textarea>
+        <label>滑雪經驗</label>
+        <textarea id="csiaEditSkiExperience-${r.id}" rows="2">${_csiaEsc(r.ski_experience)}</textarea>
+        <label>教學經驗</label>
+        <textarea id="csiaEditTeachingExperience-${r.id}" rows="2">${_csiaEsc(r.teaching_experience)}</textarea>
+        <label>報考原因「其他」補充</label>
+        <input id="csiaEditReasonOther-${r.id}" value="${_csiaEsc(r.reason_other)}">
+        <div class="row">
+          <div style="flex:1;"><label>價格方案</label>
+            <select id="csiaEditPriceOption-${r.id}">
+              <option value="basic" ${r.price_option==="basic"?"selected":""}>課程本身</option>
+              <option value="with_stay" ${r.price_option==="with_stay"?"selected":""}>含住宿+早餐+晚餐</option>
+            </select>
+          </div>
+          <div style="flex:1;"><label>報名費(JPY,留空=金額洽詢)</label><input type="number" id="csiaEditAmount-${r.id}" value="${r.amount === null || r.amount === undefined ? "" : r.amount}"></div>
+        </div>
+        <p class="note">修改CSIA會員編號/緊急聯絡人姓名/電話時不能清空(必填);手機號碼/緊急聯絡人電話有填的話會做格式檢查。</p>
+        <button class="small" style="margin-top:8px;" onclick="saveCsiaRegistrationFull(${r.id})">儲存考生資料修改</button>
+        <div id="csiaRegEditStatusMsg-${r.id}" style="margin-top:6px;"></div>
+      </div>
     </div>`;
   }).join("");
 }
@@ -3228,6 +3327,57 @@ async function saveCsiaRegistration(regId) {
   const statusEl = document.getElementById(`csiaRegStatusMsg-${regId}`);
   statusEl.innerHTML = ok ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">${data.error}</span>`;
   if (ok) renderCsiaManageTab();
+}
+
+function toggleCsiaRegEdit(regId) {
+  const el = document.getElementById(`csiaRegEditForm-${regId}`);
+  if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function saveCsiaRegistrationFull(regId) {
+  const statusEl = document.getElementById(`csiaRegEditStatusMsg-${regId}`);
+  const val = id => document.getElementById(id).value.trim();
+  const payload = {
+    designation: document.getElementById(`csiaEditDesignation-${regId}`).value || null,
+    gender: document.getElementById(`csiaEditGender-${regId}`).value || null,
+    chinese_name: val(`csiaEditChineseName-${regId}`),
+    kanji_or_other_name: val(`csiaEditKanjiOrOtherName-${regId}`) || null,
+    examiner_call_name: val(`csiaEditExaminerCallName-${regId}`) || null,
+    birth_date: document.getElementById(`csiaEditBirthDate-${regId}`).value || null,
+    address_country: document.getElementById(`csiaEditAddressCountry-${regId}`).value || null,
+    address_chinese: val(`csiaEditAddressChinese-${regId}`) || null,
+    address_english: val(`csiaEditAddressEnglish-${regId}`) || null,
+    address_other: val(`csiaEditAddressOther-${regId}`) || null,
+    mobile_number: val(`csiaEditMobileNumber-${regId}`) || null,
+    email: val(`csiaEditEmail-${regId}`) || null,
+    line_or_whatsapp_id: val(`csiaEditLineOrWhatsapp-${regId}`) || null,
+    csia_member_number: val(`csiaEditMemberNumber-${regId}`),
+    occupation: val(`csiaEditOccupation-${regId}`) || null,
+    emergency_contact_name: val(`csiaEditEmergencyContactName-${regId}`),
+    emergency_contact_phone: val(`csiaEditEmergencyContactPhone-${regId}`),
+    existing_certifications: val(`csiaEditExistingCertifications-${regId}`) || null,
+    ski_experience: val(`csiaEditSkiExperience-${regId}`) || null,
+    teaching_experience: val(`csiaEditTeachingExperience-${regId}`) || null,
+    reason_other: val(`csiaEditReasonOther-${regId}`) || null,
+    price_option: document.getElementById(`csiaEditPriceOption-${regId}`).value,
+    amount: (() => { const raw = document.getElementById(`csiaEditAmount-${regId}`).value; return raw === "" ? null : parseInt(raw); })(),
+  };
+  if (payload.mobile_number && !_csiaValidatePhoneFormat(payload.mobile_number)) {
+    statusEl.innerHTML = `<span class="status-tag warn">手機號碼格式不正確</span>`; return;
+  }
+  if (!_csiaValidatePhoneFormat(payload.emergency_contact_phone)) {
+    statusEl.innerHTML = `<span class="status-tag warn">緊急聯絡人電話格式不正確</span>`; return;
+  }
+  const { ok, data } = await api(`/admin/csia/registrations/${regId}`, { method: "PUT", body: JSON.stringify(payload) });
+  statusEl.innerHTML = ok ? `<span class="status-tag ok">考生資料已儲存</span>` : `<span class="status-tag warn">${data.error}</span>`;
+  if (ok) renderCsiaManageTab();
+}
+
+async function deleteCsiaRegistration(regId) {
+  if (!confirm("確定要刪除這筆報名資料嗎?刪除後無法復原(如果只是要取消報名但保留紀錄,請改用上面的報名狀態選單改成「已取消」)。")) return;
+  const { ok, data } = await api(`/admin/csia/registrations/${regId}`, { method: "DELETE" });
+  if (!ok) { alert(data.error || "刪除失敗"); return; }
+  renderCsiaManageTab();
 }
 
 let staffAllMembers = [];
@@ -5232,6 +5382,16 @@ async function onCsiaWaiverFileChange() {
   document.getElementById("csiaWaiverFilePreview").textContent = `已選擇檔案:${file.name}`;
 }
 
+function _csiaValidatePhoneFormat(value) {
+  // 跟後端csia.py的_validate_phone_format同一套規則:允許空格/破折號/括號分隔、
+  // 開頭可以有一個+國碼,拿掉這些之後剩下的必須全部是數字,長度8~15碼。空字串
+  // 直接算通過(這裡只負責「有填的話格式對不對」,是否必填由呼叫端另外判斷)。
+  if (!value) return true;
+  const cleaned = value.trim().replace(/[\s\-()]/g, "");
+  const digits = cleaned.startsWith("+") ? cleaned.slice(1) : cleaned;
+  return /^[0-9]+$/.test(digits) && digits.length >= 8 && digits.length <= 15;
+}
+
 async function submitCsiaRegistration() {
   const statusEl = document.getElementById("csiaRegisterStatus");
   if (!currentMemberToken) { statusEl.innerHTML = `<span class="status-tag warn">請先登入會員帳號才能報名</span>`; return; }
@@ -5241,6 +5401,17 @@ async function submitCsiaRegistration() {
   if (!priceOption) { statusEl.innerHTML = `<span class="status-tag warn">請選擇價格方案</span>`; return; }
   const chineseName = document.getElementById("csiaChineseName").value.trim();
   if (!chineseName) { statusEl.innerHTML = `<span class="status-tag warn">請填寫中文姓名</span>`; return; }
+  const addressCountry = document.getElementById("csiaAddressCountry").value;
+  if (!addressCountry) { statusEl.innerHTML = `<span class="status-tag warn">請選擇國家/地區</span>`; return; }
+  const memberNumber = document.getElementById("csiaMemberNumber").value.trim();
+  if (!memberNumber) { statusEl.innerHTML = `<span class="status-tag warn">請填寫CSIA會員編號</span>`; return; }
+  const emergencyName = document.getElementById("csiaEmergencyContactName").value.trim();
+  if (!emergencyName) { statusEl.innerHTML = `<span class="status-tag warn">請填寫緊急聯絡人姓名</span>`; return; }
+  const emergencyPhone = document.getElementById("csiaEmergencyContactPhone").value.trim();
+  if (!emergencyPhone) { statusEl.innerHTML = `<span class="status-tag warn">請填寫緊急聯絡人電話</span>`; return; }
+  if (!_csiaValidatePhoneFormat(emergencyPhone)) { statusEl.innerHTML = `<span class="status-tag warn">緊急聯絡人電話格式不正確,請確認只包含數字(可加國碼+),長度需在8~15碼之間</span>`; return; }
+  const mobileNumber = document.getElementById("csiaMobileNumber").value.trim();
+  if (mobileNumber && !_csiaValidatePhoneFormat(mobileNumber)) { statusEl.innerHTML = `<span class="status-tag warn">手機號碼格式不正確,請確認只包含數字(可加國碼+),長度需在8~15碼之間</span>`; return; }
 
   const reasons = Array.from(document.querySelectorAll(".csiaReasonCheckbox")).filter(el => el.checked).map(el => el.value);
 
@@ -5253,16 +5424,17 @@ async function submitCsiaRegistration() {
     examiner_call_name: document.getElementById("csiaExaminerCallName").value || null,
     birth_date: document.getElementById("csiaBirthDate").value || null,
     gender: document.getElementById("csiaGender").value || null,
+    address_country: addressCountry,
     address_chinese: document.getElementById("csiaAddressChinese").value || null,
     address_english: document.getElementById("csiaAddressEnglish").value || null,
     address_other: document.getElementById("csiaAddressOther").value || null,
-    mobile_number: document.getElementById("csiaMobileNumber").value || null,
+    mobile_number: mobileNumber || null,
     email: document.getElementById("csiaEmail").value || null,
     line_or_whatsapp_id: document.getElementById("csiaLineOrWhatsapp").value || null,
-    csia_member_number: document.getElementById("csiaMemberNumber").value || null,
+    csia_member_number: memberNumber,
     occupation: document.getElementById("csiaOccupation").value || null,
-    emergency_contact_name: document.getElementById("csiaEmergencyContactName").value || null,
-    emergency_contact_phone: document.getElementById("csiaEmergencyContactPhone").value || null,
+    emergency_contact_name: emergencyName,
+    emergency_contact_phone: emergencyPhone,
     existing_certifications: document.getElementById("csiaExistingCertifications").value || null,
     ski_experience: document.getElementById("csiaSkiExperience").value || null,
     teaching_experience: document.getElementById("csiaTeachingExperience").value || null,
