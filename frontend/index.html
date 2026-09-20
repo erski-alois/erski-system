@@ -718,12 +718,19 @@
       <div id="page-csia" class="page">
         <div class="card">
           <h3>CSIA滑雪教練考照專區</h3>
-          <p class="note">
-            場地:宮城鬼首滑雪場(Onikoube, Miyagi)。課程語言依場次不同分為中文翻譯班/英文班,
-            開班人數<b>5人成班・上限8人</b>,交通與住宿請自行安排,ER Ski不代訂。<br>
-            <b>Level 1</b>:須年滿18歲、具備一定滑行程度;<b>Level 2</b>:須已持有CSIA Level 1證照。
+          <p class="note" style="margin:0 0 6px;"><b>場地</b>:宮城鬼首滑雪場(Onikoube, Miyagi)。</p>
+          <p class="note" style="margin:0 0 6px;">
+            <b>考試資格</b>:<br>
+            Level 1:須年滿18歲、具備一定滑行程度<br>
+            Level 2:須已持有CSIA Level 1證照<br>
             正式資格條件請依CSIA官方規定為準,報名前請詳閱下方各場次說明。
           </p>
+          <p class="note" style="margin:0 0 6px;">
+            <b>開班人數</b>:開班人數<b>5人成班・上限8人</b>,課程語言依場次不同分為中文翻譯班/英文班。
+          </p>
+          <p class="note" style="margin:0 0 6px;"><b>住宿</b>:ER Ski另有含住宿方案(1泊2食),詳細請參考報名內頁。</p>
+          <p class="note" style="margin:0;"><b>交通</b>:請自行安排,雪場有接駁車,時刻表如下:</p>
+          <img src="/assets/csia-shuttle-schedule.png" alt="雪場接駁車時刻表" style="max-width:100%; border-radius:8px; margin-top:8px; border:1px solid var(--line);">
         </div>
 
         <div class="card">
@@ -748,12 +755,18 @@
 
           <label style="margin-top:16px;">② 考生基本資料</label>
           <div class="row">
-            <div style="flex:1;"><label>職稱/身分(選填)</label><input id="csiaDesignation" placeholder="例:滑雪教練/學生"></div>
+            <div style="flex:1;"><label>職稱/身分(選填)</label>
+              <select id="csiaDesignation">
+                <option value="">未填寫</option>
+                <option value="滑雪教練">滑雪教練</option>
+                <option value="尚未成為滑雪教練">尚未成為滑雪教練</option>
+              </select>
+            </div>
             <div style="flex:1;"><label>性別</label>
               <select id="csiaGender"><option value="">未填寫</option><option value="male">男</option><option value="female">女</option><option value="other">其他</option></select>
             </div>
           </div>
-          <label>中文姓名<span style="color:#c0392b;">*</span></label>
+          <label>中文姓名</label>
           <input id="csiaChineseName" placeholder="請填寫身分證上的中文姓名">
           <div class="row">
             <div style="flex:1;"><label>護照姓名/其他姓名(選填)</label><input id="csiaKanjiOrOtherName"></div>
@@ -763,17 +776,10 @@
           <input type="date" id="csiaBirthDate">
 
           <label style="margin-top:16px;">③ 聯絡資料</label>
-          <label>通訊地址(中文,選填)</label>
+          <label>中文通訊地址(選填)</label>
           <input id="csiaAddressChinese" placeholder="例:高雄市...">
-          <div class="row">
-            <div style="flex:1;"><label>Street(選填)</label><input id="csiaAddressStreet"></div>
-            <div style="flex:1;"><label>City(選填)</label><input id="csiaAddressCity"></div>
-          </div>
-          <div class="row">
-            <div style="flex:1;"><label>Province/State(選填)</label><input id="csiaAddressProvince"></div>
-            <div style="flex:1;"><label>Country(選填)</label><input id="csiaAddressCountry"></div>
-            <div style="flex:1;"><label>Postal Code(選填)</label><input id="csiaAddressPostalCode"></div>
-          </div>
+          <label>英文地址(選填)</label>
+          <input id="csiaAddressEnglish" placeholder="e.g. No. 1, XX Rd., XX City, Taiwan">
           <label>其他地址補充(選填)</label>
           <input id="csiaAddressOther">
           <div class="row">
@@ -812,10 +818,19 @@
           <input type="file" accept="image/*,application/pdf" id="csiaMembershipCardFile" onchange="onCsiaMembershipCardFileChange()">
           <div id="csiaMembershipCardPreview" class="note"></div>
 
+          <label style="margin-top:16px;">⑦-2 CSIA Waiver線上填寫+上傳</label>
+          <p class="note" style="margin:0 0 6px;">
+            請先點此前往CSIA官方Waiver線上填寫:
+            <a href="https://csiajapan.com/csiawaiver/" target="_blank" rel="noopener">https://csiajapan.com/csiawaiver/</a>
+            ,填寫完成後,請把完成畫面或收到的確認檔案上傳到這裡。
+          </p>
+          <input type="file" accept="image/*,application/pdf" id="csiaWaiverFile" onchange="onCsiaWaiverFileChange()">
+          <div id="csiaWaiverFilePreview" class="note"></div>
+
           <label style="margin-top:16px;">⑧ 確認事項</label>
           <label style="display:flex; align-items:center; gap:8px;">
             <input type="checkbox" id="csiaWaiverConfirmed" style="width:auto;">
-            我已完成CSIA Waiver線上填寫
+            我已完成CSIA Waiver線上填寫,並已上傳完成證明
           </label>
           <label style="display:flex; align-items:center; gap:8px;">
             <input type="checkbox" id="csiaMembershipActionConfirmed" style="width:auto;">
@@ -3116,11 +3131,21 @@ function renderCsiaRegistrationsList(registrations) {
       <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・價格方案:${{basic:"課程本身",with_stay:"含住宿+早餐+晚餐"}[r.price_option] || r.price_option || "未選擇"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `JPY ${r.amount.toLocaleString()}${r.amount_twd === null || r.amount_twd === undefined ? "" : `(約NT$${r.amount_twd.toLocaleString()})`}`}</div>
       <div class="list-item">聯絡方式:手機 ${r.mobile_number || "-"}・Email ${r.email || "-"}・LINE/WhatsApp ${r.line_or_whatsapp_id || "-"}</div>
       <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${r.csia_member_number || "未填寫"}</div>
+      <div class="list-item">中文通訊地址:${r.address_chinese || "未填寫"}・英文地址:${r.address_english || "未填寫"}</div>
       <div class="list-item">報考原因:${reasonText || "未填寫"}</div>
       ${r.existing_certifications ? `<div class="list-item">已持有證照:${r.existing_certifications}</div>` : ""}
       ${r.ski_experience ? `<div class="list-item">滑雪經驗:${r.ski_experience}</div>` : ""}
       ${r.teaching_experience ? `<div class="list-item">教學經驗:${r.teaching_experience}</div>` : ""}
-      ${r.membership_card_image ? `<div style="margin-top:6px;"><img src="${r.membership_card_image}" alt="會員卡" style="width:140px; max-height:100px; object-fit:contain; border-radius:6px; border:1px solid var(--line); display:block;"></div>` : `<div class="note" style="margin-top:6px;">尚未上傳會員卡</div>`}
+      <div class="row" style="margin-top:6px; gap:16px;">
+        <div>
+          <div class="note">會員卡</div>
+          ${r.membership_card_image ? `<img src="${r.membership_card_image}" alt="會員卡" style="width:140px; max-height:100px; object-fit:contain; border-radius:6px; border:1px solid var(--line); display:block;">` : `<div class="note">尚未上傳</div>`}
+        </div>
+        <div>
+          <div class="note">CSIA Waiver</div>
+          ${r.waiver_image ? `<img src="${r.waiver_image}" alt="Waiver" style="width:140px; max-height:100px; object-fit:contain; border-radius:6px; border:1px solid var(--line); display:block;">` : `<div class="note">尚未上傳</div>`}
+        </div>
+      </div>
       <div class="row" style="margin-top:8px;">
         <select id="csiaRegPayment-${r.id}">
           <option value="unpaid" ${r.payment_status==="unpaid"?"selected":""}>未付款</option>
@@ -5071,6 +5096,7 @@ const CSIA_REASON_OPTIONS = [
 ];
 let _csiaCourses = [];
 let _csiaMembershipCardData = null; // {file_name, mime_type, image} 或 null
+let _csiaWaiverData = null; // {file_name, mime_type, image} 或 null,CSIA Waiver完成證明檔案
 
 function _csiaJpyTwdLabel(jpy, twd) {
   // 日圓金額為null時代表「金額洽詢」,新台幣是用1:5匯率換算的參考金額,不是正式報價
@@ -5196,6 +5222,16 @@ async function onCsiaMembershipCardFileChange() {
   document.getElementById("csiaMembershipCardPreview").textContent = `已選擇檔案:${file.name}`;
 }
 
+async function onCsiaWaiverFileChange() {
+  // 存放/讀取方式完全比照上面的onCsiaMembershipCardFileChange(會員卡上傳)。
+  const input = document.getElementById("csiaWaiverFile");
+  const file = input.files && input.files[0];
+  if (!file) { _csiaWaiverData = null; document.getElementById("csiaWaiverFilePreview").textContent = ""; return; }
+  const image = await _readFileAsDataUrl(file);
+  _csiaWaiverData = { file_name: file.name, mime_type: file.type, image };
+  document.getElementById("csiaWaiverFilePreview").textContent = `已選擇檔案:${file.name}`;
+}
+
 async function submitCsiaRegistration() {
   const statusEl = document.getElementById("csiaRegisterStatus");
   if (!currentMemberToken) { statusEl.innerHTML = `<span class="status-tag warn">請先登入會員帳號才能報名</span>`; return; }
@@ -5218,11 +5254,7 @@ async function submitCsiaRegistration() {
     birth_date: document.getElementById("csiaBirthDate").value || null,
     gender: document.getElementById("csiaGender").value || null,
     address_chinese: document.getElementById("csiaAddressChinese").value || null,
-    address_street: document.getElementById("csiaAddressStreet").value || null,
-    address_city: document.getElementById("csiaAddressCity").value || null,
-    address_country: document.getElementById("csiaAddressCountry").value || null,
-    address_province: document.getElementById("csiaAddressProvince").value || null,
-    address_postal_code: document.getElementById("csiaAddressPostalCode").value || null,
+    address_english: document.getElementById("csiaAddressEnglish").value || null,
     address_other: document.getElementById("csiaAddressOther").value || null,
     mobile_number: document.getElementById("csiaMobileNumber").value || null,
     email: document.getElementById("csiaEmail").value || null,
@@ -5242,6 +5274,9 @@ async function submitCsiaRegistration() {
     membership_card_file_name: _csiaMembershipCardData ? _csiaMembershipCardData.file_name : null,
     membership_card_mime_type: _csiaMembershipCardData ? _csiaMembershipCardData.mime_type : null,
     membership_card_image: _csiaMembershipCardData ? _csiaMembershipCardData.image : null,
+    waiver_file_name: _csiaWaiverData ? _csiaWaiverData.file_name : null,
+    waiver_mime_type: _csiaWaiverData ? _csiaWaiverData.mime_type : null,
+    waiver_image: _csiaWaiverData ? _csiaWaiverData.image : null,
   };
 
   const { ok, data } = await api("/csia/registrations", { method: "POST", body: JSON.stringify(payload) });

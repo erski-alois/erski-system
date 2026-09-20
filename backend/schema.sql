@@ -691,18 +691,21 @@ CREATE TABLE IF NOT EXISTS csia_registrations (
     membership_card_file_name TEXT,
     membership_card_mime_type TEXT,
     membership_card_image TEXT,       -- 2026/27 Current Paid CSIA Membership Card,base64(含data URI前綴)
-    designation TEXT,                 -- 稱謂:Mx./Mr./Ms./Miss/Mrs./其他
+    waiver_file_name TEXT,
+    waiver_mime_type TEXT,
+    waiver_image TEXT,                -- 2026-09第五次改版新增:CSIA官方Waiver(https://csiajapan.com/csiawaiver/)
+                                       -- 線上填寫完成後,學員上傳回來的檔案,base64(含data URI前綴),
+                                       -- 存放方式比照membership_card_image
+    designation TEXT,                 -- 職稱/身分,前端改成下拉選單:滑雪教練/尚未成為滑雪教練
     chinese_name TEXT NOT NULL,
     kanji_or_other_name TEXT,         -- 日文漢字或其他文字姓名(若有)
     examiner_call_name TEXT,          -- 希望考官如何稱呼(外文)
     birth_date TEXT,                  -- YYYY-MM-DD
     gender TEXT CHECK(gender IN ('male','female','other')),
-    address_chinese TEXT,
-    address_street TEXT,              -- 外文地址門牌號碼和街道名稱
-    address_city TEXT,
-    address_country TEXT,
-    address_province TEXT,
-    address_postal_code TEXT,
+    address_chinese TEXT,             -- 中文通訊地址
+    address_english TEXT,             -- 2026-09第五次改版:原本Street/City/Province/Country/Postal Code
+                                       -- 5個子欄位整合成這一欄英文地址(當時production還是0筆報名資料,
+                                       -- 確認可以安全整併,不會影響任何既有報名紀錄)
     address_other TEXT,               -- 其他地址,如PO Box
     mobile_number TEXT,               -- 含國碼,不含開頭+
     email TEXT,

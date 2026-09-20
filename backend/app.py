@@ -151,6 +151,13 @@ def serve_er_ski_logo():
     return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "er-ski-logo.png", mimetype="image/png")
 
 
+@app.route("/assets/csia-shuttle-schedule.png")
+def serve_csia_shuttle_schedule():
+    # CSIA滑雪教練考照專區「交通」說明區塊用的雪場接駁車時刻表圖片,比照上面
+    # er-ski-logo.png同樣的個別開路由寫法。
+    return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "csia-shuttle-schedule.png", mimetype="image/png")
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
