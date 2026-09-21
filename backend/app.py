@@ -17,6 +17,26 @@ import config
 import csia
 import storage_r2
 
+# ------------------------------------------------------------------
+# Sentry錯誤監控:必須在Flask app建立「之前」呼叫sentry_sdk.init()，
+# 這樣才能自動攔截到之後所有request處理過程中發生的未預期例外並回報。
+# 沒有設定SENTRY_DSN環境變數(config.SENTRY_CONFIGURED為False)時，
+# 完全不會執行這段，不影響任何現有功能，本機開發預設就是這個狀態。
+# ------------------------------------------------------------------
+if config.SENTRY_CONFIGURED:
+    import sentry_sdk
+    from sentry_sdk.integrations.flask import FlaskIntegration
+
+    sentry_sdk.init(
+        dsn=config.SENTRY_DSN,
+        integrations=[FlaskIntegration()],
+        environment=config.ENV,
+        # 只回報錯誤，不額外收集效能追蹤資料(traces_sample_rate=0)，
+        # 避免免費方案的用量被效能監控吃掉，之後有需要再調整。
+        traces_sample_rate=0.0,
+        send_default_pii=False,  # 不自動夾帶使用者IP/request headers等個資，符合最小蒐集原則
+    )
+
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
 # 2026-09發現的問題:Render(以及大多數雲端平台)是在自己的邊緣負載平衡器

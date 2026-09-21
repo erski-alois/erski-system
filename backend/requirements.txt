@@ -11,6 +11,8 @@ SQLAlchemy==2.0.52        # alembic的相依套件(這個專案本身沒有用SQ
 python-dotenv==1.2.2      # 本機開發時從.env檔案讀環境變數用(見config.py)
 boto3==1.35.99            # 用來操作Cloudflare R2(S3相容API)，見storage_r2.py；
                            # 沒設定R2環境變數也不影響其他功能運作
+sentry-sdk[flask]==2.40.0 # 錯誤監控(Sentry)，見app.py開頭的sentry_sdk.init()；
+                           # 沒設定SENTRY_DSN環境變數就完全不會啟用，不影響其他功能運作
 
 # 正式上線可視需要再另外安裝(非必要，本次未安裝/未整合):
 # flask-cors        # 若前後端改成分開部署(不同網域)才需要，目前前後端同一個Flask服務一起出，不需要

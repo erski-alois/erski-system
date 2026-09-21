@@ -86,6 +86,13 @@ R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
 R2_PUBLIC_BASE_URL = os.environ.get("R2_PUBLIC_BASE_URL", "").rstrip("/")
 R2_CONFIGURED = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME)
 
+# ------------------------------------------------------------------
+# Sentry(錯誤監控)。尚未申請/設定前是None，app.py開頭的sentry_sdk.init()
+# 就完全不會執行，系統照常運作，只是不會有「未預期錯誤自動通知」這個功能。
+# ------------------------------------------------------------------
+SENTRY_DSN = os.environ.get("SENTRY_DSN")
+SENTRY_CONFIGURED = bool(SENTRY_DSN)
+
 
 def validate_for_production():
     """正式環境啟動時可以呼叫這個函式，及早發現「忘記設定環境變數」的問題，
@@ -110,6 +117,9 @@ def validate_for_production():
         problems.append("Cloudflare R2憑證未設定(R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/"
                          "R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME)，圖片上傳功能會繼續把檔案"
                          "直接存進資料庫，可以先這樣運作，之後有空再設定R2也不影響現有資料")
+    if not SENTRY_CONFIGURED:
+        problems.append("SENTRY_DSN未設定，系統出錯時不會自動通知，只能等客戶回報才知道，"
+                         "建議盡快到sentry.io申請免費帳號並設定")
     return problems
 
 
