@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, send_from_directory, Response, send_file
+from flask import Flask, request, jsonify, send_from_directory, Response, send_file, redirect
+import urllib.parse
 from werkzeug.middleware.proxy_fix import ProxyFix
 import functools
 import os
@@ -391,6 +392,88 @@ def oauth_login():
     if not result.get("is_new") and result.get("member"):
         result["token"] = authtoken.issue_member_token(result["member"]["id"])
     return jsonify(result)
+
+
+# ------------------------------------------------------------------
+# 2026-09新增:Google正式OAuth 2.0登入,取代上面oauth_login()裡providers='google'的
+# 模擬邏輯(該模擬邏輯保留給LINE/Apple繼續用,等之後申請好對應憑證再比照這裡補上)。
+#
+# 前端Google登入按鈕依/api/pricing回傳的google_oauth_available旗標決定行為:
+#   - true(這幾支路由已經接上真正的Google憑證):直接把瀏覽器導到/auth/google/login
+#   - false(還沒設定GOOGLE_OAUTH_CLIENT_ID/SECRET這兩個環境變數):繼續呼叫
+#     /auth/oauth-login走原本的模擬流程,行為完全不變
+# 兩者共存,不會互相影響,之後撤掉模擬邏輯也不急著這次做。
+# ------------------------------------------------------------------
+@app.route("/api/auth/google/login", methods=["GET"])
+def google_oauth_start():
+    if not config.GOOGLE_OAUTH_CONFIGURED:
+        return jsonify({"error": "Google登入尚未設定完成,請聯絡系統管理員"}), 503
+    state = authtoken.issue_oauth_state("google")
+    return redirect(auth.build_google_auth_url(state))
+
+
+@app.route("/api/auth/google/callback", methods=["GET"])
+def google_oauth_callback():
+    """Google的同意畫面完成後,使用者的瀏覽器會被Google導回這裡(GET請求,帶著
+    code跟state,不是前端fetch呼叫)。因為這是瀏覽器直接導頁進來的,沒辦法直接回
+    JSON給前端用,做法是:處理完登入邏輯後,把瀏覽器"再導回"前端首頁,並在網址列
+    帶上一組60秒內有效的「交換碼」(exchange_code);前端頁面載入時偵測到網址列
+    有這個參數,會馬上呼叫下面的/auth/google/exchange換成真正的會員token,換到之後
+    立刻把網址列這個參數清掉,所以使用者實際上不會感覺到中間多轉了一手。"""
+    frontend_base = request.url_root.rstrip("/")
+
+    if request.args.get("error"):
+        return redirect(f"{frontend_base}/?oauth_error=google_denied")
+
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code or not authtoken.verify_oauth_state(state, "google"):
+        return redirect(f"{frontend_base}/?oauth_error=state_invalid")
+
+    try:
+        info = auth.exchange_google_code(code)
+    except Exception:
+        # 常見原因:code已經被用過一次(使用者重新整理callback頁面)、逾時、或這個
+        # 開發/測試環境根本連不到Google的伺服器。不把詳細例外內容洩露給使用者,
+        # 但Render的Logs分頁看得到完整traceback,方便之後排查。
+        app.logger.exception("Google OAuth code交換失敗")
+        return redirect(f"{frontend_base}/?oauth_error=google_exchange_failed")
+
+    result = auth.google_oauth_login(info["email"], info["name"])
+    if result["is_new"]:
+        exchange_payload = {"is_new": True, "email": result["prefill_email"], "name": result["prefill_name"]}
+    else:
+        exchange_payload = {"is_new": False, "member_id": result["member"]["id"]}
+    exchange_code = authtoken.issue_oauth_exchange_code(exchange_payload)
+    return redirect(f"{frontend_base}/?google_login=1&exchange_code={urllib.parse.quote(exchange_code)}")
+
+
+@app.route("/api/auth/google/exchange", methods=["POST"])
+def google_oauth_exchange():
+    d = request.json or {}
+    payload = authtoken.verify_oauth_exchange_code(d.get("exchange_code"))
+    if not payload:
+        return jsonify({"error": "登入連結已過期或已使用過,請重新點擊Google登入"}), 401
+
+    if payload.get("is_new"):
+        return jsonify({
+            "is_new": True,
+            "prefill_email": payload.get("email"),
+            "prefill_name": payload.get("name"),
+        })
+
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE id=?", (payload["member_id"],)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "找不到此會員"}), 404
+    member = dict(row)
+    member.pop("password_hash", None)
+    return jsonify({
+        "is_new": False,
+        "member": member,
+        "token": authtoken.issue_member_token(member["id"]),
+    })
 
 
 @app.route("/api/auth/member-login", methods=["POST"])
@@ -930,6 +1013,12 @@ def get_pricing():
         # 真的走到刷卡頁面。前端要依這個旗標決定要不要顯示「線上刷卡」「網路ATM」這兩個選項,
         # 避免客戶選了之後訂單被誤標記為已付款、但校方實際上沒收到錢。
         "online_card_available": config.ECPAY_CONFIGURED,
+        # 2026-09新增:Google/LINE是否真的串接了正式OAuth憑證。前端Google登入按鈕
+        # 依這個旗標決定要導去真正的Google登入(/auth/google/login),還是繼續用
+        # 原本的模擬按鈕(/auth/oauth-login)。LINE之後申請好憑證再比照補上後端邏輯,
+        # 這裡先把旗標準備好,現在一律是false(還沒設定LINE_CHANNEL_ID/SECRET)。
+        "google_oauth_available": config.GOOGLE_OAUTH_CONFIGURED,
+        "line_oauth_available": config.LINE_OAUTH_CONFIGURED,
     })
 
 

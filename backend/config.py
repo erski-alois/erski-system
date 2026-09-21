@@ -48,8 +48,16 @@ LINE_CHANNEL_ID = os.environ.get("LINE_CHANNEL_ID")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
-OAUTH_CONFIGURED = bool((LINE_CHANNEL_ID and LINE_CHANNEL_SECRET) or
-                         (GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET))
+# Google Cloud Console「已授權的重新導向URI」填的網址必須跟這裡完全一致(逐字元比對,
+# 差一個斜線都會被Google拒絕)。預設值是正式站網址,本機開發環境沒辦法真的完成整個
+# OAuth流程(Google Console只登記了正式網址一筆,而且這個開發環境對外連線也連不到
+# Google的伺服器),要在本機測試需要另外用環境變數覆蓋成ngrok之類的臨時對外網址。
+GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
+    "GOOGLE_OAUTH_REDIRECT_URI", "https://app.erskischool.com/api/auth/google/callback"
+)
+GOOGLE_OAUTH_CONFIGURED = bool(GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)
+LINE_OAUTH_CONFIGURED = bool(LINE_CHANNEL_ID and LINE_CHANNEL_SECRET)
+OAUTH_CONFIGURED = bool(GOOGLE_OAUTH_CONFIGURED or LINE_OAUTH_CONFIGURED)
 
 # ------------------------------------------------------------------
 # Flask本身的密鑰，用來簽發會員/員工登入token(見authtoken.py)。

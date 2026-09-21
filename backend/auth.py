@@ -4,9 +4,15 @@
 """
 
 import hashlib
+import json
 import re
 import secrets
+import urllib.error
+import urllib.parse
+import urllib.request
 from werkzeug.security import generate_password_hash, check_password_hash
+
+import config
 from db import get_conn
 
 # 註冊資料格式驗證(2026-09:依需求「註冊手機得防止客人輸入無效號碼及無效Email」新增)。
@@ -77,6 +83,83 @@ def mock_oauth_login(provider: str, mock_external_id: str) -> dict:
     if row:
         return {"is_new": False, "member": dict(row)}
     return {"is_new": True, "member": None}
+
+
+# ------------------------------------------------------------------
+# 2026-09新增:Google正式OAuth 2.0登入(取代上面mock_oauth_login的google分支)。
+# LINE Login之後申請好憑證再用同樣的模式補上,目前LINE/Apple按鈕維持模擬。
+# ------------------------------------------------------------------
+_GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+def build_google_auth_url(state: str) -> str:
+    """組出導向Google OAuth同意畫面的網址,給/api/auth/google/login這支路由用。"""
+    params = {
+        "client_id": config.GOOGLE_OAUTH_CLIENT_ID,
+        "redirect_uri": config.GOOGLE_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    return f"{_GOOGLE_AUTH_ENDPOINT}?{urllib.parse.urlencode(params)}"
+
+
+def exchange_google_code(code: str) -> dict:
+    """用Google導回來的授權碼(code)跟Google換取access token,再用access token查詢
+    使用者資料(email/是否已驗證過/姓名)。這裡故意不用第三方套件(例如requests或
+    google-auth),改用Python內建的urllib,不用因為這個功能多裝一個套件。任何一步
+    失敗(網路連不到Google、Google拒絕這組code、回應格式不對)都會直接丟出例外,
+    呼叫端(app.py的callback路由)接住後導回前端顯示錯誤,不會讓使用者卡在空白頁。
+
+    只信任這裡回傳的email(後端直接跟Google要來的、Google保證已驗證過的值),
+    不使用/不信任前端傳來的任何欄位——這是跟mock_oauth_login最大的差異,mock版本
+    是直接相信前端傳的mock_external_id,正式版絕對不能這樣做。"""
+    token_payload = urllib.parse.urlencode({
+        "code": code,
+        "client_id": config.GOOGLE_OAUTH_CLIENT_ID,
+        "client_secret": config.GOOGLE_OAUTH_CLIENT_SECRET,
+        "redirect_uri": config.GOOGLE_OAUTH_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }).encode("utf-8")
+    token_req = urllib.request.Request(_GOOGLE_TOKEN_ENDPOINT, data=token_payload, method="POST")
+    with urllib.request.urlopen(token_req, timeout=10) as resp:
+        token_data = json.loads(resp.read().decode("utf-8"))
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise ValueError("Google沒有回傳access_token,可能是授權碼已經過期或被使用過")
+
+    userinfo_req = urllib.request.Request(
+        _GOOGLE_USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}
+    )
+    with urllib.request.urlopen(userinfo_req, timeout=10) as resp:
+        userinfo = json.loads(resp.read().decode("utf-8"))
+
+    if not userinfo.get("email") or not userinfo.get("email_verified"):
+        raise ValueError("這個Google帳號沒有已驗證的Email,無法用來登入")
+
+    return {
+        "email": userinfo["email"],
+        "name": userinfo.get("name") or "",
+        "google_sub": userinfo.get("sub"),
+    }
+
+
+def google_oauth_login(email: str, name: str = None) -> dict:
+    """正式Google登入的會員比對邏輯。email是exchange_google_code()查回來、已經過
+    Google驗證的真實資料,不是前端聲稱的值。查詢邏輯維持跟mock_oauth_login一致:
+    用email比對members資料表,找到=登入成功,找不到=進入註冊流程(把Google提供的
+    email/姓名預先帶入註冊表單,使用者只需要再補手機號碼即可完成註冊)。"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE email = ?", (email,)).fetchone()
+    conn.close()
+    if row:
+        return {"is_new": False, "member": dict(row)}
+    return {"is_new": True, "member": None, "prefill_email": email, "prefill_name": name}
 
 
 def member_login(email: str, password: str):

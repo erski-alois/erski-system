@@ -396,7 +396,7 @@
             </div>
           </div>
 
-          <p class="hint" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE/Apple目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
+          <p class="hint" id="oauthHintText" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE/Apple目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
 
           <div class="form-footer-note">
             還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
@@ -1406,9 +1406,19 @@ async function ensurePricing() {
 }
 
 async function oauthLogin(provider) {
-  // 2026-09:Google/LINE/Apple目前還是模擬OAuth按鈕(還沒有串接真正的第三方OAuth,
-  // 詳見auth.mock_oauth_login的說明),沒有密碼概念,行為維持不變——「OAuth完成」
-  // 本身就視同身分驗證完成。正式的密碼驗證只套用在下面的Email+密碼登入(emailLogin)。
+  // 2026-09:LINE/Apple目前還是模擬OAuth按鈕(還沒有串接真正的第三方OAuth,詳見
+  // auth.mock_oauth_login的說明),沒有密碼概念,行為維持不變——「OAuth完成」本身
+  // 就視同身分驗證完成。Google已經改成走真正的OAuth(見下面google_oauth_available
+  // 判斷),正式的密碼驗證另外套用在下面的Email+密碼登入(emailLogin)。
+  if (provider === "google") {
+    await ensurePricing();
+    if (pricingData.google_oauth_available) {
+      // 真正的Google登入:直接把整個瀏覽器導去後端/auth/google/login,由後端導去
+      // Google的同意畫面,不是fetch呼叫,所以這裡用window.location,不是api()。
+      window.location.href = BASE + "/auth/google/login";
+      return;
+    }
+  }
   const mockIds = { line: "line-demo-user", google: "test@gmail.com", apple: "test@icloud.com" };
   const mock_external_id = mockIds[provider] || `${provider}-demo-user`;
   const { data } = await api("/auth/oauth-login", {
@@ -7210,6 +7220,81 @@ if ("serviceWorker" in navigator) {
 if (window.location.pathname.replace(/\/$/, "") === "/coach") {
   openCoachLogin();
 }
+
+// 2026-09新增:Google正式OAuth登入完成後,後端(app.py的/auth/google/callback)
+// 會把瀏覽器導回這裡,網址列帶上exchange_code=...(登入/註冊成功待交換)或
+// oauth_error=...(使用者取消/連結過期/交換失敗)。頁面一載入就檢查這兩種參數,
+// 處理完不論成功失敗都立刻用history.replaceState把參數從網址列清掉——避免使用者
+// 重新整理頁面時重複觸發一次,也避免exchange_code(雖然只有60秒效期)留在
+// 瀏覽器歷史紀錄裡太久。
+(async function handleGoogleOauthRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const exchangeCode = params.get("exchange_code");
+  const oauthError = params.get("oauth_error");
+  if (!exchangeCode && !oauthError) return;
+
+  window.history.replaceState({}, document.title, window.location.pathname);
+
+  if (oauthError) {
+    const messages = {
+      google_denied: "已取消Google登入。",
+      state_invalid: "登入連結已失效,請重新點擊Google登入。",
+      google_exchange_failed: "Google登入過程發生錯誤,請稍後再試一次;如持續發生請聯絡客服。",
+    };
+    alert(messages[oauthError] || "Google登入失敗,請重新嘗試。");
+    return;
+  }
+
+  const { ok, data } = await api("/auth/google/exchange", {
+    method: "POST", body: JSON.stringify({ exchange_code: exchangeCode })
+  });
+  if (!ok) {
+    alert(data.error || "Google登入已過期,請重新點擊Google登入。");
+    return;
+  }
+  if (data.is_new) {
+    // 沿用跟模擬OAuth/手動註冊同一套「建立會員資料」表單,只是這裡改用Google
+    // 回傳的真實姓名/Email預先帶入,姓名欄位仍可編輯,Email因為已經驗證過所以鎖定。
+    document.getElementById("mName").value = data.prefill_name || "";
+    document.getElementById("mPhone").value = "";
+    document.getElementById("mEmail").value = data.prefill_email || "";
+    document.getElementById("mEmail").readOnly = !!data.prefill_email;
+    document.getElementById("memberCreateStatus").textContent = "";
+    document.getElementById("mPasswordFieldsWrap").style.display = "none";
+    document.getElementById("memberCreateForm").style.display = "block";
+    window._pendingProvider = "google";
+    window._pendingExternalId = data.prefill_email;
+  } else {
+    currentMemberId = data.member.id;
+    currentMemberToken = data.token;
+    await enterMainScreen(data.member);
+  }
+})();
+
+// 2026-09新增:登入畫面下方那行小字提示,依實際串接狀況動態調整文字,避免Google
+// 已經接上真正OAuth之後,畫面還一直顯示「目前仍為示範用途的模擬按鈕」這種過時說明。
+(async function updateOauthHintText() {
+  await ensurePricing();
+  const el = document.getElementById("oauthHintText");
+  if (!el) return;
+  const parts = ["Email+密碼登入為正式登入(需要輸入正確密碼)"];
+  const stillMock = [];
+  if (pricingData.google_oauth_available) {
+    parts.push("Google為正式登入(會導向Google官方頁面完成驗證)");
+  } else {
+    stillMock.push("Google");
+  }
+  if (pricingData.line_oauth_available) {
+    parts.push("LINE為正式登入(會導向LINE官方頁面完成驗證)");
+  } else {
+    stillMock.push("LINE");
+  }
+  stillMock.push("Apple");
+  if (stillMock.length) {
+    parts.push(`${stillMock.join("/")}目前仍為示範用途的模擬按鈕,點選即完成登入`);
+  }
+  el.textContent = parts.join(";") + "。";
+})();
 </script>
 </body>
 </html>

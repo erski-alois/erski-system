@@ -26,6 +26,7 @@ member_id數字就能發API請求冒用身分。這支模組把「登入」這�
 但務必在正式營運前確認這組警告沒有出現在啟動log裡。
 """
 
+import secrets
 import warnings
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -83,3 +84,52 @@ def verify_member_token(token):
     except (BadSignature, SignatureExpired):
         return None
     return data.get("member_id")
+
+
+# ------------------------------------------------------------------
+# 2026-09新增:Google/LINE正式OAuth登入用的2組短效期簽章token。
+#
+# 這兩組都是無狀態(stateless)簽章token,跟上面員工/會員token同一種做法,
+# 差別只在效期很短(幾十秒到10分鐘),伺服器不用另外開資料表記錄「這組token
+# 有沒有被用過」——好處是不用改資料庫結構、不受多worker/重啟影響;代價是
+# 嚴格來說「時效內可以重複使用」,不是真正一次性的驗證碼。因為這兩組token
+# 只在使用者自己瀏覽器完成OAuth登入的當下幾秒鐘內用得到,不是給外部系統
+# 呼叫的長期憑證,這個權衡是可以接受的,詳見README說明。
+# ------------------------------------------------------------------
+_OAUTH_STATE_SERIALIZER = URLSafeTimedSerializer(_SECRET_KEY, salt="erski-oauth-state")
+_OAUTH_EXCHANGE_SERIALIZER = URLSafeTimedSerializer(_SECRET_KEY, salt="erski-oauth-exchange")
+
+OAUTH_STATE_MAX_AGE = 600      # state:防CSRF用,使用者要在10分鐘內完成Google那邊的同意畫面操作
+OAUTH_EXCHANGE_MAX_AGE = 60    # exchange_code:Google導回我們網站後,前端要在60秒內呼叫
+                                # /api/auth/google/exchange換成真正的會員token,避免真正的
+                                # token出現在網址列/瀏覽器紀錄裡太久
+
+
+def issue_oauth_state(provider: str) -> str:
+    return _OAUTH_STATE_SERIALIZER.dumps({"provider": provider, "nonce": secrets.token_hex(8)})
+
+
+def verify_oauth_state(state, expected_provider: str) -> bool:
+    """驗證從Google/LINE導回來的state參數:簽章正確、沒過期、provider對得上,三者都成立
+    才算合法(防止CSRF——有人自己組一個假的callback網址,誘騙已登入使用者的瀏覽器去點)。"""
+    if not state:
+        return False
+    try:
+        data = _OAUTH_STATE_SERIALIZER.loads(state, max_age=OAUTH_STATE_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return False
+    return data.get("provider") == expected_provider
+
+
+def issue_oauth_exchange_code(payload: dict) -> str:
+    return _OAUTH_EXCHANGE_SERIALIZER.dumps(payload)
+
+
+def verify_oauth_exchange_code(code):
+    """回傳exchange_code內的payload(dict);code是None/被竄改/過期時回傳None。"""
+    if not code:
+        return None
+    try:
+        return _OAUTH_EXCHANGE_SERIALIZER.loads(code, max_age=OAUTH_EXCHANGE_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
