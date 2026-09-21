@@ -89,3 +89,50 @@ def public_url(object_key):
     if not config.R2_PUBLIC_BASE_URL:
         raise RuntimeError("R2_PUBLIC_BASE_URL尚未設定，無法組出圖片的公開網址。")
     return f"{config.R2_PUBLIC_BASE_URL}/{object_key}"
+
+
+# ------------------------------------------------------------------
+# 資料庫每日備份專用：故意用「另一個獨立的bucket」(R2_BACKUP_BUCKET_NAME)，
+# 跟上面教練照片用的R2_BUCKET_NAME分開，而且這個備份用的bucket不會設定
+# R2_PUBLIC_BASE_URL、不會開Public Development URL——備份內容包含會員/
+# 教練個資跟訂單資料，絕對不能公開存取，所以底下這幾支函式完全不會、
+# 也不需要組出公開網址，只透過有金鑰驗證的S3 API存取。
+# 見backend/scripts/backup_to_r2.py。
+# ------------------------------------------------------------------
+def upload_backup_bytes(file_bytes, object_key):
+    if not config.R2_BACKUP_CONFIGURED:
+        raise RuntimeError("R2_BACKUP_BUCKET_NAME尚未設定，無法上傳備份。")
+    client = _get_client()
+    client.put_object(
+        Bucket=config.R2_BACKUP_BUCKET_NAME,
+        Key=object_key,
+        Body=file_bytes,
+        ContentType="application/zip",
+    )
+
+
+def list_backup_objects(prefix):
+    if not config.R2_BACKUP_CONFIGURED:
+        raise RuntimeError("R2_BACKUP_BUCKET_NAME尚未設定，無法列出備份。")
+    client = _get_client()
+    results = []
+    continuation_token = None
+    while True:
+        kwargs = {"Bucket": config.R2_BACKUP_BUCKET_NAME, "Prefix": prefix}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            results.append({"key": obj["Key"], "last_modified": obj["LastModified"], "size": obj["Size"]})
+        if resp.get("IsTruncated"):
+            continuation_token = resp.get("NextContinuationToken")
+        else:
+            break
+    return results
+
+
+def delete_backup_object(object_key):
+    if not config.R2_BACKUP_CONFIGURED:
+        raise RuntimeError("R2_BACKUP_BUCKET_NAME尚未設定，無法刪除備份。")
+    client = _get_client()
+    client.delete_object(Bucket=config.R2_BACKUP_BUCKET_NAME, Key=object_key)

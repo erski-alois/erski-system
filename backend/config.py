@@ -86,6 +86,13 @@ R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
 R2_PUBLIC_BASE_URL = os.environ.get("R2_PUBLIC_BASE_URL", "").rstrip("/")
 R2_CONFIGURED = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME)
 
+# 資料庫每日自動備份專用的另一個獨立bucket(故意跟上面教練照片的R2_BUCKET_NAME
+# 分開，這個bucket不應該開啟Public Development URL，備份內容不能公開存取)。
+# 沿用同一組R2帳號金鑰(R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY)，
+# 只是多指定一個bucket名稱。見backend/scripts/backup_to_r2.py。
+R2_BACKUP_BUCKET_NAME = os.environ.get("R2_BACKUP_BUCKET_NAME")
+R2_BACKUP_CONFIGURED = bool(R2_CONFIGURED and R2_BACKUP_BUCKET_NAME)
+
 # ------------------------------------------------------------------
 # Sentry(錯誤監控)。尚未申請/設定前是None，app.py開頭的sentry_sdk.init()
 # 就完全不會執行，系統照常運作，只是不會有「未預期錯誤自動通知」這個功能。
@@ -120,6 +127,10 @@ def validate_for_production():
     if not SENTRY_CONFIGURED:
         problems.append("SENTRY_DSN未設定，系統出錯時不會自動通知，只能等客戶回報才知道，"
                          "建議盡快到sentry.io申請免費帳號並設定")
+    if not R2_BACKUP_CONFIGURED:
+        problems.append("R2_BACKUP_BUCKET_NAME未設定，每日自動備份到Cloudflare R2的排程工具"
+                         "(backend/scripts/backup_to_r2.py)會執行失敗，目前只能依賴Render本身"
+                         "3天的PITR還原窗口，建議盡快在Cloudflare另外建立一個不公開的bucket並設定")
     return problems
 
 

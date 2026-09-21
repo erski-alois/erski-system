@@ -5,6 +5,7 @@ import urllib.error
 from werkzeug.middleware.proxy_fix import ProxyFix
 import functools
 import os
+import sys
 import json
 import base64
 import threading
@@ -121,9 +122,68 @@ def _start_scheduler_once():
     scheduler = BackgroundScheduler(timezone="Asia/Taipei")
     # 每15分鐘檢查一次即可:規則是「開課前24小時內未滿成班人數」,不需要到分鐘級即時性
     scheduler.add_job(_run_group_class_auto_cancel_job, "interval", minutes=15, id="group_class_auto_cancel")
+    # 每天凌晨3點(離峰時段)執行一次資料庫備份,見上面_run_daily_backup_job的說明
+    scheduler.add_job(_run_daily_backup_job, "cron", hour=3, minute=0, id="daily_backup_to_r2")
     scheduler.start()
     app._erski_scheduler_started = True
-    app.logger.info("團課自動取消排程已啟動(每15分鐘檢查一次)")
+    app.logger.info("團課自動取消排程已啟動(每15分鐘檢查一次);資料庫每日備份排程已啟動(每天凌晨3點)")
+
+
+
+# ------------------------------------------------------------------
+# 排程:資料庫每日自動備份到Cloudflare R2
+# ------------------------------------------------------------------
+# 起因:Render本身的PITR(Point-in-Time Recovery)只保留過去3天內的還原點
+# (目前的Render工作區方案是免費的Hobby等級；升級到付費的Pro等級雖然可以
+# 延長到7天，但那是帳號層級的方案異動，這裡不擅自幫你升級)。對一個每天
+# 都有訂單/金流進出的正式系統來說，3天有點偏短——如果某個問題超過3天才
+# 被發現，就沒辦法用Render內建的還原功能救回問題發生前的狀態了。
+#
+# 這裡改成:每天固定時間，把資料庫目前所有資料表的內容匯出成CSV、打包成
+# 一個zip，上傳到Cloudflare R2「另一個獨立、不公開的bucket」(見
+# backend/scripts/backup_to_r2.py開頭的說明，為什麼特地用另一個bucket、
+# 為什麼不用pg_dump)，並自動清掉超過30天的舊備份。這樣就不只依賴Render
+# 本身3天的還原窗口，等於自己另外多留了一份最長30天內、每天一份的資料快照。
+#
+# 跟上面「團課自動取消」排程同樣的道理:正式環境用2個worker process，
+# 用PostgreSQL advisory lock確保同一時間只有一個worker真的執行備份。
+# ------------------------------------------------------------------
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+import backup_to_r2  # noqa: E402  (要先插入sys.path才能import,所以沒有擺在檔案最上面)
+
+_DAILY_BACKUP_LOCK_KEY = 519273840  # 任意固定整數,只要跟_GROUP_CLASS_AUTO_CANCEL_LOCK_KEY不同即可
+
+
+def _run_daily_backup_job():
+    if not config.R2_BACKUP_CONFIGURED:
+        return  # 備份bucket還沒設定,靜默跳過(validate_for_production()已經會提醒要設定,這裡不用重複噴錯)
+    if _db.USE_POSTGRES:
+        lock_conn = _db.psycopg2.connect(_db.DATABASE_URL)
+        try:
+            lock_conn.autocommit = True
+            cur = lock_conn.cursor()
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_DAILY_BACKUP_LOCK_KEY,))
+            got_lock = cur.fetchone()[0]
+            if not got_lock:
+                return  # 別的worker正在跑或剛跑完
+            try:
+                _run_backup_and_report()
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (_DAILY_BACKUP_LOCK_KEY,))
+        finally:
+            lock_conn.close()
+    else:
+        _run_backup_and_report()
+
+
+def _run_backup_and_report():
+    try:
+        backup_to_r2.run_backup()
+    except Exception as e:
+        app.logger.exception("[每日備份排程] 執行失敗")
+        if config.SENTRY_CONFIGURED:
+            import sentry_sdk as _sentry_sdk
+            _sentry_sdk.capture_exception(e)
 
 
 if os.environ.get("ERSKI_DISABLE_SCHEDULER") != "1":
@@ -3935,6 +3995,42 @@ def admin_run_stress_test():
         })
     finally:
         _STRESS_TEST_STATE["active"] = False
+
+
+@app.route("/api/admin/system/run-backup-now", methods=["POST"])
+@require_role("boss")
+def admin_run_backup_now():
+    """手動立即觸發一次資料庫備份(見上面_run_daily_backup_job/每天凌晨3點自動排程的說明)。
+    主要給部署完成後想馬上確認「備份真的有設定成功」用,不用等到半夜3點才知道結果。
+    只有老闆權限能觸發,同一時間只允許一個備份在跑(用跟排程同一把advisory lock,
+    避免手動觸發跟排程剛好同時執行、或連續按兩次造成重複備份)。"""
+    if not config.R2_BACKUP_CONFIGURED:
+        return jsonify({"error": "R2_BACKUP_BUCKET_NAME尚未設定,請先參考README設定備份專用的Cloudflare R2 bucket"}), 400
+
+    if _db.USE_POSTGRES:
+        lock_conn = _db.psycopg2.connect(_db.DATABASE_URL)
+        try:
+            lock_conn.autocommit = True
+            cur = lock_conn.cursor()
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_DAILY_BACKUP_LOCK_KEY,))
+            got_lock = cur.fetchone()[0]
+            if not got_lock:
+                return jsonify({"error": "已經有一個備份正在執行中(可能是排程或另一次手動觸發),請稍後再試"}), 409
+            try:
+                result = backup_to_r2.run_backup()
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (_DAILY_BACKUP_LOCK_KEY,))
+        except Exception as e:
+            return jsonify({"error": f"備份執行失敗: {e}"}), 500
+        finally:
+            lock_conn.close()
+    else:
+        try:
+            result = backup_to_r2.run_backup()
+        except Exception as e:
+            return jsonify({"error": f"備份執行失敗: {e}"}), 500
+
+    return jsonify({"ok": True, **result})
 
 
 # ------------------------------------------------------------------

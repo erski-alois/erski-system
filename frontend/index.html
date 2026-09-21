@@ -2280,6 +2280,14 @@ async function renderClearTestDataTools() {
       <button class="small" onclick="submitMigratePhotosToR2()">開始搬移</button>
       <div id="migratePhotosR2Result" style="margin-top:8px;"></div>
     </div>
+    <div class="person-card" style="border:1px solid #6a1b9a; margin-top:16px;">
+      <b style="color:#6a1b9a;">資料庫每日自動備份</b>
+      <p class="note">Render本身的還原功能(PITR)只保留過去3天,對正式系統來說有點短。這裡另外設定了每天凌晨3點
+        自動把資料庫目前所有資料備份、上傳到Cloudflare R2的一個獨立、不公開的bucket,自動保留最近30天。
+        按下面按鈕可以立即手動觸發一次,不用等到半夜,馬上確認有沒有設定成功。</p>
+      <button class="small secondary" onclick="submitRunBackupNow()">立即執行一次備份</button>
+      <div id="runBackupNowResult" style="margin-top:8px;"></div>
+    </div>
     <div class="person-card" style="border:1px solid #1565c0; margin-top:16px;">
       <b style="color:#1565c0;">上線前壓力測試</b>
       <p class="note">模擬多位使用者同時查詢公開頁面(教練名單/價格/雪場/CSIA課程等),不會建立/修改/刪除任何資料,
@@ -2294,6 +2302,22 @@ async function renderClearTestDataTools() {
     </div>
   `;
   await loadTestDataSummary();
+}
+async function submitRunBackupNow() {
+  const resultEl = document.getElementById("runBackupNowResult");
+  resultEl.innerHTML = "備份執行中,請稍候(視資料量可能要幾秒到幾十秒)...";
+  const { ok, data } = await api("/admin/system/run-backup-now", { method: "POST" });
+  if (!ok) { resultEl.innerHTML = `<p class="note" style="color:#c0392b;">${data.error || "備份失敗,請稍後再試或聯絡工程協助。"}</p>`; return; }
+  resultEl.innerHTML = `
+    <p style="color:#2e7d32;">備份成功!</p>
+    <table style="width:100%; font-size:13px; border-collapse:collapse;">
+      <tbody>
+        <tr><td style="padding:2px 0;">備份檔案</td><td style="text-align:right;">${data.object_key}</td></tr>
+        <tr><td style="padding:2px 0;">檔案大小</td><td style="text-align:right;">${(data.size_bytes / 1024).toFixed(1)} KB</td></tr>
+        <tr><td style="padding:2px 0;">資料表數 / 總筆數</td><td style="text-align:right;">${data.table_count} 張表 / ${data.total_rows} 筆</td></tr>
+        <tr><td style="padding:2px 0;">本次清掉的過期備份</td><td style="text-align:right;">${data.deleted_old_backups} 個</td></tr>
+      </tbody>
+    </table>`;
 }
 async function submitStressTest(concurrency, durationSeconds) {
   const resultEl = document.getElementById("stressTestResult");
