@@ -4,6 +4,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import functools
 import os
 import json
+import base64
 
 from db import get_conn, init_db, rows_to_dicts, NOW_SQL
 import db as _db
@@ -14,6 +15,7 @@ import pricing
 import payroll
 import config
 import csia
+import storage_r2
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
 app = Flask(__name__)
@@ -157,6 +159,27 @@ def serve_csia_shuttle_schedule():
     # CSIA滑雪教練考照專區「交通」說明區塊用的雪場接駁車時刻表圖片,比照上面
     # er-ski-logo.png同樣的個別開路由寫法。
     return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "csia-shuttle-schedule.png", mimetype="image/png")
+
+
+@app.route("/privacy")
+def serve_privacy_policy():
+    """2026-09新增:隱私權政策頁面。起因是申請LINE Login Channel時,LINE的申請表單
+    裡有一欄「Privacy policy URL」,當時網站還沒有這個頁面可以填。這是獨立的靜態
+    HTML頁面(不是frontend/index.html那個單頁應用程式的一部分),用跟上面icon/logo
+    同樣的個別路由寫法提供,不用快取(跟index.html一樣,避免修改後使用者看到舊版)。"""
+    resp = send_from_directory(FRONTEND_DIR, "privacy.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
+@app.route("/terms")
+def serve_terms_of_use():
+    """2026-09新增:服務條款頁面。同樣起因是申請LINE Login Channel時,表單裡另一欄
+    「Terms of use URL」當時也還沒有頁面可以填,做法跟上面serve_privacy_policy()
+    完全對稱。"""
+    resp = send_from_directory(FRONTEND_DIR, "terms.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.after_request
@@ -3210,17 +3233,21 @@ def list_coaches_public():
     2026-09:宣傳照改成可多檔案上傳(存在coach_certificate_files,category='promo_photo'),
     這裡對外只挑「最早上傳的那一張」當作封面照展示;如果教練還沒用新的多檔上傳功能重傳過,
     就退回沿用coach_profiles.promo_photo這個舊欄位裡的資料(migration已經把舊資料複製一份
-    進coach_certificate_files,但保留這個退回機制多一層保險)。"""
+    進coach_certificate_files,但保留這個退回機制多一層保險)。
+    2026-09再修正:宣傳照改存Cloudflare R2後,coach_certificate_files.file_data可能已經
+    被清空(內容搬去R2了,只剩r2_key),所以這裡額外多撈一個r2_key欄位,交給
+    _cert_file_display_url()判斷該回傳R2網址還是資料庫裡的原始內容。"""
     conn = get_conn()
     rows = conn.execute(
         """SELECT s.id, s.name, s.display_code, cp.self_intro, cp.resume, cp.experience, cp.rank,
                   cp.bio_intro, cp.message_to_students, cp.coach_motto,
-                  COALESCE(
-                      (SELECT ccf.file_data FROM coach_certificate_files ccf
+                  (SELECT ccf.file_data FROM coach_certificate_files ccf
                        WHERE ccf.coach_id = s.id AND ccf.category = 'promo_photo'
-                       ORDER BY ccf.uploaded_at ASC, ccf.id ASC LIMIT 1),
-                      cp.promo_photo
-                  ) AS promo_photo
+                       ORDER BY ccf.uploaded_at ASC, ccf.id ASC LIMIT 1) AS promo_photo_raw,
+                  (SELECT ccf.r2_key FROM coach_certificate_files ccf
+                       WHERE ccf.coach_id = s.id AND ccf.category = 'promo_photo'
+                       ORDER BY ccf.uploaded_at ASC, ccf.id ASC LIMIT 1) AS promo_photo_r2_key,
+                  cp.promo_photo AS promo_photo_legacy
            FROM staff s LEFT JOIN coach_profiles cp ON cp.coach_id = s.id
            WHERE s.role='coach' AND s.is_active=1
            ORDER BY s.display_order ASC, s.id ASC"""
@@ -3237,6 +3264,10 @@ def list_coaches_public():
             (r["id"],),
         ).fetchall()
         d = dict(r)
+        promo_photo_raw = d.pop("promo_photo_raw", None)
+        promo_photo_r2_key = d.pop("promo_photo_r2_key", None)
+        promo_photo_legacy = d.pop("promo_photo_legacy", None)
+        d["promo_photo"] = _cert_file_display_url(promo_photo_raw, promo_photo_r2_key) or promo_photo_legacy
         d["certifications"] = rows_to_dicts(certs)
         d["capabilities"] = [c["name"] for c in caps]
         result.append(d)
@@ -3603,6 +3634,32 @@ def admin_update_coach_profile(coach_id):
 _CERT_FILE_CATEGORIES = ("ski_license", "related_license", "other_license", "promo_photo", "id_photo")
 
 
+def _decode_data_url(data_url):
+    """把前端傳來的data URI字串(例如"data:image/jpeg;base64,xxxx")解析成
+    (檔案bytes內容, mime類型)。萬一格式跟預期的不一樣(沒有data:前綴),
+    就把整段字串當成純base64內容處理、mime預設用image/jpeg(這幾個分類本來
+    就只收圖片/PDF,呼叫端有另外傳mime_type時會優先用那個,不依賴這裡猜的結果)。"""
+    mime = "image/jpeg"
+    b64_part = data_url
+    if data_url and data_url.startswith("data:") and ";base64," in data_url:
+        header, b64_part = data_url.split(";base64,", 1)
+        mime = header[len("data:"):] or mime
+    return base64.b64decode(b64_part), mime
+
+
+def _cert_file_display_url(file_data, r2_key):
+    """這筆教練檔案要給前端顯示/下載用的網址(或data URI):
+    - 已經搬到R2的(有r2_key):回傳R2的公開網址。
+    - 還沒搬過去、或R2尚未設定:退回原本直接存在資料庫裡的內容(data URI字串),
+      跟改動前的行為完全一樣,前端不用改。"""
+    if r2_key:
+        try:
+            return storage_r2.public_url(r2_key)
+        except RuntimeError:
+            pass
+    return file_data
+
+
 @app.route("/api/admin/coaches/<int:coach_id>/certificate-files", methods=["GET"])
 @require_role("coach")
 def admin_list_coach_certificate_files(coach_id):
@@ -3616,7 +3673,12 @@ def admin_list_coach_certificate_files(coach_id):
         (coach_id,),
     ).fetchall()
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    result = rows_to_dicts(rows)
+    for r in result:
+        # 2026-09:檔案改存Cloudflare R2後,已搬移的檔案這裡要回傳R2的公開網址,
+        # 不是資料庫裡的原始內容(這個欄位已經被清空)。還沒搬移的維持原本行為。
+        r["file_data"] = _cert_file_display_url(r.get("file_data"), r.get("r2_key"))
+    return jsonify(result)
 
 
 @app.route("/api/admin/coaches/<int:coach_id>/certificate-files", methods=["POST"])
@@ -3632,11 +3694,27 @@ def admin_upload_coach_certificate_file(coach_id):
         return jsonify({"error": "證照類別不正確"}), 400
     if not file_data:
         return jsonify({"error": "缺少檔案內容"}), 400
+
+    # 2026-09:改成優先存Cloudflare R2(物件儲存),不再把檔案內容整包塞進資料庫——
+    # 資料庫只留一個r2_key指向R2上的檔案位置。R2尚未設定(本機開發/還沒申請)時,
+    # 或上傳到R2失敗時,照舊直接存進資料庫,不讓教練上傳整個失敗掉。
+    r2_key = None
+    db_file_data = file_data
+    if storage_r2.is_configured():
+        try:
+            file_bytes, guessed_mime = _decode_data_url(file_data)
+            object_key = storage_r2.build_object_key(coach_id, category, d.get("file_name"))
+            storage_r2.upload_bytes(file_bytes, object_key, content_type=d.get("mime_type") or guessed_mime)
+            r2_key = object_key
+            db_file_data = None
+        except Exception as e:
+            app.logger.warning(f"教練檔案上傳到R2失敗,改存資料庫(coach_id={coach_id}): {e}")
+
     conn = get_conn()
     cur = conn.execute(
-        "INSERT INTO coach_certificate_files (coach_id, category, file_name, mime_type, file_data) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (coach_id, category, d.get("file_name"), d.get("mime_type"), file_data),
+        "INSERT INTO coach_certificate_files (coach_id, category, file_name, mime_type, file_data, r2_key) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (coach_id, category, d.get("file_name"), d.get("mime_type"), db_file_data, r2_key),
     )
     conn.commit()
     new_id = cur.lastrowid
@@ -3652,15 +3730,62 @@ def admin_delete_coach_certificate_file(coach_id, file_id):
         return jsonify({"error": "權限不足"}), 403
     conn = get_conn()
     row = conn.execute(
-        "SELECT id FROM coach_certificate_files WHERE id=? AND coach_id=?", (file_id, coach_id)
+        "SELECT id, r2_key FROM coach_certificate_files WHERE id=? AND coach_id=?", (file_id, coach_id)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "找不到此檔案"}), 404
+    r2_key = dict(row).get("r2_key")
     conn.execute("DELETE FROM coach_certificate_files WHERE id=?", (file_id,))
     conn.commit()
+    if r2_key and storage_r2.is_configured():
+        # 資料庫紀錄刪除優先,R2那份檔案刪除失敗只記警告、不影響這支API回應成功
+        # (不會留下「資料庫查不到、R2還占空間」以外的問題,頂多多佔一點R2空間)。
+        try:
+            storage_r2.delete_object(r2_key)
+        except Exception as e:
+            app.logger.warning(f"刪除R2上的教練檔案失敗(資料庫紀錄已刪除,r2_key={r2_key}): {e}")
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/system/migrate-certificate-files-to-r2", methods=["POST"])
+@require_role("boss")
+def admin_migrate_certificate_files_to_r2():
+    """一次性(但重複執行也安全)的搬移工具:把coach_certificate_files裡「還沒搬到R2」
+    的舊檔案(r2_key是NULL、但file_data還有內容,也就是還直接存在資料庫裡的教練照片/
+    證照檔案)一筆一筆上傳到Cloudflare R2、把r2_key填回去,並清空file_data欄位騰出
+    資料庫空間(這是2026-09把照片上傳功能改存R2之後,補搬「改版前」既有資料用的)。
+
+    設計成可以放心重複呼叫:已經搬過的(r2_key不是NULL)不會處理,單筆上傳失敗
+    (例如網路問題)只會記錄下來、不影響其他筆繼續搬,搬完直接看回傳的統計數字
+    確認結果,失敗的下次重新呼叫這支API還會再處理一次。只有老闆(boss)權限能觸發,
+    因為這會實際搬動所有教練的檔案、正式環境不會頻繁執行。"""
+    if not storage_r2.is_configured():
+        return jsonify({"error": "Cloudflare R2尚未設定,無法執行搬移"}), 400
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, coach_id, category, file_name, mime_type, file_data FROM coach_certificate_files "
+        "WHERE r2_key IS NULL AND file_data IS NOT NULL"
+    ).fetchall()
+    rows = [dict(r) for r in rows]
+    migrated = 0
+    failed = []
+    for row in rows:
+        try:
+            file_bytes, guessed_mime = _decode_data_url(row["file_data"])
+            object_key = storage_r2.build_object_key(row["coach_id"], row["category"], row.get("file_name"))
+            storage_r2.upload_bytes(file_bytes, object_key, content_type=row.get("mime_type") or guessed_mime)
+            conn.execute(
+                "UPDATE coach_certificate_files SET r2_key=?, file_data=NULL WHERE id=?",
+                (object_key, row["id"]),
+            )
+            conn.commit()
+            migrated += 1
+        except Exception as e:
+            failed.append({"id": row["id"], "coach_id": row["coach_id"], "category": row["category"], "error": str(e)})
+    conn.close()
+    return jsonify({"ok": True, "total_found": len(rows), "migrated": migrated, "failed": failed})
 
 
 # ------------------------------------------------------------------

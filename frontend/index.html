@@ -2271,8 +2271,33 @@ async function renderClearTestDataTools() {
       <button id="clearTestDataBtn" class="small" style="background:#c0392b; border-color:#c0392b;" disabled onclick="submitClearTestData()">開始清除測試資料</button>
       <div id="clearTestDataResult" style="margin-top:8px;"></div>
     </div>
+    <div class="person-card" style="border:1px solid #2e7d32; margin-top:16px;">
+      <b style="color:#2e7d32;">教練照片/證照搬移到Cloudflare R2</b>
+      <p class="note">2026-09教練照片(宣傳照/證件照/滑雪證照/相關證照/其他證照)上傳功能改成存放到Cloudflare R2雲端儲存空間,
+        不再整包塞進資料庫。按下面按鈕,把「改版前」已經直接存在資料庫裡的舊照片/證照檔案搬到R2、騰出資料庫空間
+        (改版後新上傳的檔案會直接存R2,不需要搬)。這個操作可以放心重複按:已經搬過的資料會自動跳過,
+        單筆搬移失敗(例如網路問題)不影響其他筆,可以再按一次重試。</p>
+      <button class="small" onclick="submitMigratePhotosToR2()">開始搬移</button>
+      <div id="migratePhotosR2Result" style="margin-top:8px;"></div>
+    </div>
   `;
   await loadTestDataSummary();
+}
+async function submitMigratePhotosToR2() {
+  const resultEl = document.getElementById("migratePhotosR2Result");
+  resultEl.innerHTML = "搬移中,請稍候...(資料量多的話可能要等一下)";
+  const { ok, data } = await api("/admin/system/migrate-certificate-files-to-r2", { method: "POST" });
+  if (!ok) { resultEl.innerHTML = `<p class="note" style="color:#c0392b;">${data.error || "搬移失敗,請稍後再試或聯絡工程協助。"}</p>`; return; }
+  if (data.total_found === 0) {
+    resultEl.innerHTML = `<p style="color:#2e7d32;">目前沒有需要搬移的舊資料(可能已經全部搬完,或這批本來就是改版後直接存R2的)。</p>`;
+    return;
+  }
+  let html = `<p style="color:#2e7d32;">本次找到 ${data.total_found} 筆待搬移資料,成功搬移 ${data.migrated} 筆。</p>`;
+  if (data.failed && data.failed.length) {
+    html += `<p class="note" style="color:#c0392b;">${data.failed.length} 筆搬移失敗(可以再按一次「開始搬移」重試):</p>`;
+    html += data.failed.map(f => `<div class="list-item">教練ID ${f.coach_id}、類別 ${f.category}(檔案ID ${f.id}):${f.error}</div>`).join("");
+  }
+  resultEl.innerHTML = html;
 }
 async function loadTestDataSummary() {
   const el = document.getElementById("testDataSummaryWrap");

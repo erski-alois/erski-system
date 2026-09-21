@@ -558,19 +558,24 @@ CREATE TABLE IF NOT EXISTS coach_certifications (
     cert_level TEXT NOT NULL
 );
 
--- 教練檔案上傳(滑雪證照/相關證照/其他證照/宣傳照/證件照,每一類都可上傳多筆,圖片或PDF都收,
--- 直接把檔案內容以base64存進TEXT欄位)。2026-09:原本只給三種證照類別使用,新增
--- promo_photo(宣傳照)、id_photo(證件照,內部使用)兩個分類,讓這兩種照片也能改成
--- 多檔案上傳(取代原本coach_profiles.promo_photo/id_photo只能各存一張的做法;那兩個
--- 欄位保留不刪,當作舊資料備份,新版UI不再寫入)。CHECK約束的實際加寬動作由migration
--- b7e1c4a9f603執行(ALTER TABLE重建約束),這裡的定義只是給重新建庫時參考的最新結構。
+-- 教練檔案上傳(滑雪證照/相關證照/其他證照/宣傳照/證件照,每一類都可上傳多筆,圖片或PDF都收)。
+-- 2026-09:原本只給三種證照類別使用,新增promo_photo(宣傳照)、id_photo(證件照,內部使用)
+-- 兩個分類,讓這兩種照片也能改成多檔案上傳(取代原本coach_profiles.promo_photo/id_photo
+-- 只能各存一張的做法;那兩個欄位保留不刪,當作舊資料備份,新版UI不再寫入)。CHECK約束的
+-- 實際加寬動作由migration b7e1c4a9f603執行(ALTER TABLE重建約束),這裡的定義只是給
+-- 重新建庫時參考的最新結構。
+-- 2026-09再修正:檔案改存Cloudflare R2(物件儲存,見backend/storage_r2.py),r2_key
+-- 存放檔案在R2的路徑;R2尚未設定,或這筆資料還沒搬過去時r2_key是NULL,改用file_data
+-- 欄位裡的內容(base64,含data URI前綴)。檔案成功搬到R2後file_data會清空,所以這個
+-- 欄位不能再是NOT NULL(實際的ALTER TABLE動作由migration b75369f060c3執行)。
 CREATE TABLE IF NOT EXISTS coach_certificate_files (
     id SERIAL PRIMARY KEY,
     coach_id INTEGER NOT NULL REFERENCES staff(id),
     category TEXT CHECK(category IN ('ski_license','related_license','other_license','promo_photo','id_photo')) NOT NULL,
     file_name TEXT,
     mime_type TEXT,
-    file_data TEXT NOT NULL,   -- base64(含data URI前綴)
+    file_data TEXT,   -- base64(含data URI前綴);已搬到R2的檔案這裡是NULL
+    r2_key TEXT,       -- 這筆檔案在Cloudflare R2 bucket裡的路徑;NULL表示還沒搬移或R2未設定
     uploaded_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 

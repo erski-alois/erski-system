@@ -9,6 +9,8 @@ APScheduler==3.11.3       # 團課「開課前24hr未滿自動取消」的背景
 alembic==1.19.1           # 資料庫結構版本控管(見alembic/目錄)，取代原本「每次啟動重建schema」的作法
 SQLAlchemy==2.0.52        # alembic的相依套件(這個專案本身沒有用SQLAlchemy ORM)
 python-dotenv==1.2.2      # 本機開發時從.env檔案讀環境變數用(見config.py)
+boto3==1.35.99            # 用來操作Cloudflare R2(S3相容API)，見storage_r2.py；
+                           # 沒設定R2環境變數也不影響其他功能運作
 
 # 正式上線可視需要再另外安裝(非必要，本次未安裝/未整合):
 # flask-cors        # 若前後端改成分開部署(不同網域)才需要，目前前後端同一個Flask服務一起出，不需要

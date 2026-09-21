@@ -71,6 +71,21 @@ OAUTH_CONFIGURED = bool(GOOGLE_OAUTH_CONFIGURED or LINE_OAUTH_CONFIGURED)
 # ------------------------------------------------------------------
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
 
+# ------------------------------------------------------------------
+# Cloudflare R2(物件儲存，用來放教練宣傳照/證件照等圖片檔案)。
+# 尚未申請/設定前這些都會是None，storage_r2.py會回報「尚未設定」，
+# 相關上傳功能會繼續沿用目前「檔案內容直接存進資料庫(file_data欄位)」的舊做法，
+# 不會因為沒設定R2就整個壞掉。
+# ------------------------------------------------------------------
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
+# 對外可直接存取圖片的網域，例如R2的Public Development URL(*.r2.dev)或你自己綁定的網域，
+# 結尾不要加斜線。之後圖片網址會是 R2_PUBLIC_BASE_URL + "/" + 檔案在bucket裡的路徑。
+R2_PUBLIC_BASE_URL = os.environ.get("R2_PUBLIC_BASE_URL", "").rstrip("/")
+R2_CONFIGURED = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME)
+
 
 def validate_for_production():
     """正式環境啟動時可以呼叫這個函式，及早發現「忘記設定環境變數」的問題，
@@ -91,6 +106,10 @@ def validate_for_production():
     if not OAUTH_CONFIGURED:
         problems.append("LINE/Google OAuth憑證未設定，目前登入會繼續用模擬帳號，"
                          "正式營運前必須至少設定一種真實登入方式")
+    if not R2_CONFIGURED:
+        problems.append("Cloudflare R2憑證未設定(R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/"
+                         "R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME)，圖片上傳功能會繼續把檔案"
+                         "直接存進資料庫，可以先這樣運作，之後有空再設定R2也不影響現有資料")
     return problems
 
 
