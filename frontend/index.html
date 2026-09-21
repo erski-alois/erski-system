@@ -6563,6 +6563,44 @@ function memberAttendanceCodesHtml(b) {
   return `<br><span class="note">當天報到碼(請於現場口頭告知教練,由教練輸入完成報到):<br>${rows}</span>`;
 }
 
+// 2026-09新增:會員反映「團課/自主練習之外的預約,在會員中心看得到,但要取消/改期
+// 還是得跑回原本那個課程分頁才能操作,沒辦法直接在會員中心處理」。原本這裡只有一行
+// 提示文字叫會員自己去對應分頁,其實取消/改期用的後端API(cancelBooking/rescheduleBooking
+// 這兩個既有函式、跟包機/團課/體驗課/自主練習/跳台分頁的時段表用的是同一套)本來就支援
+// 直接在這裡呼叫,這次補上直接的「取消」「修改」按鈕,不用再跳頁。日本教練課之前完全
+// 沒有會員自助取消的入口(後端API/權限檢查其實都已經有,只是前端從來沒有接上去),
+// 這次也一併補上「取消整趟行程」按鈕;日本教練課沒有自助改期的機制(牽涉教練指派/
+// 多天行程,原本就是要洽客服處理),所以只給取消、沒有修改按鈕。
+function bookingActionsHtml(b) {
+  const today = new Date().toISOString().slice(0,10);
+  const isPast = b.date < today;
+  const alreadyHappened = b.attendance_status === "completed" || b.attendance_status === "no_show";
+  if (isPast || alreadyHappened) return "";
+
+  if (["charter", "group_class", "self_practice", "trial"].includes(b.category)) {
+    return `<button class="small secondary" onclick="cancelBooking('indoor', ${b.booking_ref_id})">取消</button>
+      <button class="small secondary" onclick="rescheduleBooking('indoor', ${b.booking_ref_id})">修改</button>`;
+  }
+  if (b.category === "jump") {
+    return `<button class="small secondary" onclick="cancelBooking('jump', ${b.booking_ref_id})">取消</button>
+      <button class="small secondary" onclick="rescheduleBooking('jump', ${b.booking_ref_id})">修改</button>`;
+  }
+  if (b.category === "japan") {
+    return `<button class="small secondary" onclick="cancelJapanTripFromCenter('${b.group_key}')">取消整趟行程</button>`;
+  }
+  return "";
+}
+
+async function cancelJapanTripFromCenter(groupKey) {
+  // 跟後台cancelJapanBookingAdmin用同一支API(/booking/japan/<group_key>/cancel),
+  // 後端本來就會檢查這趟行程是不是這位會員自己的(_check_owns_booking_or_staff),
+  // 不是自己的行程會被擋下,這裡不用另外檢查。
+  if (!confirm("確定要取消這趟日本教練課行程嗎?此動作無法復原,若為多天行程會整趟一併取消。")) return;
+  const { ok, data } = await api(`/booking/japan/${groupKey}/cancel`, { method: "POST" });
+  if (ok) { alert("已取消"); loadAccountOverview(); invalidateJapanCalendar(); }
+  else alert(data.error);
+}
+
 function bookingRowHtml(b) {
   const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
   const resort = b.resort_name ? `${b.resort_name}・` : "";
@@ -6572,10 +6610,12 @@ function bookingRowHtml(b) {
   const payTag = `<span class="status-tag ${payTagClass}">${b.payment_label}</span>`;
   const attendanceTag = b.attendance_status === "completed" ? `<span class="status-tag ok">已完成報到</span>`
     : b.attendance_status === "no_show" ? `<span class="status-tag warn">未到</span>` : "";
-  const noteText = b.category === "japan"
-    ? "如需取消/修改請至「日本滑雪」對應分區的時段表操作"
-    : "如需取消/修改請至該課程分頁的時段表操作";
-  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${b.lesson_notes}</span>` : ""}${memberAttendanceCodesHtml(b)}<br><span class="note">${noteText}</span></div>`;
+  const actionsHtml = bookingActionsHtml(b);
+  const actionsBlock = actionsHtml ? `<div class="row" style="margin-top:4px; gap:8px;">${actionsHtml}</div>` : "";
+  // 過去/已完成報到/未到的預約沒有東西可以取消或修改,不需要再顯示任何提示文字;
+  // 日本教練課即使還能取消,因為沒有自助改期機制,額外提醒要改行程內容請洽客服。
+  const noteText = actionsHtml && b.category === "japan" ? "如需變更行程日期/內容,請洽客服協助處理" : "";
+  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${b.lesson_notes}</span>` : ""}${memberAttendanceCodesHtml(b)}${noteText ? `<br><span class="note">${noteText}</span>` : ""}${actionsBlock}</div>`;
 }
 
 async function cancelBooking(kind, refId) {
