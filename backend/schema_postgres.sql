@@ -266,6 +266,31 @@ CREATE TABLE IF NOT EXISTS japan_bookings (
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- 日本滑雪「其他雪場」需求(2026-09新增):不是正式訂單,單純是學員自己打字填想去的
+-- 雪場名稱+需求說明後送出的「需求」,不產生報價/不走金流,由後台人工聯繫學員確認
+-- 細節。跟japan_bookings是兩張獨立的表(這裡沒有resort_id/price,因為雪場跟價格都
+-- 還沒談好),participants比照charter_pass_requests的做法直接存JSON字串,不沿用
+-- booking_participants(避免異動該表既有的ref_type CHECK約束)。
+CREATE TABLE IF NOT EXISTS japan_other_resort_requests (
+    id SERIAL PRIMARY KEY,
+    member_id INTEGER NOT NULL REFERENCES members(id),
+    resort_name TEXT NOT NULL,       -- 學員自行填寫想去的雪場名稱
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    day_type TEXT CHECK(day_type IN ('half','full')) NOT NULL,
+    half_day_slot TEXT CHECK(half_day_slot IN ('morning','afternoon')),
+    headcount INTEGER NOT NULL,
+    equipment_type TEXT CHECK(equipment_type IN ('ski','snowboard')),
+    needs_accommodation INTEGER DEFAULT 0,
+    participants TEXT,                -- JSON字串:[{gender,age,height_cm,weight_kg,shoe_size}, ...]
+    note TEXT,                         -- 學員填寫的其他需求說明
+    status TEXT CHECK(status IN ('pending','contacted','closed')) NOT NULL DEFAULT 'pending',
+    handled_by_staff_id INTEGER REFERENCES staff(id),
+    staff_note TEXT,
+    handled_at TEXT,
+    created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
 -- 上課碼/下課碼(2026-09新增):日本教練課訂單付款確認後自動產生,供教練頁面輸入
 -- 學員提供的編碼以完成報到。半天課程產生1組(session_slot對應half_day_slot);
 -- 全天課程產生2組(morning+afternoon各一組);多天課程則是每一天(各自一筆

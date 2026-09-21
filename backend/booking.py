@@ -1636,6 +1636,100 @@ def cancel_japan_trip(group_key, is_staff=False):
     return {"ok": True, "cancelled_days": len(trip_rows)}
 
 
+# ------------------------------------------------------------------
+# 日本滑雪「其他雪場」需求(2026-09新增):依你的指示,這個分區改成單純的「需求提出」——
+# 學員自己打字填想去的雪場名稱+需求說明,不產生報價/不走金流,後台看到需求後人工
+# 聯繫學員確認細節。跟其他4個日本滑雪分區(藏王/北海道/鬼首/白馬)的book_japan_multi_day()
+# 是兩條完全獨立的路徑,不共用同一張資料表。
+# ------------------------------------------------------------------
+def submit_other_resort_request(member_id, resort_name, start_date, end_date, day_type,
+                                 half_day_slot=None, headcount=1, equipment_type=None,
+                                 needs_accommodation=False, participants=None, note=None):
+    """故意不套用validate_japan_season()/validate_booking_window()這類既有的雪季/預約
+    區間限制——「其他雪場」存在的目的就是讓學員可以自由提出系統既有規則涵蓋不到的需求
+    (例如還沒談好的雪場、還沒定案的日期),太早用制式規則擋掉,會失去這個分區原本的
+    彈性,實際的行程日期/是否能安排,由ER Ski人工跟學員確認。"""
+    resort_name = (resort_name or "").strip()
+    if not resort_name:
+        raise ValueError("請填寫想去的雪場名稱")
+    if day_type not in ("full", "half"):
+        raise ValueError("課程類型僅接受全日或半日")
+    if not start_date or not end_date:
+        raise ValueError("請選擇行程日期")
+    if end_date < start_date:
+        raise ValueError("結束日期不能早於開始日期")
+    if not headcount or headcount < 1:
+        raise ValueError("人數至少為1人")
+
+    conn = get_conn()
+    cur = conn.execute(
+        """INSERT INTO japan_other_resort_requests
+           (member_id, resort_name, start_date, end_date, day_type, half_day_slot,
+            headcount, equipment_type, needs_accommodation, participants, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (member_id, resort_name, start_date, end_date, day_type, half_day_slot,
+         headcount, equipment_type, 1 if needs_accommodation else 0,
+         json.dumps(participants or [], ensure_ascii=False), note),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM japan_other_resort_requests WHERE id=?", (cur.lastrowid,)
+    ).fetchone()
+    conn.close()
+    result = dict(row)
+    result["participants"] = json.loads(result["participants"]) if result.get("participants") else []
+    return result
+
+
+def list_other_resort_requests(status=None):
+    conn = get_conn()
+    if status:
+        rows = conn.execute(
+            """SELECT r.*, m.name AS member_name, m.phone AS member_phone
+               FROM japan_other_resort_requests r
+               JOIN members m ON r.member_id = m.id
+               WHERE r.status = ? ORDER BY r.created_at""",
+            (status,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT r.*, m.name AS member_name, m.phone AS member_phone
+               FROM japan_other_resort_requests r
+               JOIN members m ON r.member_id = m.id
+               ORDER BY r.created_at DESC"""
+        ).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["participants"] = json.loads(d["participants"]) if d.get("participants") else []
+        results.append(d)
+    return results
+
+
+def resolve_other_resort_request(request_id, status, staff_id, staff_note=None):
+    """後台人工聯繫學員後,標記這筆需求的處理狀態(contacted=已聯繫/closed=已結案)。
+    這裡純粹是狀態記錄,不會自動產生訂單或報價——確認雪場/報價/日期後,如果要正式
+    成立訂課,由後台用既有的「代客訂課」功能另外幫學員建立訂單。"""
+    if status not in ("contacted", "closed"):
+        raise ValueError("處理狀態不正確")
+    conn = get_conn()
+    req = conn.execute("SELECT * FROM japan_other_resort_requests WHERE id=?", (request_id,)).fetchone()
+    if not req:
+        conn.close()
+        raise ValueError("找不到這筆需求")
+    now = _now_tw().isoformat(sep=" ", timespec="seconds")
+    conn.execute(
+        """UPDATE japan_other_resort_requests
+           SET status=?, staff_note=?, handled_by_staff_id=?, handled_at=?
+           WHERE id=?""",
+        (status, staff_note, staff_id, now, request_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 # ============================================================
 # 管理報表 / 營收統計(對照系統分析書 M12)
 # ============================================================

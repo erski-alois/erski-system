@@ -1169,6 +1169,26 @@ def admin_resolve_charter_pass_request(request_id):
         return jsonify({"error": str(e)}), 400
 
 
+@app.route("/api/admin/japan-other-resort-requests/pending", methods=["GET"])
+@require_section("pending")
+def admin_list_japan_other_resort_requests():
+    return jsonify(booking.list_other_resort_requests(status="pending"))
+
+
+@app.route("/api/admin/japan-other-resort-requests/<int:request_id>/resolve", methods=["POST"])
+@require_section("pending")
+def admin_resolve_japan_other_resort_request(request_id):
+    d = request.json
+    try:
+        result = booking.resolve_other_resort_request(
+            request_id=request_id, status=d.get("status"), staff_id=request.current_staff["id"],
+            staff_note=d.get("staff_note"),
+        )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 # ------------------------------------------------------------------
 # 自主練習
 # ------------------------------------------------------------------
@@ -2053,6 +2073,28 @@ def book_japan():
             needs_accommodation=d.get("needs_accommodation", False),
             payment_plan=d.get("payment_plan", "full"),
             group_key=d.get("group_key"),
+        )
+        return jsonify(result), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/booking/japan-other-resort-request", methods=["POST"])
+def submit_japan_other_resort_request():
+    """日本滑雪「其他雪場」分區:2026-09依你的指示改成單純的需求提出,不是正式訂課,
+    不產生報價/不走金流,故意不呼叫booking.book_japan_multi_day()。"""
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
+    d = request.json
+    try:
+        result = booking.submit_other_resort_request(
+            member_id=member_id, resort_name=d.get("resort_name"),
+            start_date=d.get("start_date"), end_date=d.get("end_date"),
+            day_type=d.get("day_type"), half_day_slot=d.get("half_day_slot"),
+            headcount=d.get("headcount", 1), equipment_type=d.get("equipment_type"),
+            needs_accommodation=d.get("needs_accommodation", False),
+            participants=d.get("participants"), note=d.get("note"),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -4586,6 +4628,7 @@ _TEST_DATA_TABLES = [
     ("indoor_sessions", "室內雪機時段(體驗/包機/團課/自主練習)"),
     ("jump_bookings", "跳台預約"),
     ("japan_bookings", "日本滑雪預約"),
+    ("japan_other_resort_requests", "日本滑雪「其他雪場」需求"),
     ("csia_registrations", "CSIA滑雪教練考照報名資料"),
     ("charter_pass_requests", "包機課堂數包異動申請"),
     ("charter_passes", "包機課堂數包"),

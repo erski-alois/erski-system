@@ -170,16 +170,25 @@
   }
   .list-item { padding: 8px 0; border-bottom: 1px solid #eef1f5; font-size: 13px; }
 
-  .coach-team-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:16px; }
-  .coach-card { display:flex; flex-direction:column; align-items:center; text-align:center;
-                padding:14px; border:1px solid #e2e6ea; border-radius:10px; }
-  .coach-card img { width:88px; height:88px; object-fit:cover; border-radius:50%; background:#eee; margin-bottom:8px; }
-  .coach-avatar-placeholder { width:88px; height:88px; border-radius:50%; background:#eee; margin-bottom:8px;
-                               display:flex; align-items:center; justify-content:center; font-size:28px; color:#aab2bd; }
-  .coach-cert-badges { display:flex; flex-wrap:wrap; justify-content:center; gap:4px; margin:6px 0; }
+  /* 2026-09-21:依你的指示,教練團隊從「直立式、一排4位」改成「橫式、一排3位」。
+     直立式(舊):flex-direction:column,照片在上、文字置中在下,4欄並排。
+     橫式(新):flex-direction:row,照片固定在左側、文字在右側靠左對齊,3欄並排。 */
+  .coach-team-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; }
+  .coach-card { display:flex; flex-direction:row; align-items:flex-start; text-align:left;
+                padding:14px; border:1px solid #e2e6ea; border-radius:10px; gap:12px; }
+  .coach-card img { width:88px; height:88px; object-fit:cover; border-radius:50%; background:#eee;
+                     flex-shrink:0; margin-bottom:0; }
+  .coach-avatar-placeholder { width:88px; height:88px; border-radius:50%; background:#eee; flex-shrink:0;
+                               margin-bottom:0; display:flex; align-items:center; justify-content:center;
+                               font-size:28px; color:#aab2bd; }
+  .coach-card-info { display:flex; flex-direction:column; min-width:0; }
+  .coach-cert-badges { display:flex; flex-wrap:wrap; justify-content:flex-start; gap:4px; margin:6px 0; }
   .coach-cert-badge { font-size:11px; background:#f0f2f5; color:#5a6472; padding:2px 8px; border-radius:10px; white-space:nowrap; }
-  @media (max-width: 720px) {
+  @media (max-width: 900px) {
     .coach-team-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .coach-team-grid { grid-template-columns: repeat(1, 1fr); }
   }
 
   .cal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
@@ -674,6 +683,13 @@
           <div id="japanResortManageWrap" style="display:none; margin-top:8px;">
             <button class="small secondary" onclick="openResortManage()">管理此分區雪場清單(新增/刪除)</button>
           </div>
+          <div id="japanOtherResortWrap" style="display:none;">
+            <label>① 雪場(請自行填寫想去的雪場名稱)</label>
+            <input id="japanOtherResortName" placeholder="例如:苗場滑雪場">
+            <label style="margin-top:8px;">其他需求說明(選填)</label>
+            <textarea id="japanOtherResortNote" rows="3" placeholder="想跟ER Ski說明的行程需求,例如住宿安排、交通、特殊需求等"></textarea>
+            <p class="note">這裡送出的是「需求」,不是正式訂課,不會產生報價或進入付款流程。送出後ER Ski會盡快與你聯繫確認雪場、行程與費用。</p>
+          </div>
           <label>② 指定教練</label>
           <select id="japanCoach" onchange="onWizardChange('japan')"></select>
           <p class="note" id="japanDesignateFeeNote" style="display:none; color:#a6650a; margin-top:4px;"></p>
@@ -706,12 +722,14 @@
             </select>
           </div>
           <div class="price-tag" id="japanPriceDisplay" style="margin-top:8px;"></div>
-          <label style="margin-top:8px;">付款方式</label>
-          <select id="japanPaymentPlan">
-            <option value="full">一次付清</option>
-            <option value="deposit">先付訂金(課程費用50%,尾款需於開課前3日內繳清)</option>
-          </select>
-        <button onclick="submitJapanTrip()">確認並前往付款</button>
+          <div id="japanPaymentPlanWrap">
+            <label style="margin-top:8px;">付款方式</label>
+            <select id="japanPaymentPlan">
+              <option value="full">一次付清</option>
+              <option value="deposit">先付訂金(課程費用50%,尾款需於開課前3日內繳清)</option>
+            </select>
+          </div>
+        <button id="japanSubmitBtn" onclick="submitJapanTrip()">確認並前往付款</button>
         </div>
       </div>
 
@@ -4279,6 +4297,7 @@ async function renderPendingActions() {
   const { data: pendingApplications } = await api("/admin/plan-applications");
   const { data: pendingBilling } = await api("/admin/plan-billing/pending");
   const { data: charterPassRequests } = await api("/admin/charter-pass-requests/pending");
+  const { data: otherResortRequests } = await api("/admin/japan-other-resort-requests/pending");
   const methodLabel = { onsite: "現場付款", bank_transfer: "匯款轉帳" };
 
   let html = `<h3 style="margin-top:14px; font-size:14px;">待核准付款</h3>`;
@@ -4339,7 +4358,30 @@ async function renderPendingActions() {
       }).join("")
     : `<div class="list-item">目前沒有待審核的包機堂數包申請</div>`;
 
+  html += `<h3 style="margin-top:14px; font-size:14px;">日本滑雪「其他雪場」需求</h3>`;
+  html += otherResortRequests.length
+    ? otherResortRequests.map(r => `
+        <div class="list-item">
+          ${r.member_name}(${r.member_phone || "無電話"}) — 想去<b>${r.resort_name}</b>
+          ・${r.start_date}${r.end_date !== r.start_date ? ` ~ ${r.end_date}` : ""}
+          ・${r.day_type==="full"?"全日":"半日"}${r.half_day_slot ? `(${r.half_day_slot==="morning"?"上午":"下午"})` : ""}
+          ・${r.headcount}人・${r.equipment_type==="ski"?"雙板":r.equipment_type==="snowboard"?"單板":"未填寫"}
+          ${r.needs_accommodation ? "・需協助訂住宿" : ""}
+          ${r.note ? `<div class="note">需求說明:${r.note}</div>` : ""}
+          <button class="small" onclick="resolveOtherResortRequest(${r.id}, 'contacted')">標記已聯繫</button>
+          <button class="small secondary" onclick="resolveOtherResortRequest(${r.id}, 'closed')">標記已結案</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有待處理的其他雪場需求</div>`;
+
   wrap.innerHTML = html;
+}
+async function resolveOtherResortRequest(requestId, status) {
+  const staff_note = prompt(status === "contacted" ? "已聯繫,備註(選填):" : "結案,備註(選填):") || null;
+  const { ok, data } = await api(`/admin/japan-other-resort-requests/${requestId}/resolve`, {
+    method: "POST", body: JSON.stringify({ status, staff_note })
+  });
+  if (ok) { renderPendingActions(); }
+  else alert(data.error);
 }
 async function resolveCharterPassRequest(requestId, action) {
   let new_remaining = null;
@@ -6357,26 +6399,51 @@ async function openJapanRegion(regionId) {
 
   document.getElementById("japanRegionTitle").textContent = `日本滑雪預約 — ${currentJapanRegion.name}`;
   document.getElementById("japanAccommodationWrap").style.display = currentJapanRegion.requires_accommodation_option ? "block" : "none";
-  document.getElementById("japanResortManageWrap").style.display = currentJapanRegion.resort_list_editable ? "block" : "none";
 
   const resortWrap = document.getElementById("japanResortWrap");
+  const otherResortWrap = document.getElementById("japanOtherResortWrap");
   const coachSel = document.getElementById("japanCoach");
-
-  if (currentJapanRegion.requires_resort_selection) {
-    resortWrap.style.display = "block";
-    resorts = currentJapanRegion.resorts;
-    document.getElementById("japanResort").innerHTML = resorts.map(r => `<option value="${r.id}">${r.name}</option>`).join("");
-    await onJapanResortChange();
+  // 2026-09-21:依你的指示,「其他雪場」這個分區改成單純的需求提出——雪場改由學員
+  // 自己打字填寫(不再是後台預先建立的下拉選單)、不顯示付款方式、按鈕文字與行為
+  // 都改掉,故意跟其他4個分區(藏王/北海道/鬼首/白馬)的正式訂課流程分開處理。
+  const isOtherResort = currentJapanRegion.code === "other";
+  document.getElementById("japanResortManageWrap").style.display =
+    (currentJapanRegion.resort_list_editable && !isOtherResort) ? "block" : "none";
+  document.getElementById("japanPaymentPlanWrap").style.display = isOtherResort ? "none" : "block";
+  const submitBtn = document.getElementById("japanSubmitBtn");
+  if (isOtherResort) {
+    submitBtn.textContent = "向ER Ski提出需求";
+    submitBtn.onclick = submitJapanOtherResortRequest;
   } else {
+    submitBtn.textContent = "確認並前往付款";
+    submitBtn.onclick = submitJapanTrip;
+  }
+
+  if (isOtherResort) {
     resortWrap.style.display = "none";
-    resorts = currentJapanRegion.resorts;
-    const soleResortId = resorts[0] ? resorts[0].id : null;
-    if (!currentJapanRegion.allow_designate_coach) {
-      coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
-    } else if (soleResortId) {
-      const { data } = await api(`/resorts/${soleResortId}/coaches`);
-      coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
-        data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+    otherResortWrap.style.display = "block";
+    document.getElementById("japanOtherResortName").value = "";
+    document.getElementById("japanOtherResortNote").value = "";
+    resorts = [];
+    coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
+  } else {
+    otherResortWrap.style.display = "none";
+    if (currentJapanRegion.requires_resort_selection) {
+      resortWrap.style.display = "block";
+      resorts = currentJapanRegion.resorts;
+      document.getElementById("japanResort").innerHTML = resorts.map(r => `<option value="${r.id}">${r.name}</option>`).join("");
+      await onJapanResortChange();
+    } else {
+      resortWrap.style.display = "none";
+      resorts = currentJapanRegion.resorts;
+      const soleResortId = resorts[0] ? resorts[0].id : null;
+      if (!currentJapanRegion.allow_designate_coach) {
+        coachSel.innerHTML = `<option value="">由校方指派(不開放自選)</option>`;
+      } else if (soleResortId) {
+        const { data } = await api(`/resorts/${soleResortId}/coaches`);
+        coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
+          data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+      }
     }
   }
   updateJapanPrice();
@@ -6439,6 +6506,13 @@ function toggleJapanHalfSlot() {
 }
 function updateJapanPrice() {
   if (!pricingData) return;
+  // 「其他雪場」是需求提出,不是正式訂課,雪場/報價都還沒談好,不顯示系統試算出來的
+  // 金額(避免讓學員誤以為那是實際報價)。
+  if (currentJapanRegion && currentJapanRegion.code === "other") {
+    document.getElementById("japanPriceDisplay").textContent = "";
+    document.getElementById("japanDesignateFeeNote").style.display = "none";
+    return;
+  }
   const dayType = document.getElementById("japanDayType").value;
   const headcount = getWizardHeadcount("japan");
   const coach = document.getElementById("japanCoach").value;
@@ -6503,6 +6577,39 @@ async function submitJapanTrip() {
     alert(data.error);
   }
 }
+async function submitJapanOtherResortRequest() {
+  if (japanSelectedDates.length === 0) { alert("請先選擇行程日期"); return; }
+  const resort_name = document.getElementById("japanOtherResortName").value.trim();
+  if (!resort_name) { alert("請填寫想去的雪場名稱"); return; }
+  const headcount = getWizardHeadcount("japan");
+  const equipment_type = getWizardEquipment("japan");
+  const participants = getWizardParticipants("japan");
+  const day_type = document.getElementById("japanDayType").value;
+  const half_day_slot = day_type === "half" ? document.getElementById("japanHalfSlot").value : null;
+  const note = document.getElementById("japanOtherResortNote").value.trim();
+
+  const { ok, data } = await api("/booking/japan-other-resort-request", {
+    method: "POST",
+    body: JSON.stringify({
+      member_id: currentMemberId, resort_name,
+      start_date: japanSelectedDates[0], end_date: japanSelectedDates[japanSelectedDates.length - 1],
+      day_type, half_day_slot, headcount, equipment_type, participants, note,
+    })
+  });
+  if (ok) {
+    alert("已送出需求,ER Ski將盡快與你聯繫確認雪場、行程與費用。");
+    japanSelectedDates = [];
+    document.getElementById("japanStartDate").value = "";
+    document.getElementById("japanEndDate").value = "";
+    document.getElementById("japanRangeNote").innerHTML = "";
+    document.getElementById("japanOtherResortName").value = "";
+    document.getElementById("japanOtherResortNote").value = "";
+    rangeCalendarState.start = null;
+    rangeCalendarState.end = null;
+  } else {
+    alert(data.error);
+  }
+}
 
 async function loadFaqList() {
   const { data } = await api("/faq");
@@ -6528,22 +6635,24 @@ async function loadCoachTeam() {
   el.innerHTML = `<div class="coach-team-grid">` + data.map(c => `
     <div class="coach-card">
       ${c.promo_photo ? `<img src="${c.promo_photo}" alt="${c.name}">` : `<div class="coach-avatar-placeholder">${(c.name || "").slice(0, 1)}</div>`}
-      <b>${c.name}</b>
-      ${c.rank ? `<p class="note">${c.rank}</p>` : ""}
-      ${c.capabilities && c.capabilities.length ? `
-        <div class="coach-cert-badges">
-          ${c.capabilities.map(cap => `<span class="coach-cert-badge">${cap}</span>`).join("")}
-        </div>` : ""}
-      ${c.certifications && c.certifications.length ? `
-        <div class="coach-cert-badges">
-          ${c.certifications.map(cert => `<span class="coach-cert-badge">${cert.cert_name}${certTypeLabel[cert.cert_type] ? " "+certTypeLabel[cert.cert_type] : ""} ${cert.cert_level}</span>`).join("")}
-        </div>` : ""}
-      ${c.resume ? `<p class="note"><b>資歷</b>:${c.resume}年</p>` : ""}
-      ${c.experience ? `<p class="note"><b>經歷</b>:${c.experience}</p>` : ""}
-      ${c.bio_intro ? `<p class="note"><b>自我介紹</b>:${c.bio_intro}</p>` : (c.self_intro ? `<p class="note"><b>自我介紹</b>:${c.self_intro}</p>` : "")}
-      ${c.message_to_students ? `<p class="note"><b>給學員的一句話</b>:${c.message_to_students}</p>` : ""}
-      ${c.coach_motto ? `<p class="note" style="font-style:italic;">「${c.coach_motto}」</p>` : ""}
-      ${!c.resume && !c.experience && !c.bio_intro && !c.self_intro && !c.message_to_students && !c.coach_motto ? `<p class="note">尚未填寫自我介紹</p>` : ""}
+      <div class="coach-card-info">
+        <b>${c.name}</b>
+        ${c.rank ? `<p class="note">${c.rank}</p>` : ""}
+        ${c.capabilities && c.capabilities.length ? `
+          <div class="coach-cert-badges">
+            ${c.capabilities.map(cap => `<span class="coach-cert-badge">${cap}</span>`).join("")}
+          </div>` : ""}
+        ${c.certifications && c.certifications.length ? `
+          <div class="coach-cert-badges">
+            ${c.certifications.map(cert => `<span class="coach-cert-badge">${cert.cert_name}${certTypeLabel[cert.cert_type] ? " "+certTypeLabel[cert.cert_type] : ""} ${cert.cert_level}</span>`).join("")}
+          </div>` : ""}
+        ${c.resume ? `<p class="note"><b>資歷</b>:${c.resume}年</p>` : ""}
+        ${c.experience ? `<p class="note"><b>經歷</b>:${c.experience}</p>` : ""}
+        ${c.bio_intro ? `<p class="note"><b>自我介紹</b>:${c.bio_intro}</p>` : (c.self_intro ? `<p class="note"><b>自我介紹</b>:${c.self_intro}</p>` : "")}
+        ${c.message_to_students ? `<p class="note"><b>給學員的一句話</b>:${c.message_to_students}</p>` : ""}
+        ${c.coach_motto ? `<p class="note" style="font-style:italic;">「${c.coach_motto}」</p>` : ""}
+        ${!c.resume && !c.experience && !c.bio_intro && !c.self_intro && !c.message_to_students && !c.coach_motto ? `<p class="note">尚未填寫自我介紹</p>` : ""}
+      </div>
     </div>
   `).join("") + `</div>` || `<p class="note">尚無教練資料</p>`;
 }
