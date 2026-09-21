@@ -4367,6 +4367,63 @@ def admin_list_pending_refunds():
     return jsonify(rows_to_dicts(rows))
 
 
+@app.route("/api/admin/indoor-sessions/unpaid-designate-fees", methods=["GET"])
+@require_section("orders")
+def admin_list_unpaid_designate_fees():
+    """列出包機(室內滑雪charter)會員自選教練、有加收指定費但客服還沒標記收款的場次。
+    見f4a2c9e6d813這支migration新增的designate_fee_collected_at欄位——這筆錢不是走
+    orders/線上金流,是客服跟客戶另外收(現場付款/匯款),系統原本完全沒有追蹤有沒有
+    漏收,這裡補上一份清單方便核對。"""
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT s.id AS session_id, s.booking_date, s.start_hour, s.designate_fee,
+                  st.name AS coach_name, GROUP_CONCAT(m.name, '、') AS member_names
+           FROM indoor_sessions s
+           LEFT JOIN staff st ON s.coach_id = st.id
+           LEFT JOIN indoor_session_members sm ON sm.session_id = s.id AND sm.status='enrolled'
+           LEFT JOIN members m ON sm.member_id = m.id
+           WHERE s.category='charter' AND s.designate_fee > 0
+             AND s.designate_fee_collected_at IS NULL AND s.status != 'cancelled'
+           GROUP BY s.id, s.booking_date, s.start_hour, s.designate_fee, st.name
+           ORDER BY s.booking_date, s.start_hour"""
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/indoor-sessions/<int:session_id>/mark-designate-fee-collected", methods=["POST"])
+@require_section("orders")
+def admin_mark_designate_fee_collected(session_id):
+    conn = get_conn()
+    session = conn.execute(
+        "SELECT id, designate_fee, designate_fee_collected_at FROM indoor_sessions WHERE id=?", (session_id,)
+    ).fetchone()
+    if not session:
+        conn.close()
+        return jsonify({"error": "找不到此場次"}), 404
+    if not session["designate_fee"]:
+        conn.close()
+        return jsonify({"error": "這個場次沒有指定教練費,不需要標記收款"}), 400
+    if session["designate_fee_collected_at"]:
+        conn.close()
+        return jsonify({"error": "這筆指定教練費已經標記過收款了"}), 400
+    conn.execute(
+        f"UPDATE indoor_sessions SET designate_fee_collected_at={NOW_SQL}, "
+        f"designate_fee_collected_by_staff_id=? WHERE id=?",
+        (request.current_staff["id"], session_id),
+    )
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'mark_designate_fee_collected', 'indoor_session', ?, ?, ?)""",
+        (request.current_staff["id"], session_id,
+         json.dumps({"designate_fee_collected_at": None}),
+         json.dumps({"designate_fee": session["designate_fee"]})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 import csv
 import io
 

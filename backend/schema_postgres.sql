@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS indoor_sessions (
     )) DEFAULT 'pending_payment',
     charter_package_size INTEGER,
     designate_fee INTEGER NOT NULL DEFAULT 0,  -- 會員自選教練時加收的指定費(比照日本滑雪機制,金額來自pricing_config,目前只記錄金額,實際收款由客服後台手動處理)
+    designate_fee_collected_at TEXT,           -- 2026-09新增:客服實際收到這筆指定費的時間(NULL表示還沒收,見「未收指定費」清單)
+    designate_fee_collected_by_staff_id INTEGER REFERENCES staff(id),  -- 標記已收款的員工
     attendance_status TEXT CHECK(attendance_status IN ('pending','completed','no_show')) DEFAULT 'pending',
     lesson_notes TEXT,               -- 教練評估/教學內容/異常記錄
     checked_in_at TEXT,

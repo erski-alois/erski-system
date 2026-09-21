@@ -3193,8 +3193,24 @@ async function renderOrdersManageTab() {
   const wrap = document.getElementById("staffTab-orders");
   const { data: orders } = await api("/admin/orders");
   const { data: pendingRefunds } = await api("/admin/orders/refunds/pending");
+  const { data: unpaidDesignateFees } = await api("/admin/indoor-sessions/unpaid-designate-fees");
   const catLabelMap = { charter_pass:"包機堂數包", trial:"體驗課", self_practice:"自主練習", group_class:"團課", jump:"跳台體驗", japan_trip:"日本教練課", plan_subscription:"團課方案" };
   const statusLabelMap = { pending:"待付款", paid:"已付款", refunded:"已退款", cancelled:"已取消" };
+
+  // 2026-09新增:包機指定教練費目前不走線上金流,是客服另外跟客戶收現場付款/匯款,
+  // 系統原本沒有任何地方能看出「這筆錢到底收了沒」,這裡列出還沒標記收款的場次方便核對。
+  const unpaidDesignateFeesHtml = unpaidDesignateFees.length ? `
+    <div class="card" style="margin-bottom:12px; border:1px solid #e65100;">
+      <div class="sub-section-title" style="color:#e65100;">未收指定教練費(${unpaidDesignateFees.length}筆)</div>
+      <p class="note">以下是包機(室內滑雪)會員自選教練、需要加收指定費,但還沒標記已收款的場次。收到款項後請按「標記已收款」。</p>
+      ${unpaidDesignateFees.map(f => `
+        <div class="list-item">
+          ${f.booking_date} ${f.start_hour}:00 — 教練:${f.coach_name || "-"}・會員:${f.member_names || "-"}・指定費NT$${f.designate_fee}
+          <button class="small" onclick="markDesignateFeeCollected(${f.session_id})">標記已收款</button>
+        </div>
+      `).join("")}
+    </div>
+  ` : "";
 
   const pendingRefundsHtml = pendingRefunds.length ? `
     <div class="card" style="margin-bottom:12px;">
@@ -3219,6 +3235,7 @@ async function renderOrdersManageTab() {
     <div class="admin-page-label">ERSKI OPERATIONS</div>
     <div class="admin-page-title">室內滑雪訂單管理</div>
     <p class="note">列出最近的訂單,可套用折扣、記錄收款(支援訂金/尾款分次)、辦理退款。若客戶已在前台選擇「現場付款」,下方收款金額/付款方式會自動帶入,不用再手動輸入或詢問客戶。</p>` +
+    unpaidDesignateFeesHtml +
     pendingRefundsHtml +
     orders.slice(0, 50).map(o => {
       const payable = o.amount - o.discount_amount;
@@ -3308,6 +3325,12 @@ async function approveRefund(orderId) {
 async function rejectRefund(orderId) {
   const note = prompt("駁回原因(選填):") || "";
   const { ok, data } = await api(`/admin/orders/${orderId}/refund/reject`, { method: "POST", body: JSON.stringify({ note }) });
+  if (!ok) { alert(data.error); return; }
+  await renderOrdersManageTab();
+}
+async function markDesignateFeeCollected(sessionId) {
+  if (!confirm("確定已經收到這筆指定教練費了嗎?")) return;
+  const { ok, data } = await api(`/admin/indoor-sessions/${sessionId}/mark-designate-fee-collected`, { method: "POST" });
   if (!ok) { alert(data.error); return; }
   await renderOrdersManageTab();
 }
@@ -6368,10 +6391,16 @@ function _equipLabel(equipment_type) {
 async function refreshMyCharterPasses() {
   const { data } = await api(`/members/${currentMemberId}`);
   const headcount_type = getWizardHeadcount("charter");
-  const matching = data.charter_passes.filter(p => p.headcount_type === headcount_type && p.remaining > 0);
+  // 2026-09修正:原本「從沒買過」跟「買過但已經用完」共用同一句「目前沒有可用的堂數包,
+  // 請先購買」,對已經買過、用完的會員來說容易誤會成系統忘記他之前買的紀錄。
+  // 這裡先看有沒有「這個人數類型」的堂數包(不管有沒有用完),分開講清楚是哪一種情況。
+  const allOfType = data.charter_passes.filter(p => p.headcount_type === headcount_type);
+  const matching = allOfType.filter(p => p.remaining > 0);
   const el = document.getElementById("myCharterPasses");
   if (!matching.length) {
-    el.innerHTML = `<div class="list-item">目前沒有可用的堂數包(1對${headcount_type}),請先購買</div>`;
+    el.innerHTML = allOfType.length
+      ? `<div class="list-item">你的堂數包(1對${headcount_type})已經用完了,如需繼續訂課請在下方重新購買</div>`
+      : `<div class="list-item">目前沒有可用的堂數包(1對${headcount_type}),請先在下方購買</div>`;
     return;
   }
   el.innerHTML = matching.map(p => {
@@ -6500,7 +6529,12 @@ async function loadMyPlanStatus() {
     const q = data.quota_status;
     const remaining = q ? (Math.max(q.charter_total - q.charter_used, 0) + Math.max(q.self_practice_total - q.self_practice_used, 0) + Math.max(q.group_class_total - q.group_class_used, 0)) : 99;
     if (remaining <= 2) {
-      html += `<div class="list-item"><span class="status-tag warn">本期額度剩下 ${remaining} 堂,即將用完,如需繼續使用請重新申請方案</span></div>`;
+      // 2026-09修正:原本文字「如需繼續使用請重新申請方案」容易讓會員誤以為
+      // 不申請額度就會中斷——實際上方案是自動延續的,下個月額度會自動重新計算,
+      // 不申請也完全不影響繼續使用。後台(booking.apply_for_plan)在額度剩餘<=2時
+      // 才會放行重新送出申請,是設計給「想趁這個時機更換方案/計費週期」的會員用,
+      // 不是必要動作,所以文字改成講清楚這一點、不再暗示不做會怎樣。
+      html += `<div class="list-item"><span class="status-tag warn">本期額度剩下 ${remaining} 堂,即將用完;方案會自動延續,下個月額度會自動重新計算,不需要特別申請就能繼續使用。如果想趁這個時機更換方案或改變年繳/月繳週期,才需要在下方重新送出申請</span></div>`;
       applyCard.style.display = "block";
     } else {
       applyCard.style.display = "none";
