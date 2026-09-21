@@ -979,6 +979,9 @@
         </div>
       </div>
 
+      <!-- 2026-09:依指示,「常見問題」頁面先不對外開放(客服機器人比對功能尚未完善),
+           暫時隱藏(拿掉右側導覽連結),等機器人完善後再重新開放。這個頁面本身跟後台
+           FAQ管理功能都完整保留,沒有刪除,之後要恢復只需要把導覽連結加回來即可。 -->
       <div id="page-faq" class="page">
         <div class="card">
           <h3>問客服機器人</h3>
@@ -992,6 +995,29 @@
         <div class="card">
           <h3>常見問題列表</h3>
           <div id="faqListWrap"></div>
+        </div>
+      </div>
+
+      <div id="page-feedback" class="page">
+        <div class="card">
+          <h3>意見反應</h3>
+          <p class="note">有任何建議、稱讚或需要改進的地方,都歡迎讓我們知道,ER Ski會盡快查看並回覆你(緊急事項請直接聯繫教練或客服,這裡不是即時客服管道)。</p>
+          <label>類型(選填)</label>
+          <select id="feedbackCategory">
+            <option value="">不指定</option>
+            <option value="建議">建議</option>
+            <option value="稱讚">稱讚</option>
+            <option value="客訴">客訴/需要改進</option>
+            <option value="其他">其他</option>
+          </select>
+          <label>內容</label>
+          <textarea id="feedbackContent" rows="5" placeholder="請輸入你想反應的意見..."></textarea>
+          <button onclick="submitFeedback()">送出意見</button>
+          <div id="feedbackSubmitStatus" style="margin-top:10px;"></div>
+        </div>
+        <div class="card">
+          <h3>我送出過的意見</h3>
+          <div id="myFeedbackListWrap"></div>
         </div>
       </div>
 
@@ -1162,7 +1188,7 @@
         <div class="nav-flat" onclick="switchPage('coaches', null)">教練團隊</div>
       </div>
       <div class="nav-group">
-        <div class="nav-flat" onclick="switchPage('faq', null)">常見問題</div>
+        <div class="nav-flat" onclick="switchPage('feedback', null)">意見反應</div>
       </div>
       <div class="nav-group">
         <div class="nav-flat" id="navflat-center" onclick="switchPage('center', null)">會員中心</div>
@@ -2279,9 +2305,20 @@ async function renderPartnerManageTools() {
   html += partners.map(p => `
     <div class="person-card">
       <b>${p.name}</b>${p.is_active ? "" : "<span class=\"status-tag warn\">已停用</span>"}
-      <div class="list-item">優惠碼:<b>${p.code}</b>・回饋比例:${(p.rebate_rate*100).toFixed(1)}%</div>
-      <div class="list-item">聯絡人:${p.contact_name || "-"}・電話:${p.contact_phone || "-"}・Email:${p.contact_email || "-"}</div>
-      <button class="small" onclick="viewPartnerReport(${p.id})">查看推薦報表</button>
+      <div class="list-item">優惠碼:<b>${p.code}</b>(建立後無法更改)</div>
+      <div class="field-grid" style="margin-top:6px;">
+        <div><label>單位名稱</label><input id="partnerEditName-${p.id}" value="${(p.name||"").replace(/"/g,'&quot;')}"></div>
+        <div><label>聯絡人</label><input id="partnerEditContact-${p.id}" value="${(p.contact_name||"").replace(/"/g,'&quot;')}"></div>
+        <div><label>聯絡電話</label><input id="partnerEditPhone-${p.id}" value="${(p.contact_phone||"").replace(/"/g,'&quot;')}"></div>
+        <div><label>聯絡Email</label><input id="partnerEditEmail-${p.id}" value="${(p.contact_email||"").replace(/"/g,'&quot;')}"></div>
+        <div><label>回饋比例(例如0.05代表5%)</label><input type="number" step="0.01" id="partnerEditRebate-${p.id}" value="${p.rebate_rate}"></div>
+      </div>
+      <button class="small" onclick="savePartnerEdit(${p.id})">儲存修改</button>
+      <button class="small secondary" onclick="viewPartnerReport(${p.id})">查看推薦報表</button>
+      ${p.is_active
+        ? `<button class="small secondary" onclick="deletePartner(${p.id})">刪除/停用</button>`
+        : `<button class="small secondary" onclick="reactivatePartner(${p.id})">重新啟用</button>`}
+      <div id="partnerEditStatus-${p.id}" style="margin-top:6px;"></div>
       <div id="partnerReport-${p.id}" style="margin-top:8px;"></div>
     </div>
   `).join("") || `<p class="note">尚無合作單位</p>`;
@@ -2319,6 +2356,33 @@ async function createPartnerAdmin() {
   if (ok) await renderPartnerManageTools();
 }
 
+async function savePartnerEdit(partnerId) {
+  const name = document.getElementById(`partnerEditName-${partnerId}`).value;
+  const contact_name = document.getElementById(`partnerEditContact-${partnerId}`).value;
+  const contact_phone = document.getElementById(`partnerEditPhone-${partnerId}`).value;
+  const contact_email = document.getElementById(`partnerEditEmail-${partnerId}`).value;
+  const rebate_rate = parseFloat(document.getElementById(`partnerEditRebate-${partnerId}`).value) || 0;
+  const { ok, data } = await api(`/admin/partners/${partnerId}`, {
+    method: "PUT", body: JSON.stringify({ name, contact_name, contact_phone, contact_email, rebate_rate })
+  });
+  const statusEl = document.getElementById(`partnerEditStatus-${partnerId}`);
+  statusEl.innerHTML = ok ? `<span class="status-tag ok">已儲存</span>` : `<span class="status-tag warn">${data.error||"儲存失敗"}</span>`;
+  if (ok) await renderPartnerManageTools();
+}
+async function deletePartner(partnerId) {
+  if (!confirm("確定要刪除這個合作單位嗎?如果已經有會員或訂單使用過,系統會改成停用而不是真正刪除。")) return;
+  const { ok, data } = await api(`/admin/partners/${partnerId}`, { method: "DELETE" });
+  if (ok) {
+    alert(data.action === "deleted" ? "已刪除" : (data.reason || "已停用"));
+    await renderPartnerManageTools();
+  } else {
+    alert(data.error || "操作失敗");
+  }
+}
+async function reactivatePartner(partnerId) {
+  const { ok, data } = await api(`/admin/partners/${partnerId}`, { method: "PUT", body: JSON.stringify({ is_active: 1 }) });
+  if (ok) { await renderPartnerManageTools(); } else { alert(data.error || "操作失敗"); }
+}
 async function viewPartnerReport(partnerId) {
   const { data } = await api(`/admin/partners/${partnerId}/report`);
   const el = document.getElementById(`partnerReport-${partnerId}`);
@@ -4298,6 +4362,7 @@ async function renderPendingActions() {
   const { data: pendingBilling } = await api("/admin/plan-billing/pending");
   const { data: charterPassRequests } = await api("/admin/charter-pass-requests/pending");
   const { data: otherResortRequests } = await api("/admin/japan-other-resort-requests/pending");
+  const { data: pendingFeedback } = await api("/admin/feedback/pending");
   const methodLabel = { onsite: "現場付款", bank_transfer: "匯款轉帳" };
 
   let html = `<h3 style="margin-top:14px; font-size:14px;">待核准付款</h3>`;
@@ -4373,7 +4438,28 @@ async function renderPendingActions() {
         </div>`).join("")
     : `<div class="list-item">目前沒有待處理的其他雪場需求</div>`;
 
+  html += `<h3 style="margin-top:14px; font-size:14px;">客戶意見反應</h3>`;
+  html += pendingFeedback.length
+    ? pendingFeedback.map(f => `
+        <div class="list-item">
+          ${f.member_name}(${f.member_phone || "無電話"}) ${f.category ? `・<b>${f.category}</b>` : ""}
+          <div class="note">${f.content.replace(/</g,"&lt;")}</div>
+          <div class="note">送出時間:${f.created_at}</div>
+          <input id="feedbackReplyNote-${f.id}" placeholder="回覆內容(選填,會員看得到)">
+          <button class="small" onclick="resolveFeedback(${f.id}, 'contacted')">標記已聯繫</button>
+          <button class="small secondary" onclick="resolveFeedback(${f.id}, 'closed')">標記已結案</button>
+        </div>`).join("")
+    : `<div class="list-item">目前沒有待處理的客戶意見</div>`;
+
   wrap.innerHTML = html;
+}
+async function resolveFeedback(feedbackId, status) {
+  const staff_note = document.getElementById(`feedbackReplyNote-${feedbackId}`).value || null;
+  const { ok, data } = await api(`/admin/feedback/${feedbackId}/resolve`, {
+    method: "POST", body: JSON.stringify({ status, staff_note })
+  });
+  if (ok) { renderPendingActions(); }
+  else alert(data.error);
 }
 async function resolveOtherResortRequest(requestId, status) {
   const staff_note = prompt(status === "contacted" ? "已聯繫,備註(選填):" : "結案,備註(選填):") || null;
@@ -4503,7 +4589,8 @@ async function renderProfitLossTools() {
   const defaultPeriod = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
   wrap.innerHTML = `
     <h3 style="margin-top:16px; font-size:14px;">月結損益總覽</h3>
-    <p class="note">營收 - 教練薪資支出 = 淨利。薪資支出只會計入「已經在薪資管理分頁產生過薪資紀錄」的教練,建議先到薪資管理產生當月全部教練薪資,再回來看這裡。</p>
+    <p class="note">營收 - 教練薪資支出(教練實際所得+公司負擔勞健保/勞退) = 淨利。薪資支出只會計入「已經在薪資管理分頁產生過薪資紀錄」的教練,建議先到薪資管理產生當月全部教練薪資,再回來看這裡。</p>
+    <p class="note" style="color:#a6650a;">⚠️ 2026-09起「教練薪資支出」新增計入公司負擔的勞健保/勞退雇主提繳額(先前只計入教練實際所得net_pay,沒有反映這部分公司實際成本),同樣期間的淨利數字會比先前略低一些,這是修正後更準確,不是算錯。</p>
     <div class="row">
       <input type="month" id="profitLossPeriod" value="${defaultPeriod}">
       <button class="small" onclick="loadProfitLoss()">查詢</button>
@@ -4528,6 +4615,7 @@ async function loadProfitLoss() {
         <div style="flex:1;">
           <p class="note" style="margin:0;">教練薪資支出</p>
           <p style="font-size:20px; font-weight:700; margin:2px 0;">NT$${pl.total_payroll_expense.toLocaleString()}</p>
+          <p class="note" style="margin:0; font-size:11px;">(實際所得NT$${pl.payroll_net_pay_total.toLocaleString()} + 公司負擔勞健保/勞退NT$${pl.payroll_employer_insurance_total.toLocaleString()})</p>
         </div>
         <div style="flex:1;">
           <p class="note" style="margin:0;">淨利</p>
@@ -4544,7 +4632,7 @@ async function loadProfitLoss() {
 
     <div class="sub-section-title">薪資支出明細</div>
     ${pl.payroll_by_coach.length
-      ? pl.payroll_by_coach.map(c => `<div class="list-item">${c.coach_name}:NT$${c.net_pay.toLocaleString()}</div>`).join("")
+      ? pl.payroll_by_coach.map(c => `<div class="list-item">${c.coach_name}:實際所得NT$${c.net_pay.toLocaleString()} + 公司負擔NT$${c.employer_insurance.toLocaleString()}</div>`).join("")
       : `<div class="list-item">本月尚未產生任何教練薪資紀錄,請先到「薪資管理」分頁產生</div>`}
   `;
 }
@@ -4563,7 +4651,8 @@ async function renderPayrollTools() {
     <div id="payrollListWrap" style="margin-top:10px;"></div>
 
     <h3 style="margin-top:20px; font-size:14px;">勞健保投保級距表</h3>
-    <p class="note" style="color:#a6650a;">⚠️ 以下金額僅供試算參考,請務必對照勞保局/全民健保署最新公告核對後修正。</p>
+    <p class="note">2026-09已更新為115年(2026年)最新11級投保薪資分級表(115.1.1生效,最高45,800元),並新增勞保/健保雇主負擔、勞退雇主提繳三個欄位。</p>
+    <p class="note" style="color:#a6650a;">⚠️ 健保/勞退實際級距表還有更高的級距(健保最高到31萬多),這裡只建到跟勞保投保薪資相同的11級;如有教練或員工基本薪資超過45,800元,健保/勞退參考值可能偏低,請自行核對後修正或人工覆蓋。</p>
     <div id="insuranceBracketsWrap"></div>
     <button class="small secondary" onclick="addInsuranceBracketRow()">+ 新增級距</button>
     <button style="margin-top:10px;" onclick="saveInsuranceBrackets()">儲存級距表</button>
@@ -4594,11 +4683,15 @@ async function loadPayrollList() {
         <div><label>其他補貼說明</label><input id="payrollSubsidyNote-${r.id}" value="${(r.other_subsidy_note||"").replace(/"/g,'&quot;')}"></div>
         <div><label>日本出差補助</label><input type="number" id="payrollJapanTravel-${r.id}" value="${r.japan_travel_subsidy||0}"></div>
         <div><label>日本交通補助</label><input type="number" id="payrollJapanTransport-${r.id}" value="${r.japan_transportation_subsidy||0}"></div>
-        <div><label>勞保(可覆蓋)</label><input type="number" id="payrollLabor-${r.id}" value="${r.labor_insurance}"></div>
-        <div><label>健保(可覆蓋)</label><input type="number" id="payrollHealth-${r.id}" value="${r.health_insurance}"></div>
+        <div><label>勞保自付(可覆蓋)</label><input type="number" id="payrollLabor-${r.id}" value="${r.labor_insurance}"></div>
+        <div><label>健保自付(可覆蓋)</label><input type="number" id="payrollHealth-${r.id}" value="${r.health_insurance}"></div>
+        <div><label>勞保雇主負擔(可覆蓋)</label><input type="number" id="payrollLaborEr-${r.id}" value="${r.labor_insurance_employer||0}"></div>
+        <div><label>健保雇主負擔(可覆蓋)</label><input type="number" id="payrollHealthEr-${r.id}" value="${r.health_insurance_employer||0}"></div>
+        <div><label>勞退雇主提繳(可覆蓋)</label><input type="number" id="payrollPensionEr-${r.id}" value="${r.pension_employer||0}"></div>
         <div><label>備註</label><input id="payrollNotes-${r.id}" value="${(r.notes||"").replace(/"/g,'&quot;')}"></div>
       </div>
       <p class="note" style="margin-top:8px; font-size:14px; font-weight:700; color:#1a2433;">實際所得:NT$${r.net_pay}</p>
+      <p class="note">公司負擔(勞健保+勞退,不影響實際所得):NT$${(r.labor_insurance_employer||0)+(r.health_insurance_employer||0)+(r.pension_employer||0)}</p>
       <button class="small" onclick="savePayrollRecord(${r.id})">儲存人工項目</button>
       <button class="small secondary" onclick="downloadPayslip(${r.id})">下載薪資單PDF</button>
       <div id="payrollSaveStatus-${r.id}" style="margin-top:6px;"></div>
@@ -4652,6 +4745,9 @@ async function savePayrollRecord(recordId) {
     japan_transportation_subsidy: parseInt(document.getElementById(`payrollJapanTransport-${recordId}`).value) || 0,
     labor_insurance: parseInt(document.getElementById(`payrollLabor-${recordId}`).value) || 0,
     health_insurance: parseInt(document.getElementById(`payrollHealth-${recordId}`).value) || 0,
+    labor_insurance_employer: parseInt(document.getElementById(`payrollLaborEr-${recordId}`).value) || 0,
+    health_insurance_employer: parseInt(document.getElementById(`payrollHealthEr-${recordId}`).value) || 0,
+    pension_employer: parseInt(document.getElementById(`payrollPensionEr-${recordId}`).value) || 0,
     notes: document.getElementById(`payrollNotes-${recordId}`).value,
   };
   const { ok } = await api(`/admin/payroll/${recordId}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -4669,7 +4765,10 @@ function renderInsuranceBracketsTable() {
   const wrap = document.getElementById("insuranceBracketsWrap");
   wrap.innerHTML = `
     <div class="row" style="font-size:11px; color:#7d8794; font-weight:700;">
-      <div>月薪下限</div><div>月薪上限</div><div>投保薪資</div><div>勞保自付額</div><div>健保自付額</div><div></div>
+      <div>月薪下限</div><div>月薪上限</div><div>投保薪資</div>
+      <div>勞保自付</div><div>勞保雇主負擔</div>
+      <div>健保自付</div><div>健保雇主負擔</div>
+      <div>勞退雇主提繳</div><div></div>
     </div>
     ${window._insuranceBrackets.map((b, i) => `
       <div class="row" id="bracketRow-${i}">
@@ -4677,14 +4776,17 @@ function renderInsuranceBracketsTable() {
         <input type="number" class="bracketMax" value="${b.bracket_max}">
         <input type="number" class="bracketInsured" value="${b.insured_salary}">
         <input type="number" class="bracketLabor" value="${b.labor_insurance_employee}">
+        <input type="number" class="bracketLaborEr" value="${b.labor_insurance_employer||0}">
         <input type="number" class="bracketHealth" value="${b.health_insurance_employee}">
+        <input type="number" class="bracketHealthEr" value="${b.health_insurance_employer||0}">
+        <input type="number" class="bracketPensionEr" value="${b.pension_employer||0}">
         <button class="small secondary" onclick="document.getElementById('bracketRow-${i}').remove()">刪除</button>
       </div>
     `).join("")}
   `;
 }
 function addInsuranceBracketRow() {
-  window._insuranceBrackets.push({ bracket_min: 0, bracket_max: 0, insured_salary: 0, labor_insurance_employee: 0, health_insurance_employee: 0 });
+  window._insuranceBrackets.push({ bracket_min: 0, bracket_max: 0, insured_salary: 0, labor_insurance_employee: 0, labor_insurance_employer: 0, health_insurance_employee: 0, health_insurance_employer: 0, pension_employer: 0 });
   renderInsuranceBracketsTable();
 }
 async function saveInsuranceBrackets() {
@@ -4694,7 +4796,10 @@ async function saveInsuranceBrackets() {
     bracket_max: parseInt(row.querySelector(".bracketMax").value) || 0,
     insured_salary: parseInt(row.querySelector(".bracketInsured").value) || 0,
     labor_insurance_employee: parseInt(row.querySelector(".bracketLabor").value) || 0,
+    labor_insurance_employer: parseInt(row.querySelector(".bracketLaborEr").value) || 0,
     health_insurance_employee: parseInt(row.querySelector(".bracketHealth").value) || 0,
+    health_insurance_employer: parseInt(row.querySelector(".bracketHealthEr").value) || 0,
+    pension_employer: parseInt(row.querySelector(".bracketPensionEr").value) || 0,
   }));
   const { ok } = await api("/admin/insurance-brackets", { method: "PUT", body: JSON.stringify({ brackets }) });
   document.getElementById("insuranceSaveStatus").innerHTML = ok
@@ -5624,7 +5729,7 @@ function switchPage(pageName, groupName, force) {
     event.target.classList.add("active-top");
   }
 
-  const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay, csia: loadCsiaPage };
+  const refreshMap = { trial: loadTrialDay, self: () => { loadSelfDay(); loadSelfQuotaStatus(); }, charter: loadCharterDay, jump: loadJumpDay, group: loadGroupDay, csia: loadCsiaPage, feedback: loadMyFeedbackList };
   if (refreshMap[pageName]) refreshMap[pageName]();
 }
 let _profileBannerShownOnce = false;
@@ -6626,6 +6731,39 @@ async function submitFaqAsk() {
     ? `<div class="list-item"><span class="status-tag ok">已找到答案</span><br><b>${data.question}</b><br>${data.answer}</div>`
     : `<div class="list-item"><span class="status-tag warn">${data.message}</span></div>`;
   document.getElementById("faqAskInput").value = "";
+}
+
+const _feedbackStatusLabel = { pending: "待處理", contacted: "已聯繫", closed: "已結案" };
+async function submitFeedback() {
+  const category = document.getElementById("feedbackCategory").value;
+  const content = document.getElementById("feedbackContent").value.trim();
+  const statusEl = document.getElementById("feedbackSubmitStatus");
+  if (!content) { statusEl.innerHTML = `<span class="status-tag warn">請輸入意見內容</span>`; return; }
+  const { ok, data } = await api("/feedback", { method: "POST", body: JSON.stringify({ category, content }) });
+  statusEl.innerHTML = ok
+    ? `<span class="status-tag ok">已送出,謝謝你的意見!</span>`
+    : `<span class="status-tag warn">${data.error || "送出失敗"}</span>`;
+  if (ok) {
+    document.getElementById("feedbackContent").value = "";
+    document.getElementById("feedbackCategory").value = "";
+    await loadMyFeedbackList();
+  }
+}
+async function loadMyFeedbackList() {
+  const { data } = await api("/feedback/mine");
+  const el = document.getElementById("myFeedbackListWrap");
+  el.innerHTML = data.length
+    ? data.map(f => `
+      <div class="list-item" style="display:block;">
+        <div style="display:flex; justify-content:space-between;">
+          <b>${f.category || "(未指定類型)"}</b>
+          <span class="status-tag ${f.status === 'pending' ? 'warn' : 'ok'}">${_feedbackStatusLabel[f.status] || f.status}</span>
+        </div>
+        <p style="margin:4px 0;">${f.content.replace(/</g,"&lt;")}</p>
+        <p class="note" style="margin:0;">送出時間:${f.created_at}</p>
+        ${f.staff_note ? `<p class="note" style="margin-top:4px;">ER Ski回覆:${f.staff_note.replace(/</g,"&lt;")}</p>` : ""}
+      </div>`).join("")
+    : `<p class="note">你還沒有送出過意見</p>`;
 }
 
 async function loadCoachTeam() {

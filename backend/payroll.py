@@ -13,6 +13,11 @@
 - 勞健保金額:依「基本薪資」對照 insurance_brackets 級距表帶出參考值,
   可在後台「薪資管理」畫面人工覆蓋。此級距表金額僅供試算參考,
   請務必對照勞保局/全民健保署最新公告核對。
+- 2026-09新增:除了員工自付額(labor_insurance/health_insurance,會從教練net_pay扣除)
+  以外,也一併帶出勞保/健保雇主負擔額、勞退雇主提繳額(labor_insurance_employer/
+  health_insurance_employer/pension_employer)——這幾筆不影響教練實際所得(不會從
+  net_pay扣除),純粹是公司實際負擔的人事成本,供月結損益(get_profit_loss_summary)
+  計算更準確的「教練薪資支出」使用,同樣可在後台人工覆蓋。
 """
 
 import calendar
@@ -32,18 +37,24 @@ def _period_date_range(period):
 
 
 def _lookup_insurance(conn, monthly_salary):
-    """依月薪金額查詢對照的勞健保員工自付額。找不到落點時,取最接近的級距。"""
+    """依月薪金額查詢對照的勞健保員工自付額、勞健保雇主負擔額、勞退雇主提繳額。
+    找不到落點時,取最接近的級距(級距表目前只建到115年勞保投保薪資封頂的45,800元
+    這一級,薪資更高的情況下健保/勞退參考值可能偏低,詳見insurance_brackets的
+    schema註解與migration 9cf25a805f20的說明)。
+    回傳順序:(labor_employee, health_employee, labor_employer, health_employer, pension_employer)"""
     row = conn.execute(
         "SELECT * FROM insurance_brackets WHERE ? >= bracket_min AND ? <= bracket_max",
         (monthly_salary, monthly_salary),
     ).fetchone()
-    if row:
-        return row["labor_insurance_employee"], row["health_insurance_employee"]
-    # 超出級距表範圍(例如薪資高於最高級距),取金額最高的一筆
-    row2 = conn.execute("SELECT * FROM insurance_brackets ORDER BY bracket_max DESC LIMIT 1").fetchone()
-    if row2:
-        return row2["labor_insurance_employee"], row2["health_insurance_employee"]
-    return 0, 0
+    if not row:
+        # 超出級距表範圍(例如薪資高於最高級距),取金額最高的一筆
+        row = conn.execute("SELECT * FROM insurance_brackets ORDER BY bracket_max DESC LIMIT 1").fetchone()
+    if not row:
+        return 0, 0, 0, 0, 0
+    return (
+        row["labor_insurance_employee"], row["health_insurance_employee"],
+        row["labor_insurance_employer"], row["health_insurance_employer"], row["pension_employer"],
+    )
 
 
 def generate_coach_payroll(coach_id, period, staff_id=None):
@@ -114,7 +125,7 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     work_days = max(days_in_month - leave_days, 0)
     leave_deduction = round(base_salary / days_in_month * leave_days) if days_in_month and base_salary else 0
 
-    labor_ins, health_ins = _lookup_insurance(conn, base_salary)
+    labor_ins, health_ins, labor_ins_er, health_ins_er, pension_er = _lookup_insurance(conn, base_salary)
 
     existing = conn.execute(
         "SELECT * FROM coach_payroll_records WHERE coach_id=? AND period=?", (coach_id, period)
@@ -128,6 +139,9 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
     japan_transportation_subsidy = existing["japan_transportation_subsidy"] if existing else 0
     labor_insurance = existing["labor_insurance"] if existing else labor_ins
     health_insurance = existing["health_insurance"] if existing else health_ins
+    labor_insurance_employer = existing["labor_insurance_employer"] if existing else labor_ins_er
+    health_insurance_employer = existing["health_insurance_employer"] if existing else health_ins_er
+    pension_employer = existing["pension_employer"] if existing else pension_er
     notes = existing["notes"] if existing else None
 
     net_pay = (
@@ -143,8 +157,10 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
             group_class_hours, group_class_amount, trial_hours, trial_amount,
             assistant_hours, assistant_amount, overtime_bonus, other_subsidy, other_subsidy_note,
             japan_travel_subsidy, japan_transportation_subsidy,
-            labor_insurance, health_insurance, net_pay, notes, generated_at, confirmed_by_staff_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)
+            labor_insurance, health_insurance,
+            labor_insurance_employer, health_insurance_employer, pension_employer,
+            net_pay, notes, generated_at, confirmed_by_staff_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {NOW_SQL}, ?)
            ON CONFLICT(coach_id, period) DO UPDATE SET
              base_salary=excluded.base_salary, work_days=excluded.work_days, leave_days=excluded.leave_days,
              leave_deduction=excluded.leave_deduction, group_class_hours=excluded.group_class_hours,
@@ -156,7 +172,9 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
          group_class_hours, group_class_amount, trial_hours, trial_amount,
          assistant_hours, assistant_amount, overtime_bonus, other_subsidy, other_subsidy_note,
          japan_travel_subsidy, japan_transportation_subsidy,
-         labor_insurance, health_insurance, net_pay, notes, staff_id),
+         labor_insurance, health_insurance,
+         labor_insurance_employer, health_insurance_employer, pension_employer,
+         net_pay, notes, staff_id),
     )
     conn.commit()
     row = conn.execute(
@@ -169,8 +187,13 @@ def generate_coach_payroll(coach_id, period, staff_id=None):
 def update_payroll_manual_fields(record_id, overtime_bonus=None, other_subsidy=None,
                                    other_subsidy_note=None, labor_insurance=None,
                                    health_insurance=None, notes=None,
-                                   japan_travel_subsidy=None, japan_transportation_subsidy=None):
-    """人工更新加班獎金/其他補貼/日本出差交通補助/勞健保覆蓋值/備註,並重新計算實際所得。"""
+                                   japan_travel_subsidy=None, japan_transportation_subsidy=None,
+                                   labor_insurance_employer=None, health_insurance_employer=None,
+                                   pension_employer=None):
+    """人工更新加班獎金/其他補貼/日本出差交通補助/勞健保覆蓋值(含雇主負擔/勞退)/備註,
+    並重新計算實際所得。雇主負擔部分(labor_insurance_employer/health_insurance_employer/
+    pension_employer)不影響net_pay(不是從教練薪資扣除的項目),純粹是公司成本的人工
+    覆蓋值,供月結損益計算使用。"""
     conn = get_conn()
     row = conn.execute("SELECT * FROM coach_payroll_records WHERE id=?", (record_id,)).fetchone()
     if not row:
@@ -184,6 +207,9 @@ def update_payroll_manual_fields(record_id, overtime_bonus=None, other_subsidy=N
     new_transport = japan_transportation_subsidy if japan_transportation_subsidy is not None else row["japan_transportation_subsidy"]
     new_labor = labor_insurance if labor_insurance is not None else row["labor_insurance"]
     new_health = health_insurance if health_insurance is not None else row["health_insurance"]
+    new_labor_er = labor_insurance_employer if labor_insurance_employer is not None else row["labor_insurance_employer"]
+    new_health_er = health_insurance_employer if health_insurance_employer is not None else row["health_insurance_employer"]
+    new_pension_er = pension_employer if pension_employer is not None else row["pension_employer"]
     new_notes = notes if notes is not None else row["notes"]
 
     net_pay = (
@@ -194,9 +220,12 @@ def update_payroll_manual_fields(record_id, overtime_bonus=None, other_subsidy=N
     conn.execute(
         """UPDATE coach_payroll_records SET overtime_bonus=?, other_subsidy=?, other_subsidy_note=?,
            japan_travel_subsidy=?, japan_transportation_subsidy=?,
-           labor_insurance=?, health_insurance=?, notes=?, net_pay=? WHERE id=?""",
+           labor_insurance=?, health_insurance=?,
+           labor_insurance_employer=?, health_insurance_employer=?, pension_employer=?,
+           notes=?, net_pay=? WHERE id=?""",
         (new_overtime, new_subsidy, new_subsidy_note, new_travel, new_transport,
-         new_labor, new_health, new_notes, net_pay, record_id),
+         new_labor, new_health, new_labor_er, new_health_er, new_pension_er,
+         new_notes, net_pay, record_id),
     )
     conn.commit()
     updated = conn.execute("SELECT * FROM coach_payroll_records WHERE id=?", (record_id,)).fetchone()
@@ -209,6 +238,14 @@ def get_profit_loss_summary(period):
     月結損益總覽:整合當月營收(訂單/交易)與教練薪資支出,計算淨利。
     period格式 'YYYY-MM'。薪資支出僅計入「已產生薪資紀錄」的教練,
     尚未產生薪資紀錄的教練不會計入支出(建議先在薪資管理分頁產生當月全部教練薪資,再看這份總覽)。
+
+    2026-09調整:「教練薪資支出」原本只計入net_pay(教練實際拿到的所得),沒有計入公司
+    實際負擔的勞健保雇主負擔額+勞退雇主提繳額——這部分雖然不影響教練拿到多少錢,但
+    是公司真實會發生的人事成本,原本完全沒有反映在「淨利」裡,會虛高估計獲利。這裡
+    新增payroll_employer_insurance_total這個獨立欄位清楚標示這筆金額多少,並把它
+    一併計入total_payroll_expense/net_profit,讓「淨利」更貼近公司實際損益;這會讓
+    這次上線後查詢的「淨利」數字,比先前同樣資料算出來的數字略低一些(因為多扣了這筆
+    先前被忽略的公司成本),不是計算錯誤,而是這次修正後更準確。
     """
     import booking as booking_module
 
@@ -224,7 +261,12 @@ def get_profit_loss_summary(period):
     ).fetchall()
     conn.close()
 
-    total_payroll_expense = sum(r["net_pay"] for r in payroll_rows)
+    total_net_pay = sum(r["net_pay"] for r in payroll_rows)
+    total_employer_insurance = sum(
+        (r["labor_insurance_employer"] or 0) + (r["health_insurance_employer"] or 0) + (r["pension_employer"] or 0)
+        for r in payroll_rows
+    )
+    total_payroll_expense = total_net_pay + total_employer_insurance
     total_revenue = revenue_summary["total_revenue"]
     net_profit = total_revenue - total_payroll_expense
 
@@ -233,8 +275,13 @@ def get_profit_loss_summary(period):
         "total_revenue": total_revenue,
         "revenue_by_type": revenue_summary["revenue_by_type"],
         "total_payroll_expense": total_payroll_expense,
+        "payroll_net_pay_total": total_net_pay,
+        "payroll_employer_insurance_total": total_employer_insurance,
         "payroll_by_coach": [
-            {"coach_id": r["coach_id"], "coach_name": r["coach_name"], "net_pay": r["net_pay"]}
+            {
+                "coach_id": r["coach_id"], "coach_name": r["coach_name"], "net_pay": r["net_pay"],
+                "employer_insurance": (r["labor_insurance_employer"] or 0) + (r["health_insurance_employer"] or 0) + (r["pension_employer"] or 0),
+            }
             for r in payroll_rows
         ],
         "payroll_generated_count": len(payroll_rows),
@@ -351,6 +398,31 @@ def generate_payslip_pdf(record_id, output_path):
     story.append(Spacer(1, 14))
     net_style = ParagraphStyle("net", fontName="CJK", fontSize=16, leading=20, alignment=2, textColor=colors.HexColor("#1E2761"))
     story.append(Paragraph(f"實際所得　NT$ {r['net_pay']:,}", net_style))
+
+    # 2026-09新增:公司負擔部分(勞健保雇主負擔+勞退雇主提繳),僅供參考,不影響上面的
+    # 實際所得金額——這幾筆是公司實際負擔的成本,不是從教練薪資裡扣的,單獨列一個區塊
+    # 避免跟上面「加項與扣項」的扣項欄位混淆。
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("公司負擔(僅供參考,不影響實際所得)", section_style))
+    employer_data = [
+        ["項目", "金額(NT$)"],
+        ["勞保雇主負擔", f"{r['labor_insurance_employer']:,}"],
+        ["健保雇主負擔", f"{r['health_insurance_employer']:,}"],
+        ["勞退雇主提繳", f"{r['pension_employer']:,}"],
+    ]
+    employer_table = Table(employer_data, colWidths=[110*mm, 60*mm])
+    employer_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "CJK"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#5A6472")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E6EA")),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(employer_table)
 
     if r["notes"]:
         story.append(Spacer(1, 10))

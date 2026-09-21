@@ -414,6 +414,20 @@ CREATE TABLE IF NOT EXISTS faq_unanswered_log (
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- 2026-09新增:客戶意見反應(常見問題頁面先隱藏,補上這個讓會員直接反應意見/建議的管道)
+-- 會員自己填寫提交,後台「待處理事項」分頁人工查看/回覆,不是即時客服(migration 1e1b602c542f)
+CREATE TABLE IF NOT EXISTS customer_feedback (
+    id SERIAL PRIMARY KEY,
+    member_id INTEGER NOT NULL REFERENCES members(id),
+    category TEXT,          -- 會員自選分類(選填):建議/稱讚/客訴/其他
+    content TEXT NOT NULL,
+    status TEXT CHECK(status IN ('pending','contacted','closed')) NOT NULL DEFAULT 'pending',
+    handled_by_staff_id INTEGER REFERENCES staff(id),
+    staff_note TEXT,        -- 後台回覆內容,會員自己看得到
+    handled_at TEXT,
+    created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
 -- 常用同行人(會員可儲存常用的同行學員資料,預約時直接選取重複使用)
 CREATE TABLE IF NOT EXISTS member_companions (
     id SERIAL PRIMARY KEY,
@@ -470,13 +484,21 @@ CREATE TABLE IF NOT EXISTS coach_profiles (
 
 -- 教練能力選項清單(可由主管新增選項,例如 Examiner/Trainer/Ski/Snowboard/Others)
 -- 勞保/健保投保級距對照表(僅供計算參考!請務必對照勞保局/全民健保署最新公告級距表確認金額)
+-- 2026-09更新為115年(2026年)最新11級投保薪資分級表(最高45,800元),並新增
+-- labor_insurance_employer/health_insurance_employer/pension_employer三個雇主負擔欄位
+-- (migration 9cf25a805f20)。健保/勞退實際級距表都還有更高的級距(健保最高到31萬多),
+-- 這裡只建到跟勞保投保薪資相同的11級(勞保本身依法就封頂在這11級),薪資超過45,800元
+-- 的情況下健保/勞退參考值可能偏低,請參考該支migration檔案內的完整說明。
 CREATE TABLE IF NOT EXISTS insurance_brackets (
     id SERIAL PRIMARY KEY,
     bracket_min INTEGER NOT NULL,          -- 月薪下限(含)
     bracket_max INTEGER NOT NULL,          -- 月薪上限(含)
     insured_salary INTEGER NOT NULL,       -- 對應投保薪資(級距金額)
-    labor_insurance_employee INTEGER NOT NULL,   -- 勞保員工自付額(普通事故20%部分)
-    health_insurance_employee INTEGER NOT NULL,  -- 健保員工自付額(本人,不含眷屬加成)
+    labor_insurance_employee INTEGER NOT NULL,   -- 勞保員工自付額(普通事故+就業保險,員工負擔20%部分)
+    labor_insurance_employer INTEGER NOT NULL DEFAULT 0,   -- 勞保雇主負擔額(70%部分)
+    health_insurance_employee INTEGER NOT NULL,  -- 健保員工自付額(本人,不含眷屬加成,30%部分)
+    health_insurance_employer INTEGER NOT NULL DEFAULT 0,  -- 健保雇主(投保單位)負擔額(60%部分)
+    pension_employer INTEGER NOT NULL DEFAULT 0,           -- 勞退雇主強制提繳額(6%)
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
@@ -500,9 +522,12 @@ CREATE TABLE IF NOT EXISTS coach_payroll_records (
     other_subsidy_note TEXT,
     japan_travel_subsidy INTEGER DEFAULT 0,        -- 日本出差補助(依當月實際發生次數手動填寫)
     japan_transportation_subsidy INTEGER DEFAULT 0, -- 日本交通補助(依當月實際發生次數手動填寫)
-    labor_insurance INTEGER DEFAULT 0,     -- 可由級距表自動帶入,亦可人工覆蓋
-    health_insurance INTEGER DEFAULT 0,
-    net_pay INTEGER DEFAULT 0,             -- 自動加總計算之實際所得
+    labor_insurance INTEGER DEFAULT 0,     -- 員工自付額,可由級距表自動帶入,亦可人工覆蓋
+    health_insurance INTEGER DEFAULT 0,    -- 員工自付額,可由級距表自動帶入,亦可人工覆蓋
+    labor_insurance_employer INTEGER DEFAULT 0,   -- 2026-09新增:公司負擔額(參考用,不影響教練實際所得,計入公司人事成本)
+    health_insurance_employer INTEGER DEFAULT 0,  -- 2026-09新增:公司負擔額(同上)
+    pension_employer INTEGER DEFAULT 0,           -- 2026-09新增:勞退雇主提繳額(同上)
+    net_pay INTEGER DEFAULT 0,             -- 自動加總計算之實際所得(僅扣員工自付額,不含公司負擔部分)
     notes TEXT,                            -- 備註
     generated_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
     confirmed_by_staff_id INTEGER REFERENCES staff(id),
@@ -864,17 +889,23 @@ INSERT INTO equipment_items (name, equipment_type, status) VALUES
  ('跳台', 'jump_platform', 'active');
 
 -- 勞健保投保級距種子資料(僅供試算參考!請務必對照勞保局/健保署最新公告級距表核對後修正)
-INSERT INTO insurance_brackets (bracket_min, bracket_max, insured_salary, labor_insurance_employee, health_insurance_employee) VALUES
- (0, 27470, 27470, 549, 372),
- (27471, 30300, 30300, 606, 410),
- (30301, 31800, 31800, 636, 431),
- (31801, 33300, 33300, 666, 451),
- (33301, 34800, 34800, 696, 471),
- (34801, 36300, 36300, 726, 491),
- (36301, 38200, 38200, 764, 517),
- (38201, 40100, 40100, 802, 543),
- (40101, 42000, 42000, 840, 569),
- (42001, 43900, 43900, 878, 594);
+-- 115年(2026年)最新11級投保薪資分級表(115.1.1生效,基本工資29,500元),數字來源
+-- 說明請見migration 9cf25a805f20的檔案註解。
+INSERT INTO insurance_brackets
+  (bracket_min, bracket_max, insured_salary,
+   labor_insurance_employee, labor_insurance_employer,
+   health_insurance_employee, health_insurance_employer, pension_employer) VALUES
+ (0, 29500, 29500, 738, 2582, 458, 1428, 1770),
+ (29501, 30300, 30300, 758, 2651, 470, 1466, 1818),
+ (30301, 31800, 31800, 795, 2783, 493, 1539, 1908),
+ (31801, 33300, 33300, 833, 2914, 516, 1611, 1998),
+ (33301, 34800, 34800, 870, 3045, 540, 1684, 2088),
+ (34801, 36300, 36300, 908, 3176, 563, 1757, 2178),
+ (36301, 38200, 38200, 955, 3342, 592, 1849, 2292),
+ (38201, 40100, 40100, 1002, 3509, 622, 1940, 2406),
+ (40101, 42000, 42000, 1050, 3675, 651, 2032, 2520),
+ (42001, 43900, 43900, 1098, 3841, 681, 2124, 2634),
+ (43901, 999999999, 45800, 1145, 4008, 710, 2216, 2748);
 
 -- 以下3個FK在SQLite原始檔裡是「前向參照」(參照到後面才建立的表)，SQLite允許但PostgreSQL不允許，
 -- 所以改用ALTER TABLE在所有表都建立完後再補上，效果跟inline REFERENCES完全一樣

@@ -466,16 +466,63 @@ def admin_create_partner():
 @app.route("/api/admin/partners/<int:partner_id>", methods=["PUT"])
 @require_section("partners")
 def admin_update_partner(partner_id):
+    """更新合作單位。改成局部更新(只覆蓋這次請求裡有帶到的欄位,沒帶到的沿用資料庫現有值)
+    ,而不是原本要求整包欄位都要帶(原本"name"沒帶到會直接丟KeyError變成500)——這樣「重新
+    啟用」這種只想單純把is_active改回1、不想連帶重填其他欄位的操作,才能正常運作。"""
     d = request.json
     conn = get_conn()
+    row = conn.execute("SELECT * FROM partner_organizations WHERE id=?", (partner_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "找不到此合作單位"}), 404
+    name = d.get("name", row["name"])
+    if not name or not str(name).strip():
+        conn.close()
+        return jsonify({"error": "單位名稱不可空白"}), 400
     conn.execute(
         "UPDATE partner_organizations SET name=?, contact_name=?, contact_phone=?, contact_email=?, rebate_rate=?, is_active=? WHERE id=?",
-        (d["name"], d.get("contact_name"), d.get("contact_phone"), d.get("contact_email"),
-         d.get("rebate_rate", 0), d.get("is_active", 1), partner_id),
+        (name, d.get("contact_name", row["contact_name"]), d.get("contact_phone", row["contact_phone"]),
+         d.get("contact_email", row["contact_email"]), d.get("rebate_rate", row["rebate_rate"]),
+         d.get("is_active", row["is_active"]), partner_id),
     )
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/partners/<int:partner_id>", methods=["DELETE"])
+@require_section("partners")
+def admin_delete_partner(partner_id):
+    """刪除合作單位。原本這支API完全不存在,後台「合作單位」頁面建立完成後沒有任何刪除
+    入口——這次依你的回報補上。優先嘗試真正刪除;但如果這個單位已經有會員綁定過推薦碼
+    (members.referral_partner_id)或日本教練課退佣紀錄(japan_bookings.rebate_partner_id)
+    指到這筆,直接刪除會違反資料庫外鍵約束(避免留下「訂單裡的合作單位對不到任何存在的
+    單位」這種孤兒資料),這種情況改成「停用」(is_active=0,沿用這張表本來就有、但先前
+    UI從未串接過的欄位)——不強行刪除、也不會讓已發生過的會員/訂單歷史關聯資料跑掉,
+    停用後這個單位仍會顯示在清單裡(標示「已停用」)但不會再被選作新的推薦/回饋對象。"""
+    conn = get_conn()
+    partner = conn.execute("SELECT * FROM partner_organizations WHERE id=?", (partner_id,)).fetchone()
+    if not partner:
+        conn.close()
+        return jsonify({"error": "找不到此合作單位"}), 404
+    try:
+        conn.execute("DELETE FROM partner_organizations WHERE id=?", (partner_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True, "action": "deleted"})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        if "foreign key" in str(e).lower():
+            conn2 = get_conn()
+            conn2.execute("UPDATE partner_organizations SET is_active=0 WHERE id=?", (partner_id,))
+            conn2.commit()
+            conn2.close()
+            return jsonify({
+                "ok": True, "action": "deactivated",
+                "reason": "此合作單位已有會員或訂單使用過,無法直接刪除,已改為停用",
+            })
+        raise
 
 
 @app.route("/api/admin/partners/<int:partner_id>/report", methods=["GET"])
@@ -3998,10 +4045,14 @@ def admin_update_insurance_brackets():
     for b in d.get("brackets", []):
         conn.execute(
             """INSERT INTO insurance_brackets
-               (bracket_min, bracket_max, insured_salary, labor_insurance_employee, health_insurance_employee)
-               VALUES (?, ?, ?, ?, ?)""",
+               (bracket_min, bracket_max, insured_salary,
+                labor_insurance_employee, labor_insurance_employer,
+                health_insurance_employee, health_insurance_employer, pension_employer)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (b["bracket_min"], b["bracket_max"], b["insured_salary"],
-             b["labor_insurance_employee"], b["health_insurance_employee"]),
+             b["labor_insurance_employee"], b.get("labor_insurance_employer", 0),
+             b["health_insurance_employee"], b.get("health_insurance_employer", 0),
+             b.get("pension_employer", 0)),
         )
     conn.commit()
     conn.close()
@@ -4106,6 +4157,9 @@ def admin_update_payroll_record(record_id):
             notes=d.get("notes"),
             japan_travel_subsidy=d.get("japan_travel_subsidy"),
             japan_transportation_subsidy=d.get("japan_transportation_subsidy"),
+            labor_insurance_employer=d.get("labor_insurance_employer"),
+            health_insurance_employer=d.get("health_insurance_employer"),
+            pension_employer=d.get("pension_employer"),
         )
         return jsonify(result)
     except ValueError as e:
@@ -4467,6 +4521,79 @@ def admin_resolve_unanswered_faq(log_id):
     return jsonify({"ok": True})
 
 
+# ---------------- 客戶意見反應 ----------------
+# 依你的指示「常見問題先不開放,隱藏起來,待客服機器人完善後再公開,但要新增一個地方
+# 讓客戶反應意見或提出意見」新增。跟FAQ的「問客服機器人」不是同一件事:這裡沒有自動
+# 比對/自動回覆,單純是會員填寫、後台人工查看/回覆的意見箱,設計上比照charter_pass_requests
+# /japan_other_resort_requests的「會員提出、後台審核處理」既有模式。
+
+@app.route("/api/feedback", methods=["POST"])
+def submit_feedback():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
+    d = request.json or {}
+    content = (d.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "請輸入意見內容"}), 400
+    category = (d.get("category") or "").strip() or None
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO customer_feedback (member_id, category, content) VALUES (?, ?, ?)",
+        (member_id, category, content),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True}), 201
+
+
+@app.route("/api/feedback/mine", methods=["GET"])
+def list_my_feedback():
+    member_id, err = _require_member_id_from_token()
+    if err:
+        return err
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM customer_feedback WHERE member_id=? ORDER BY id DESC", (member_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/feedback/pending", methods=["GET"])
+@require_section("pending")
+def admin_list_pending_feedback():
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT f.*, m.name AS member_name, m.phone AS member_phone FROM customer_feedback f
+           JOIN members m ON f.member_id = m.id
+           WHERE f.status='pending' ORDER BY f.id""",
+    ).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/resolve", methods=["POST"])
+@require_section("pending")
+def admin_resolve_feedback(feedback_id):
+    d = request.json or {}
+    status = d.get("status")
+    if status not in ("contacted", "closed"):
+        return jsonify({"error": "status必須是contacted或closed"}), 400
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM customer_feedback WHERE id=?", (feedback_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "找不到此筆意見"}), 404
+    conn.execute(
+        f"UPDATE customer_feedback SET status=?, handled_by_staff_id=?, staff_note=?, handled_at={NOW_SQL} WHERE id=?",
+        (status, request.current_staff["id"], d.get("staff_note"), feedback_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/admin/equipment", methods=["GET"])
 @require_section("equipment")
 def admin_list_equipment():
@@ -4620,6 +4747,7 @@ _TEST_DATA_TABLES = [
     ("complaints", "客訴紀錄"),
     ("notifications", "通知紀錄"),
     ("faq_unanswered_log", "FAQ無法回答紀錄"),
+    ("customer_feedback", "客戶意見反應"),
     ("member_companions", "會員常用同行人"),
     ("plan_applications", "團課方案申請"),
     ("attendance_codes", "上課碼/下課碼"),
