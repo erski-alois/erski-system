@@ -776,6 +776,13 @@ def update_member_profile(member_id):
     updates = {k: v for k, v in d.items() if k in fields}
     if not updates:
         return jsonify({"error": "no valid fields"}), 400
+    # 2026-09-21:依需求「會員資料填寫也要防呆,併每一項都得填寫」新增,詳細規則見
+    # auth.validate_profile_update_fields的說明。只檢查這次請求裡有帶到的欄位,
+    # 不符合規定(必填欄位空白/電話格式不對)直接回400,不寫入資料庫。
+    try:
+        auth.validate_profile_update_fields(updates)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     # 2026-08:gender/primary_equipment欄位在資料庫有CHECK限制(gender只能是male/female,
     # primary_equipment只能是ski/snowboard),但前端下拉選單原本就允許選「未填寫/未選擇」
     # (對應空字串"")——這是正常、預期會出現的狀態(會員本來就可以先不填性別/主要滑行項目)。

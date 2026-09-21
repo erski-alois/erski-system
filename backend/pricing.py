@@ -152,13 +152,16 @@ def validate_booking_window(date_str):
 
 
 def validate_japan_season(date_str):
-    """日本教練課固定每年12月至隔年4月為雪季開放預約。
-    2026-09:依你的要求(「日本限定12月才能開始訂課先不擋，等正式上線再擋」),
-    暫時整個停用這條雪季限制——現在任何日期都可以訂日本教練課,不再只限「今天」。
-    ⚠️這是暫時性的開放,方便你們在正式上線前用任何日期測試。等你確認要正式對外
-    上線營運時,請告訴我,我會把下面 return 這行拿掉,恢復成原本只認12月至隔年
-    4月的規則(下面驗證邏輯本身完全沒有被刪除,只是被提前 return 跳過而已)。"""
-    return
+    """日本教練課雪季開放預約範圍:每年12月14日至隔年4月30日。
+    2026-09-21:依你的指示「日本課程可以開始控管,課程開始日期為12/14-4/30」正式恢復
+    這條雪季限制(先前依你的要求「日本限定12月才能開始訂課先不擋,等正式上線再擋」
+    暫時整個停用,方便上線前用任何日期測試;現在正式對外上線,恢復擋下)。
+    這次順便把精確度從「整月」改成「精確到日」——原本的 JAPAN_SEASON_MONTHS 只能表示
+    「12月~隔年4月」這種整月範圍,沒辦法表示「12月14日」這種月中的起始日,所以改成
+    直接比較月份/日期,不再依賴 JAPAN_SEASON_MONTHS(那個常數保留給 /api/pricing
+    的 japan_season_months 欄位相容使用,純資訊性用途,不影響這裡的實際擋控邏輯)。"""
     dt = datetime.strptime(date_str, "%Y-%m-%d")
-    if dt.month not in JAPAN_SEASON_MONTHS:
-        raise ValueError(f"{date_str} 不在雪季範圍內(每年12月至隔年4月才開放預約)")
+    month, day = dt.month, dt.day
+    in_season = (month == 12 and day >= 14) or month in (1, 2, 3, 4)
+    if not in_season:
+        raise ValueError(f"{date_str} 不在雪季範圍內(每年12月14日至隔年4月30日才開放預約)")

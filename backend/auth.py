@@ -171,6 +171,62 @@ def is_profile_complete(member_row) -> bool:
     return all(m.get(f) for f in REQUIRED_PROFILE_FIELDS)
 
 
+# 2026-09-21:依需求「會員資料填寫也要防呆,併每一項都得填寫」新增。REQUIRED_PROFILE_FIELDS
+# 這幾項原本只用來算profile_complete旗標(僅在會員中心顯示提示banner,沒有真的擋),
+# 這次改成在會員資料表單(不論會員自己在會員中心填寫、或員工代為編輯)按下儲存時真的
+# 擋下不完整/格式不對的資料——比照CSIA報名資料防呆(csia.py::_validate_phone_format /
+# _REQUIRED_FIELD_MESSAGES)的做法:只檢查「這次請求裡有帶到」的欄位,沒帶到的欄位
+# (例如主管權限看不到地址/緊急聯絡電話這類敏感欄位,前端本來就不會把這幾項放進請求)
+# 不受影響,資料庫裡的舊值維持不動,不會因為這次沒帶就被擋下或清空。email不在這份檢查
+# 範圍內,因為email在註冊時就已經是必填且格式驗證過,而且會員資料表單本來就不開放改email。
+_PROFILE_REQUIRED_FIELD_MESSAGES = {
+    "name": "請輸入姓名",
+    "birth_date": "請輸入出生日期",
+    "address": "請輸入聯絡地址",
+    "phone": "請輸入手機號碼",
+    "emergency_contact_name": "請輸入緊急聯絡人姓名",
+    "emergency_contact_phone": "請輸入緊急聯絡人電話",
+}
+
+# 緊急聯絡人電話允許市話或非台灣手機(緊急聯絡人常常是家人,不一定持有台灣手機),
+# 格式防呆規則比照CSIA報名資料的做法:去掉空格/破折號/括號後,允許開頭一個「+」
+# (國碼),剩下的必須全部是數字,長度8~15碼。
+_GENERAL_PHONE_STRIP_RE = re.compile(r"[\s\-()]")
+
+
+def _is_valid_general_phone(value: str) -> bool:
+    cleaned = _GENERAL_PHONE_STRIP_RE.sub("", (value or "").strip())
+    digits = cleaned[1:] if cleaned.startswith("+") else cleaned
+    return bool(digits) and digits.isdigit() and 8 <= len(digits) <= 15
+
+
+def validate_profile_update_fields(updates: dict) -> None:
+    """會員資料表單防呆:必填檢查(REQUIRED_PROFILE_FIELDS中除email以外的欄位,只要
+    這次請求裡有帶到就不可以是空值)+ 格式檢查(手機號碼/緊急聯絡人電話)。
+    不符合規定一律丟ValueError,呼叫端(app.py)接住後回傳400跟錯誤訊息給前端顯示。
+    會直接修改傳入的updates dict(去除電話號碼中的空格/破折號後存回去),呼叫端沿用
+    同一個dict寫入資料庫即可,不需要另外取回傳值。"""
+    for field, message in _PROFILE_REQUIRED_FIELD_MESSAGES.items():
+        if field not in updates:
+            continue
+        value = updates[field]
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError(message)
+
+    if "phone" in updates and updates["phone"]:
+        cleaned_phone = re.sub(r"[\s-]", "", updates["phone"])
+        if not is_valid_tw_phone(cleaned_phone):
+            raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
+        updates["phone"] = cleaned_phone
+
+    if "emergency_contact_phone" in updates and updates["emergency_contact_phone"]:
+        if not _is_valid_general_phone(updates["emergency_contact_phone"]):
+            raise ValueError("緊急聯絡人電話格式不正確,請確認只包含數字(可加國碼+、可用-或空格分隔),長度需在8~15碼之間")
+        updates["emergency_contact_phone"] = _GENERAL_PHONE_STRIP_RE.sub("", updates["emergency_contact_phone"].strip())
+
+
 def set_member_password(member_id: int, new_password: str, current_password: str = None):
     """
     設定/變更會員登入密碼。若會員已經有設定過密碼,變更時必須先驗證目前密碼正確;
