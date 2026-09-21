@@ -162,6 +162,93 @@ def google_oauth_login(email: str, name: str = None) -> dict:
     return {"is_new": True, "member": None, "prefill_email": email, "prefill_name": name}
 
 
+# ------------------------------------------------------------------
+# 2026-09新增:LINE正式OAuth 2.0登入(取代上面mock_oauth_login的line分支)。
+# 做法跟Google那組幾乎一樣(一樣是urllib、一樣是「後端拿到code換token,再拿token
+# 查使用者資料」的flow),差別只在endpoint網址、換token的傳送格式(LINE的token endpoint
+# 除了Header以外,額外要求把client_id/client_secret一起放進表單body,不能只放code),
+# 還有最關鍵的一點——LINE的個人資料API不會給Email(除非另外跟LINE申請「取得使用者Email」
+# 這項額外權限,一般開發者預設申請不到),所以這裡只能拿到userId(LINE官方文件稱為
+# userId,是LINE針對「這個使用者+這個Channel」產生的唯一識別碼,同一使用者在不同Channel
+# 拿到的userId不會一樣)和displayName(暱稱)。因此LINE會員從一開始就是照line_user_id
+# 欄位比對(不是email),這跟mock_oauth_login原本的設計已經一致,不需要調整資料庫欄位;
+# 新會員註冊時只能預先帶入姓名(displayName),Email欄位維持空白讓使用者自己輸入,
+# 不能像Google那樣直接預先帶入且鎖定不能改。
+# ------------------------------------------------------------------
+_LINE_AUTH_ENDPOINT = "https://access.line.me/oauth2/v2.1/authorize"
+_LINE_TOKEN_ENDPOINT = "https://api.line.me/oauth2/v2.1/token"
+_LINE_PROFILE_ENDPOINT = "https://api.line.me/v2/profile"
+
+
+def build_line_auth_url(state: str) -> str:
+    """組出導向LINE Login同意畫面的網址,給/api/auth/line/login這支路由用。
+    scope只要'profile'就夠(拿userId+displayName+頭像),不要求'email'這項額外權限——
+    一來預設申請不到,二來就算申請到,系統設計上也是照line_user_id比對會員,
+    不依賴email,沒有必要多要這個權限。"""
+    params = {
+        "response_type": "code",
+        "client_id": config.LINE_CHANNEL_ID,
+        "redirect_uri": config.LINE_OAUTH_REDIRECT_URI,
+        "state": state,
+        "scope": "profile openid",
+    }
+    return f"{_LINE_AUTH_ENDPOINT}?{urllib.parse.urlencode(params)}"
+
+
+def exchange_line_code(code: str) -> dict:
+    """用LINE導回來的授權碼(code)跟LINE換取access token,再用access token查詢
+    使用者的LINE個人資料(userId/displayName)。任何一步失敗(網路連不到LINE、
+    LINE拒絕這組code、回應格式不對)都會直接丟出例外,呼叫端(app.py的callback路由)
+    接住後導回前端顯示錯誤,不會讓使用者卡在空白頁。
+
+    只信任這裡回傳的userId(後端直接跟LINE要來的值),不使用/不信任前端傳來的
+    任何欄位——這一點跟Google那組的exchange_google_code()原則相同。"""
+    token_payload = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": config.LINE_OAUTH_REDIRECT_URI,
+        "client_id": config.LINE_CHANNEL_ID,
+        "client_secret": config.LINE_CHANNEL_SECRET,
+    }).encode("utf-8")
+    token_req = urllib.request.Request(_LINE_TOKEN_ENDPOINT, data=token_payload, method="POST")
+    with urllib.request.urlopen(token_req, timeout=10) as resp:
+        token_data = json.loads(resp.read().decode("utf-8"))
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise ValueError("LINE沒有回傳access_token,可能是授權碼已經過期或被使用過")
+
+    profile_req = urllib.request.Request(
+        _LINE_PROFILE_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"}
+    )
+    with urllib.request.urlopen(profile_req, timeout=10) as resp:
+        profile = json.loads(resp.read().decode("utf-8"))
+
+    if not profile.get("userId"):
+        raise ValueError("LINE沒有回傳使用者識別碼,無法用來登入")
+
+    return {
+        "line_user_id": profile["userId"],
+        "name": profile.get("displayName") or "",
+    }
+
+
+def line_oauth_login(line_user_id: str, name: str = None) -> dict:
+    """正式LINE登入的會員比對邏輯。line_user_id是exchange_line_code()查回來、真正
+    由LINE驗證過的識別碼,不是前端聲稱的值。查詢邏輯維持跟mock_oauth_login一致:
+    用line_user_id比對members資料表,找到=登入成功,找不到=進入註冊流程。
+
+    跟google_oauth_login()的關鍵差異:這裡故意不回傳prefill_email——LINE不提供
+    email,註冊表單的Email欄位必須留白讓使用者自己輸入並保持可編輯,不能像Google
+    那樣預先帶入且鎖定。"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE line_user_id = ?", (line_user_id,)).fetchone()
+    conn.close()
+    if row:
+        return {"is_new": False, "member": dict(row)}
+    return {"is_new": True, "member": None, "prefill_line_user_id": line_user_id, "prefill_name": name}
+
+
 def member_login(email: str, password: str):
     """2026-09新增:Email+密碼登入(正式上線用的會員登入)。這之前系統完全沒有這條路——
     舊的「用Email登入」其實是呼叫mock_oauth_login(provider='email'),只要Email存在

@@ -159,6 +159,17 @@ def serve_csia_shuttle_schedule():
     return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "csia-shuttle-schedule.png", mimetype="image/png")
 
 
+@app.route("/privacy")
+def serve_privacy_policy():
+    """2026-09新增:隱私權政策頁面。起因是申請LINE Login Channel時,LINE的申請表單
+    裡有一欄「Privacy policy URL」,當時網站還沒有這個頁面可以填。這是獨立的靜態
+    HTML頁面(不是frontend/index.html那個單頁應用程式的一部分),用跟上面icon/logo
+    同樣的個別路由寫法提供,不用快取(跟index.html一樣,避免修改後使用者看到舊版)。"""
+    resp = send_from_directory(FRONTEND_DIR, "privacy.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
@@ -427,8 +438,13 @@ def google_oauth_callback():
 
     code = request.args.get("code")
     state = request.args.get("state")
+    # 2026-09:錯誤代碼故意加上google_字首(不是共用的'state_invalid'),因為前端
+    # Google/LINE各有一支獨立的IIFE在處理oauth_error,如果兩者共用同一個代碼,
+    # 先執行的那支會不分青紅皂白把還沒輪到自己處理的錯誤也一併攔截、清掉網址列
+    # 參數,導致另一支永遠等不到、顯示錯的服務名稱。詳見frontend/index.html
+    # handleGoogleOauthRedirect()/handleLineOauthRedirect()的說明。
     if not code or not authtoken.verify_oauth_state(state, "google"):
-        return redirect(f"{frontend_base}/?oauth_error=state_invalid")
+        return redirect(f"{frontend_base}/?oauth_error=google_state_invalid")
 
     try:
         info = auth.exchange_google_code(code)
@@ -459,6 +475,90 @@ def google_oauth_exchange():
         return jsonify({
             "is_new": True,
             "prefill_email": payload.get("email"),
+            "prefill_name": payload.get("name"),
+        })
+
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE id=?", (payload["member_id"],)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "找不到此會員"}), 404
+    member = dict(row)
+    member.pop("password_hash", None)
+    return jsonify({
+        "is_new": False,
+        "member": member,
+        "token": authtoken.issue_member_token(member["id"]),
+    })
+
+
+# ------------------------------------------------------------------
+# 2026-09新增:LINE正式OAuth 2.0登入,取代上面oauth_login()裡providers='line'的
+# 模擬邏輯(該模擬邏輯保留給Apple繼續用)。設計跟上面Google那組完全對稱(同樣的
+# 「redirect→callback→exchange」三支路由、同樣的state/exchange_code機制,只是
+# provider字串換成'line'),差異集中在auth.py那幾支LINE專用函式裡,這裡的路由邏輯
+# 幾乎是複製貼上,唯一不同的地方是callback導回前端時用的query參數名稱是line_login
+# (不是google_login),讓前端可以分辨這次要呼叫哪一支exchange API。
+#
+# 前端LINE登入按鈕依/api/pricing回傳的line_oauth_available旗標決定行為,跟Google
+# 那組同樣的判斷方式。
+# ------------------------------------------------------------------
+@app.route("/api/auth/line/login", methods=["GET"])
+def line_oauth_start():
+    if not config.LINE_OAUTH_CONFIGURED:
+        return jsonify({"error": "LINE登入尚未設定完成,請聯絡系統管理員"}), 503
+    state = authtoken.issue_oauth_state("line")
+    return redirect(auth.build_line_auth_url(state))
+
+
+@app.route("/api/auth/line/callback", methods=["GET"])
+def line_oauth_callback():
+    """LINE的同意畫面完成後,使用者的瀏覽器會被LINE導回這裡,做法跟google_oauth_callback()
+    完全對稱,見該函式docstring說明「交換碼」的設計理由。"""
+    frontend_base = request.url_root.rstrip("/")
+
+    if request.args.get("error"):
+        return redirect(f"{frontend_base}/?oauth_error=line_denied")
+
+    code = request.args.get("code")
+    state = request.args.get("state")
+    # 錯誤代碼加上line_字首的理由,見google_oauth_callback()裡同一段註解。
+    if not code or not authtoken.verify_oauth_state(state, "line"):
+        return redirect(f"{frontend_base}/?oauth_error=line_state_invalid")
+
+    try:
+        info = auth.exchange_line_code(code)
+    except Exception:
+        # 常見原因:code已經被用過一次(使用者重新整理callback頁面)、逾時、或這個
+        # 開發/測試環境根本連不到LINE的伺服器。不把詳細例外內容洩露給使用者,
+        # 但Render的Logs分頁看得到完整traceback,方便之後排查。
+        app.logger.exception("LINE OAuth code交換失敗")
+        return redirect(f"{frontend_base}/?oauth_error=line_exchange_failed")
+
+    result = auth.line_oauth_login(info["line_user_id"], info["name"])
+    if result["is_new"]:
+        exchange_payload = {
+            "is_new": True,
+            "line_user_id": result["prefill_line_user_id"],
+            "name": result["prefill_name"],
+        }
+    else:
+        exchange_payload = {"is_new": False, "member_id": result["member"]["id"]}
+    exchange_code = authtoken.issue_oauth_exchange_code(exchange_payload)
+    return redirect(f"{frontend_base}/?line_login=1&exchange_code={urllib.parse.quote(exchange_code)}")
+
+
+@app.route("/api/auth/line/exchange", methods=["POST"])
+def line_oauth_exchange():
+    d = request.json or {}
+    payload = authtoken.verify_oauth_exchange_code(d.get("exchange_code"))
+    if not payload:
+        return jsonify({"error": "登入連結已過期或已使用過,請重新點擊LINE登入"}), 401
+
+    if payload.get("is_new"):
+        return jsonify({
+            "is_new": True,
+            "prefill_line_user_id": payload.get("line_user_id"),
             "prefill_name": payload.get("name"),
         })
 
@@ -1013,10 +1113,11 @@ def get_pricing():
         # 真的走到刷卡頁面。前端要依這個旗標決定要不要顯示「線上刷卡」「網路ATM」這兩個選項,
         # 避免客戶選了之後訂單被誤標記為已付款、但校方實際上沒收到錢。
         "online_card_available": config.ECPAY_CONFIGURED,
-        # 2026-09新增:Google/LINE是否真的串接了正式OAuth憑證。前端Google登入按鈕
-        # 依這個旗標決定要導去真正的Google登入(/auth/google/login),還是繼續用
-        # 原本的模擬按鈕(/auth/oauth-login)。LINE之後申請好憑證再比照補上後端邏輯,
-        # 這裡先把旗標準備好,現在一律是false(還沒設定LINE_CHANNEL_ID/SECRET)。
+        # 2026-09新增:Google/LINE是否真的串接了正式OAuth憑證。前端Google/LINE登入
+        # 按鈕依對應旗標決定要導去真正的登入頁(/auth/google/login、/auth/line/login),
+        # 還是繼續用原本的模擬按鈕(/auth/oauth-login)。兩者的後端邏輯都已經完成,
+        # 旗標只是單純反映GOOGLE_OAUTH_CLIENT_ID/SECRET、LINE_CHANNEL_ID/SECRET這幾組
+        # 環境變數有沒有真的設定好。
         "google_oauth_available": config.GOOGLE_OAUTH_CONFIGURED,
         "line_oauth_available": config.LINE_OAUTH_CONFIGURED,
     })

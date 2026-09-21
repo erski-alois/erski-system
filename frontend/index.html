@@ -1402,16 +1402,23 @@ async function ensurePricing() {
 }
 
 async function oauthLogin(provider) {
-  // 2026-09:LINE/Apple目前還是模擬OAuth按鈕(還沒有串接真正的第三方OAuth,詳見
-  // auth.mock_oauth_login的說明),沒有密碼概念,行為維持不變——「OAuth完成」本身
-  // 就視同身分驗證完成。Google已經改成走真正的OAuth(見下面google_oauth_available
-  // 判斷),正式的密碼驗證另外套用在下面的Email+密碼登入(emailLogin)。
+  // 2026-09:Google/LINE已經改成走真正的OAuth(見下面google_oauth_available/
+  // line_oauth_available判斷)。正式的密碼驗證另外套用在下面的Email+密碼登入
+  // (emailLogin)。
   if (provider === "google") {
     await ensurePricing();
     if (pricingData.google_oauth_available) {
       // 真正的Google登入:直接把整個瀏覽器導去後端/auth/google/login,由後端導去
       // Google的同意畫面,不是fetch呼叫,所以這裡用window.location,不是api()。
       window.location.href = BASE + "/auth/google/login";
+      return;
+    }
+  }
+  if (provider === "line") {
+    await ensurePricing();
+    if (pricingData.line_oauth_available) {
+      // 真正的LINE登入:同樣直接導去後端/auth/line/login,由後端導去LINE的同意畫面。
+      window.location.href = BASE + "/auth/line/login";
       return;
     }
   }
@@ -7211,23 +7218,31 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
 }
 
 // 2026-09新增:Google正式OAuth登入完成後,後端(app.py的/auth/google/callback)
-// 會把瀏覽器導回這裡,網址列帶上exchange_code=...(登入/註冊成功待交換)或
-// oauth_error=...(使用者取消/連結過期/交換失敗)。頁面一載入就檢查這兩種參數,
-// 處理完不論成功失敗都立刻用history.replaceState把參數從網址列清掉——避免使用者
-// 重新整理頁面時重複觸發一次,也避免exchange_code(雖然只有60秒效期)留在
-// 瀏覽器歷史紀錄裡太久。
+// 會把瀏覽器導回這裡,網址列帶上google_login=1&exchange_code=...(登入/註冊成功
+// 待交換)或oauth_error=google_...(使用者取消/連結過期/交換失敗)。頁面一載入就
+// 檢查這兩種參數,處理完不論成功失敗都立刻用history.replaceState把參數從網址列
+// 清掉——避免使用者重新整理頁面時重複觸發一次,也避免exchange_code(雖然只有
+// 60秒效期)留在瀏覽器歷史紀錄裡太久。
+//
+// 下面LINE也有一支幾乎一模一樣的handleLineOauthRedirect(),兩支各自只認自己的
+// 參數(google_login/oauth_error開頭是google_,line_login/oauth_error開頭是line_),
+// 不會互搶對方的錯誤——如果兩支都不分青紅皂白攔截同一個oauth_error,先執行的
+// 那支會在另一支還沒讀到參數前就用replaceState把網址列清空,導致另一支永遠處理
+// 不到、而且使用者會看到錯誤的服務名稱(例如LINE登入被拒卻顯示「已取消Google登入」)。
 (async function handleGoogleOauthRedirect() {
   const params = new URLSearchParams(window.location.search);
   const exchangeCode = params.get("exchange_code");
+  const googleLogin = params.get("google_login");
   const oauthError = params.get("oauth_error");
-  if (!exchangeCode && !oauthError) return;
+  const isGoogleError = !!oauthError && oauthError.startsWith("google_");
+  if (!(googleLogin && exchangeCode) && !isGoogleError) return;
 
   window.history.replaceState({}, document.title, window.location.pathname);
 
-  if (oauthError) {
+  if (isGoogleError) {
     const messages = {
       google_denied: "已取消Google登入。",
-      state_invalid: "登入連結已失效,請重新點擊Google登入。",
+      google_state_invalid: "登入連結已失效,請重新點擊Google登入。",
       google_exchange_failed: "Google登入過程發生錯誤,請稍後再試一次;如持續發生請聯絡客服。",
     };
     alert(messages[oauthError] || "Google登入失敗,請重新嘗試。");
@@ -7253,6 +7268,59 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
     document.getElementById("memberCreateForm").style.display = "block";
     window._pendingProvider = "google";
     window._pendingExternalId = data.prefill_email;
+  } else {
+    currentMemberId = data.member.id;
+    currentMemberToken = data.token;
+    await enterMainScreen(data.member);
+  }
+})();
+
+// 2026-09新增:LINE正式OAuth登入完成後,後端(app.py的/auth/line/callback)會把
+// 瀏覽器導回這裡,網址列帶上line_login=1&exchange_code=...(登入/註冊成功待交換)
+// 或oauth_error=line_...(使用者取消/連結過期/交換失敗)。跟上面
+// handleGoogleOauthRedirect()是同一套設計,分開寫成兩支函式只是因為查詢參數/
+// 錯誤代碼字首不同(line_login/line_開頭 vs google_login/google_開頭,見上面
+// handleGoogleOauthRedirect()開頭那段「不會互搶對方的錯誤」的說明),邏輯完全對稱。
+(async function handleLineOauthRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const exchangeCode = params.get("exchange_code");
+  const lineLogin = params.get("line_login");
+  const oauthError = params.get("oauth_error");
+  const isLineError = !!oauthError && oauthError.startsWith("line_");
+  if (!(lineLogin && exchangeCode) && !isLineError) return;
+
+  window.history.replaceState({}, document.title, window.location.pathname);
+
+  if (isLineError) {
+    const messages = {
+      line_denied: "已取消LINE登入。",
+      line_state_invalid: "登入連結已失效,請重新點擊LINE登入。",
+      line_exchange_failed: "LINE登入過程發生錯誤,請稍後再試一次;如持續發生請聯絡客服。",
+    };
+    alert(messages[oauthError] || "LINE登入失敗,請重新嘗試。");
+    return;
+  }
+
+  const { ok, data } = await api("/auth/line/exchange", {
+    method: "POST", body: JSON.stringify({ exchange_code: exchangeCode })
+  });
+  if (!ok) {
+    alert(data.error || "LINE登入已過期,請重新點擊LINE登入。");
+    return;
+  }
+  if (data.is_new) {
+    // LINE不提供Email(詳見auth.line_oauth_login的說明),所以這裡只預先帶入姓名
+    // (LINE的顯示名稱),Email欄位留空且保持可編輯,讓使用者自己輸入——這是跟
+    // handleGoogleOauthRedirect()裡Email欄位「已驗證所以鎖定」最主要的差異。
+    document.getElementById("mName").value = data.prefill_name || "";
+    document.getElementById("mPhone").value = "";
+    document.getElementById("mEmail").value = "";
+    document.getElementById("mEmail").readOnly = false;
+    document.getElementById("memberCreateStatus").textContent = "";
+    document.getElementById("mPasswordFieldsWrap").style.display = "none";
+    document.getElementById("memberCreateForm").style.display = "block";
+    window._pendingProvider = "line";
+    window._pendingExternalId = data.prefill_line_user_id;
   } else {
     currentMemberId = data.member.id;
     currentMemberToken = data.token;

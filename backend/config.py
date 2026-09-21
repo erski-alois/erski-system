@@ -56,6 +56,11 @@ GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
     "GOOGLE_OAUTH_REDIRECT_URI", "https://app.erskischool.com/api/auth/google/callback"
 )
 GOOGLE_OAUTH_CONFIGURED = bool(GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET)
+# LINE Developers Console的「Callback URL」填的網址必須跟這裡完全一致,道理跟上面
+# GOOGLE_OAUTH_REDIRECT_URI一樣。
+LINE_OAUTH_REDIRECT_URI = os.environ.get(
+    "LINE_OAUTH_REDIRECT_URI", "https://app.erskischool.com/api/auth/line/callback"
+)
 LINE_OAUTH_CONFIGURED = bool(LINE_CHANNEL_ID and LINE_CHANNEL_SECRET)
 OAUTH_CONFIGURED = bool(GOOGLE_OAUTH_CONFIGURED or LINE_OAUTH_CONFIGURED)
 
