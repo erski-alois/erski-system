@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS staff (
     branch TEXT NOT NULL,
     is_coach INTEGER DEFAULT 1,
     is_active INTEGER DEFAULT 1,   -- 軟刪除用:停用後不會出現在教練清單,但保留歷史預約/稽核紀錄的關聯
+    display_order INTEGER DEFAULT 9999,  -- 教練團隊頁面顯示順序,數字越小排越前面;沒特別設定的一律排最後
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 

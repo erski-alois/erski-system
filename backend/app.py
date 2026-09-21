@@ -2947,7 +2947,8 @@ def list_coaches_public():
                       cp.promo_photo
                   ) AS promo_photo
            FROM staff s LEFT JOIN coach_profiles cp ON cp.coach_id = s.id
-           WHERE s.role='coach' AND s.is_active=1"""
+           WHERE s.role='coach' AND s.is_active=1
+           ORDER BY s.display_order ASC, s.id ASC"""
     ).fetchall()
     result = []
     for r in rows:
