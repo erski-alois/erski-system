@@ -170,6 +170,16 @@ def serve_privacy_policy():
     return resp
 
 
+@app.route("/terms")
+def serve_terms_of_use():
+    """2026-09新增:服務條款頁面。同樣起因是申請LINE Login Channel時,表單裡另一欄
+    「Terms of use URL」當時也還沒有頁面可以填,做法跟上面serve_privacy_policy()
+    完全對稱。"""
+    resp = send_from_directory(FRONTEND_DIR, "terms.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
