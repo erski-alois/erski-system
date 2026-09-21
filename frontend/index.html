@@ -469,7 +469,16 @@
           <div class="admin-topbar-search">🔍&nbsp; 搜尋會員、教練、訂單或設備</div>
           <div class="admin-topbar-right">
             <span id="adminTopbarDate"></span>
-            <span>🔔</span>
+            <span id="staffNotifBellWrap" style="position:relative; cursor:pointer;" onclick="toggleStaffNotifPanel()">
+              🔔<span id="staffNotifBadge" style="display:none; position:absolute; top:-6px; right:-10px; background:#c0392b; color:#fff; border-radius:9px; font-size:10px; line-height:1; padding:2px 5px; font-weight:700;"></span>
+              <div id="staffNotifPanel" style="display:none; position:absolute; top:28px; right:0; width:340px; max-height:420px; overflow-y:auto; background:#fff; border:1px solid #E7E9EF; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.12); z-index:100; cursor:default; text-align:left;" onclick="event.stopPropagation()">
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid #E7E9EF;">
+                  <b style="font-size:13px;">後台通知</b>
+                  <a style="font-size:12px; color:#2563eb; cursor:pointer;" onclick="markAllNotifsRead()">全部標為已讀</a>
+                </div>
+                <div id="staffNotifList" style="padding:4px 0;"></div>
+              </div>
+            </span>
             <div class="admin-topbar-user">
               <div class="admin-topbar-avatar" id="adminTopbarAvatar"></div>
               <div>
@@ -1640,6 +1649,7 @@ function closeStaffLogin() {
   // 不會殘留上一個人的登入狀態。
   currentStaffId = null;
   currentStaffToken = null;
+  stopStaffNotifPolling();
   document.getElementById("staffPanel").style.display = "none";
   document.getElementById("staffLoginFormCard").style.display = "block";
   document.getElementById("staffWorkId").value = "";
@@ -1773,6 +1783,7 @@ async function renderStaffPanel(staff) {
   const sidebar = document.getElementById("adminSidebarNav");
 
   if (["cs","manager","boss"].includes(staff.role)) {
+    initStaffNotifBell();
     // 2026-09第二次改版(後台側邊欄重新分類/搬移/改名+權限重新設計):依「老闆權限
     // 全開;股東(角色值仍是cs)除了管理報表這一大類(管理報表/薪資管理/月結損益/
     // 價格設定/資料匯入/清除測試資料)不開放,其餘全開(含這次從財務與分析獨立出來
@@ -1920,6 +1931,64 @@ async function renderStaffPanel(staff) {
   } else {
     body.innerHTML = `<p class="note">此角色尚未實作專屬畫面。</p>`;
   }
+}
+
+// ---------------- 後台通知鈴鐺(2026-09新增,見staff_notifications表) ----------------
+let staffNotifPollingTimer = null;
+function initStaffNotifBell() {
+  refreshStaffNotifBadge();
+  stopStaffNotifPolling();  // 避免重複登入/重新整理面板時,疊加出好幾個計時器同時輪詢
+  staffNotifPollingTimer = setInterval(refreshStaffNotifBadge, 60000);  // 每60秒輪詢一次未讀數字,足夠即時又不會太頻繁
+  document.addEventListener("click", () => {
+    const panel = document.getElementById("staffNotifPanel");
+    if (panel) panel.style.display = "none";
+  });
+}
+function stopStaffNotifPolling() {
+  if (staffNotifPollingTimer) { clearInterval(staffNotifPollingTimer); staffNotifPollingTimer = null; }
+}
+async function refreshStaffNotifBadge() {
+  if (!currentStaffToken) return;
+  const { ok, data } = await api("/admin/staff-notifications/unread-count");
+  if (!ok) return;
+  const badge = document.getElementById("staffNotifBadge");
+  if (data.count > 0) {
+    badge.textContent = data.count > 99 ? "99+" : data.count;
+    badge.style.display = "inline-block";
+  } else {
+    badge.style.display = "none";
+  }
+}
+async function toggleStaffNotifPanel() {
+  const panel = document.getElementById("staffNotifPanel");
+  const opening = panel.style.display === "none";
+  panel.style.display = opening ? "block" : "none";
+  if (opening) await loadStaffNotifList();
+}
+async function loadStaffNotifList() {
+  const listEl = document.getElementById("staffNotifList");
+  listEl.innerHTML = `<div class="note" style="padding:10px 12px;">載入中...</div>`;
+  const { ok, data } = await api("/admin/staff-notifications?limit=30");
+  if (!ok || !data.length) {
+    listEl.innerHTML = `<div class="note" style="padding:10px 12px;">目前沒有通知</div>`;
+    return;
+  }
+  listEl.innerHTML = data.map(n => `
+    <div style="padding:8px 12px; border-bottom:1px solid #F1F2F5; ${n.is_read ? "opacity:0.55;" : ""} cursor:pointer;" onclick="markNotifRead(${n.id})">
+      <div style="font-size:13px;">${n.message}</div>
+      <div style="font-size:11px; color:#8A93A3; margin-top:2px;">${n.created_at}${n.is_read ? "" : " ・ 未讀"}</div>
+    </div>
+  `).join("");
+}
+async function markNotifRead(notifId) {
+  await api(`/admin/staff-notifications/${notifId}/mark-read`, { method: "POST" });
+  await refreshStaffNotifBadge();
+  await loadStaffNotifList();
+}
+async function markAllNotifsRead() {
+  await api("/admin/staff-notifications/mark-all-read", { method: "POST" });
+  await refreshStaffNotifBadge();
+  await loadStaffNotifList();
 }
 
 const STAFF_TAB_REFRESH = {

@@ -455,6 +455,20 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
+-- 2026-09新增:後台員工看的通知(上面的notifications是會員自己看的,兩者完全分開)。
+-- 目前只在「學員購買課程/完成付款」時寫入一筆,見app.py的_log_purchase_notification。
+-- 這是全體員工共用的一份清單(不是每個員工各自一份已讀狀態),小團隊共用一份提醒清單
+-- 就夠用,不需要另外做一張「誰已讀誰未讀」的關聯表增加複雜度。
+CREATE TABLE IF NOT EXISTS staff_notifications (
+    id SERIAL PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT 'purchase',  -- 先只有purchase這一種,欄位保留未來擴充其他類型通知
+    message TEXT NOT NULL,
+    member_id INTEGER REFERENCES members(id),
+    order_id INTEGER,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
 -- 教練團隊個人檔案(宣傳照/自我介紹/證件照/合約類型/職級)
 CREATE TABLE IF NOT EXISTS coach_profiles (
     id SERIAL PRIMARY KEY,

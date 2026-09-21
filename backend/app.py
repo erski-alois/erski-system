@@ -2441,19 +2441,48 @@ def submit_japan_other_resort_request():
 _INDOOR_CATEGORY_LABEL = {"trial": "體驗課", "charter": "包機", "self_practice": "自主練習", "group_class": "團課"}
 
 
+def _create_staff_notification(conn, category, message, member_id=None, order_id=None):
+    """寫入一筆後台員工通知(見staff_notifications表/a1c7f2b940de這支migration的說明)。
+    這是全體員工共用的一份清單,呼叫端不用管「通知給誰」。失敗不應該讓呼叫端更重要的
+    動作(付款確認)跟著失敗,所以呼叫端(_log_purchase_notification)已經包在try/except裡,
+    這裡不用重複try。"""
+    conn.execute(
+        """INSERT INTO staff_notifications (category, message, member_id, order_id)
+           VALUES (?, ?, ?, ?)""",
+        (category, message, member_id, order_id),
+    )
+
+
 def _log_purchase_notification(conn, member_id, ref_type, ref_id):
     """付款確認成功時呼叫,把「已收到您的訂課/購買」這類訊息記錄成通知,讓會員登入
     會員中心就看得到(2026-08-24新增:之前這幾種購買/訂課完成後完全沒有留下任何
-    通知紀錄,會員自己也無從查詢)。查不到對應資料時靜默略過,不影響付款本身。"""
+    通知紀錄,會員自己也無從查詢)。2026-09擴充:同時也寫一筆後台員工通知(見上面
+    _create_staff_notification),起因是「學員購買課程後,後台完全沒有任何提醒通知」——
+    之前員工要知道有新訂單只能自己去後台各分頁翻查。查不到對應資料時靜默略過,
+    不影響付款本身。"""
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
+    member_name = member_row["name"] if member_row else "會員"
     try:
         if ref_type == "charter_order":
+            # 注意:這裡的ref_id是orders.id(比照_lookup_authoritative_order/
+            # finalize_charter_purchase的呼叫慣例),不是charter_passes.id——
+            # 兩張表各自獨立自增,id不會對得起來,一定要透過orders.ref_id
+            # 轉一手查到真正的charter_passes記錄,不能直接拿ref_id去查
+            # charter_passes.id(這是之前一版寫法的bug,會查到錯的堂數包、
+            # 或(更常見)完全查不到資料而靜默略過通知)。
             row = conn.execute(
-                "SELECT package_size FROM charter_passes WHERE id=?", (ref_id,)
+                """SELECT cp.package_size AS package_size FROM orders o
+                   JOIN charter_passes cp ON cp.id = o.ref_id
+                   WHERE o.id=?""",
+                (ref_id,),
             ).fetchone()
             if row:
                 booking.log_notification(
                     conn, member_id, "purchase_confirmed",
                     f"已收到您購買的包機{row['package_size']}堂堂數包,款項確認完成,堂數已入帳,可以開始訂課。",
+                )
+                _create_staff_notification(
+                    conn, "purchase", f"{member_name} 購買了包機{row['package_size']}堂堂數包", member_id=member_id,
                 )
         elif ref_type == "indoor_session":
             row = conn.execute(
@@ -2464,6 +2493,11 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
                 booking.log_notification(
                     conn, member_id, "booking_confirmed",
                     f"已收到您的{label}預約,{row['booking_date']} {row['start_hour']}:00,款項確認完成。",
+                )
+                _create_staff_notification(
+                    conn, "purchase",
+                    f"{member_name} 購買了{label}({row['booking_date']} {row['start_hour']}:00)",
+                    member_id=member_id,
                 )
         elif ref_type == "indoor_session_member":
             row = conn.execute(
@@ -2477,6 +2511,11 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
                     conn, member_id, "booking_confirmed",
                     f"已收到您的團課預約,{row['booking_date']} {row['start_hour']}:00,款項確認完成。",
                 )
+                _create_staff_notification(
+                    conn, "purchase",
+                    f"{member_name} 購買了團課({row['booking_date']} {row['start_hour']}:00)",
+                    member_id=member_id,
+                )
         elif ref_type == "jump_booking":
             row = conn.execute(
                 "SELECT booking_date, start_time FROM jump_bookings WHERE id=?", (ref_id,)
@@ -2485,6 +2524,11 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
                 booking.log_notification(
                     conn, member_id, "booking_confirmed",
                     f"已收到您的跳台預約,{row['booking_date']} {row['start_time']},款項確認完成。",
+                )
+                _create_staff_notification(
+                    conn, "purchase",
+                    f"{member_name} 購買了跳台體驗({row['booking_date']} {row['start_time']})",
+                    member_id=member_id,
                 )
         elif ref_type == "japan_booking":
             row = conn.execute(
@@ -2498,6 +2542,11 @@ def _log_purchase_notification(conn, member_id, ref_type, ref_id):
                 booking.log_notification(
                     conn, member_id, "booking_confirmed",
                     f"已收到您的日本滑雪預約({resort_name} {row['booking_date']}),行程訂金確認完成。",
+                )
+                _create_staff_notification(
+                    conn, "purchase",
+                    f"{member_name} 購買了日本滑雪行程({resort_name} {row['booking_date']})",
+                    member_id=member_id,
                 )
     except Exception:
         pass  # 通知記錄失敗不該讓付款這個更重要的動作跟著失敗
@@ -4365,6 +4414,63 @@ def admin_list_pending_refunds():
     ).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/staff-notifications", methods=["GET"])
+def admin_list_staff_notifications():
+    """列出後台通知(全體員工共用同一份清單,見staff_notifications表的說明)。
+    任何已登入的員工(cs/manager/boss)都能看,不特別限制section,因為這是
+    「有新訂單」這類全員都該知道的提醒,不是敏感資料。query string可傳
+    unread_only=1只看未讀,limit預設50。"""
+    staff = _current_staff()
+    if not staff:
+        return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+    unread_only = request.args.get("unread_only") == "1"
+    limit = min(request.args.get("limit", 50, type=int) or 50, 200)
+    conn = get_conn()
+    q = "SELECT * FROM staff_notifications"
+    if unread_only:
+        q += " WHERE is_read=0"
+    q += " ORDER BY id DESC LIMIT ?"
+    rows = conn.execute(q, (limit,)).fetchall()
+    conn.close()
+    return jsonify(rows_to_dicts(rows))
+
+
+@app.route("/api/admin/staff-notifications/unread-count", methods=["GET"])
+def admin_staff_notifications_unread_count():
+    """給後台通知鈴鐺的紅點數字用,故意獨立成一支很輕量的API,可以放心定時輪詢。"""
+    staff = _current_staff()
+    if not staff:
+        return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+    conn = get_conn()
+    row = conn.execute("SELECT COUNT(*) AS c FROM staff_notifications WHERE is_read=0").fetchone()
+    conn.close()
+    return jsonify({"count": row["c"]})
+
+
+@app.route("/api/admin/staff-notifications/<int:notif_id>/mark-read", methods=["POST"])
+def admin_mark_staff_notification_read(notif_id):
+    staff = _current_staff()
+    if not staff:
+        return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+    conn = get_conn()
+    conn.execute("UPDATE staff_notifications SET is_read=1 WHERE id=?", (notif_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/staff-notifications/mark-all-read", methods=["POST"])
+def admin_mark_all_staff_notifications_read():
+    staff = _current_staff()
+    if not staff:
+        return jsonify({"error": "未登入或登入已過期,請重新登入"}), 401
+    conn = get_conn()
+    conn.execute("UPDATE staff_notifications SET is_read=1 WHERE is_read=0")
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/admin/indoor-sessions/unpaid-designate-fees", methods=["GET"])
