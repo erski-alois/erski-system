@@ -377,9 +377,9 @@
           <button class="btn-primary" onclick="emailLogin()">登入</button>
           <div id="emailLoginStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
 
-          <div class="divider" onclick="toggleOtherLogin()">或使用以下方式登入 <span id="otherLoginArrow">▾</span></div>
+          <div class="divider">或使用以下方式登入</div>
 
-          <div id="otherLoginWrap" style="display:none;">
+          <div id="otherLoginWrap" style="display:block;">
             <div class="social-row">
               <div class="social-btn" onclick="oauthLogin('google')">
                 <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.5 6.1 29.6 4 24 4c-7.8 0-14.5 4.4-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.4-2.1 14.1-5.6l-6.5-5.5C29.6 34.7 27 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5c3.2 6.3 9.9 10.5 17.8 10.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.5 5.5C40.1 36.9 44 31 44 24c0-1.4-.1-2.7-.4-3.5z"/></svg>
@@ -389,14 +389,10 @@
                 <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="white"/><path fill="#06C755" d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.3 7.9-.1.4-.6 2.2-.7 2.5 0 0-.1.4.2.5.3.1.7-.1.7-.1.3-.2 3.1-2.1 4.4-3 4-.7 7.1-3.5 7.1-7 0-4.4-4.5-8-10-8z"/></svg>
                 LINE
               </div>
-              <div class="social-btn" onclick="oauthLogin('apple')">
-                <svg width="14" height="14" viewBox="0 0 384 512" fill="#111"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg>
-                Apple
-              </div>
             </div>
           </div>
 
-          <p class="hint" id="oauthHintText" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE/Apple目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
+          <p class="hint" id="oauthHintText" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
 
           <div class="form-footer-note">
             還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
@@ -1419,7 +1415,7 @@ async function oauthLogin(provider) {
       return;
     }
   }
-  const mockIds = { line: "line-demo-user", google: "test@gmail.com", apple: "test@icloud.com" };
+  const mockIds = { line: "line-demo-user", google: "test@gmail.com" };
   const mock_external_id = mockIds[provider] || `${provider}-demo-user`;
   const { data } = await api("/auth/oauth-login", {
     method: "POST", body: JSON.stringify({ provider, mock_external_id })
@@ -1442,13 +1438,6 @@ async function oauthLogin(provider) {
     currentMemberToken = data.token;
     enterMainScreen(data.member);
   }
-}
-function toggleOtherLogin() {
-  const wrap = document.getElementById("otherLoginWrap");
-  const arrow = document.getElementById("otherLoginArrow");
-  const show = wrap.style.display === "none";
-  wrap.style.display = show ? "block" : "none";
-  arrow.textContent = show ? "▴" : "▾";
 }
 // 2026-09重寫:改叫真正驗證密碼的/auth/member-login,取代舊的
 // /auth/oauth-login(provider='email')——那條路完全沒有驗證密碼,只要Email存在
@@ -7289,7 +7278,6 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
   } else {
     stillMock.push("LINE");
   }
-  stillMock.push("Apple");
   if (stillMock.length) {
     parts.push(`${stillMock.join("/")}目前仍為示範用途的模擬按鈕,點選即完成登入`);
   }
