@@ -355,52 +355,55 @@
 
       <div class="form-panel">
         <div class="form-card">
-          <div class="form-eyebrow">MEMBER LOGIN</div>
-          <h1 class="form-title serif">會員登入</h1>
-          <p class="form-sub">登入以預約高雄室內雪機課程、日本滑雪行程</p>
+          <div id="loginFormFields">
+            <div class="form-eyebrow">MEMBER LOGIN</div>
+            <h1 class="form-title serif">會員登入</h1>
+            <p class="form-sub">登入以預約高雄室內雪機課程、日本滑雪行程</p>
 
-          <div class="field">
-            <label>電子信箱</label>
-            <input id="emailLoginInput" type="text" placeholder="you@example.com">
-          </div>
-          <div class="field">
-            <label>密碼</label>
-            <input id="passwordLoginInput" type="password" placeholder="請輸入密碼">
-          </div>
-          <div class="form-row-between">
-            <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:0;">
-              <input type="checkbox" style="width:auto; margin:0;"> 記住我
-            </label>
-            <a onclick="alert('請洽客服協助重設密碼(客服可在後台清除你的登入密碼,清除後下次登入會請你直接設定一組新密碼)。')">忘記密碼？</a>
-          </div>
+            <div class="field">
+              <label>電子信箱</label>
+              <input id="emailLoginInput" type="text" placeholder="you@example.com">
+            </div>
+            <div class="field">
+              <label>密碼</label>
+              <input id="passwordLoginInput" type="password" placeholder="請輸入密碼">
+            </div>
+            <div class="form-row-between">
+              <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:0;">
+                <input type="checkbox" style="width:auto; margin:0;"> 記住我
+              </label>
+              <a onclick="alert('請洽客服協助重設密碼(客服可在後台清除你的登入密碼,清除後下次登入會請你直接設定一組新密碼)。')">忘記密碼？</a>
+            </div>
 
-          <button class="btn-primary" onclick="emailLogin()">登入</button>
-          <div id="emailLoginStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
+            <button class="btn-primary" onclick="emailLogin()">登入</button>
+            <div id="emailLoginStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
 
-          <div class="divider">或使用以下方式登入</div>
+            <div class="divider">或使用以下方式登入</div>
 
-          <div id="otherLoginWrap" style="display:block;">
-            <div class="social-row">
-              <div class="social-btn" onclick="oauthLogin('google')">
-                <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.5 6.1 29.6 4 24 4c-7.8 0-14.5 4.4-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.4-2.1 14.1-5.6l-6.5-5.5C29.6 34.7 27 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5c3.2 6.3 9.9 10.5 17.8 10.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.5 5.5C40.1 36.9 44 31 44 24c0-1.4-.1-2.7-.4-3.5z"/></svg>
-                Google
-              </div>
-              <div class="social-btn" onclick="oauthLogin('line')">
-                <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="white"/><path fill="#06C755" d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.3 7.9-.1.4-.6 2.2-.7 2.5 0 0-.1.4.2.5.3.1.7-.1.7-.1.3-.2 3.1-2.1 4.4-3 4-.7 7.1-3.5 7.1-7 0-4.4-4.5-8-10-8z"/></svg>
-                LINE
+            <div id="otherLoginWrap" style="display:block;">
+              <div class="social-row">
+                <div class="social-btn" onclick="oauthLogin('google')">
+                  <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.5 6.1 29.6 4 24 4c-7.8 0-14.5 4.4-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.4-2.1 14.1-5.6l-6.5-5.5C29.6 34.7 27 36 24 36c-5.3 0-9.7-3.1-11.3-7.5l-6.5 5c3.2 6.3 9.9 10.5 17.8 10.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.2-4.2 5.6l6.5 5.5C40.1 36.9 44 31 44 24c0-1.4-.1-2.7-.4-3.5z"/></svg>
+                  Google
+                </div>
+                <div class="social-btn" onclick="oauthLogin('line')">
+                  <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="white"/><path fill="#06C755" d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.3 7.9-.1.4-.6 2.2-.7 2.5 0 0-.1.4.2.5.3.1.7-.1.7-.1.3-.2 3.1-2.1 4.4-3 4-.7 7.1-3.5 7.1-7 0-4.4-4.5-8-10-8z"/></svg>
+                  LINE
+                </div>
               </div>
             </div>
+
+            <p class="hint" id="oauthHintText" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
+
+            <div class="form-footer-note">
+              還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
+            </div>
+            <a class="staff-link-jp" onclick="openCoachLogin()">🎿 教練登入(教練專屬頁面) →</a>
+            <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(股東/主管/老闆) →</a>
           </div>
 
-          <p class="hint" id="oauthHintText" style="text-align:center; font-size:11.5px; color:#a39d90;">Email+密碼登入為正式登入(需要輸入正確密碼);Google/LINE目前仍為示範用途的模擬按鈕,點選即完成登入。</p>
-
-          <div class="form-footer-note">
-            還不是會員？ <a onclick="openRegisterForm()">立即註冊</a>
-          </div>
-          <a class="staff-link-jp" onclick="openCoachLogin()">🎿 教練登入(教練專屬頁面) →</a>
-          <a class="staff-link-jp" onclick="openStaffLogin()">員工後台管理登入(股東/主管/老闆) →</a>
-
-          <div id="memberCreateForm" style="display:none; text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:16px;">
+          <div id="memberCreateForm" style="display:none; text-align:left;">
+            <a onclick="cancelMemberCreate()" style="display:inline-flex; align-items:center; gap:4px; font-size:12.5px; color:#8a8375; cursor:pointer; margin-bottom:10px;">← 返回登入</a>
             <h3 style="font-size:14px;">建立會員資料</h3>
             <p class="note" style="margin-top:-4px;">請填寫姓名、手機、Email 完成註冊,其餘個人資料(出生年月日、地址、緊急聯絡人等)註冊完成後可以到「會員中心」隨時補上。</p>
             <label>姓名</label><input id="mName" placeholder="請輸入姓名">
@@ -1437,7 +1440,7 @@ async function oauthLogin(provider) {
     document.getElementById("mEmail").readOnly = false;
     document.getElementById("memberCreateStatus").textContent = "";
     document.getElementById("mPasswordFieldsWrap").style.display = "none";  // OAuth註冊不需要密碼欄位
-    document.getElementById("memberCreateForm").style.display = "block";
+    showMemberCreateForm();
     window._pendingProvider = provider;
     window._pendingExternalId = mock_external_id;
   } else {
@@ -1476,6 +1479,23 @@ async function emailLogin() {
   }
 }
 
+// 2026-09新增:「建立會員資料」表單原本是直接接在登入表單下方顯示(login欄位/
+// Google/LINE按鈕都還留在畫面上),使用者反映這樣容易誤會「登入沒有反應」,沒注意到
+// 下面多出來一段表單。改成顯示註冊表單時,把上面的登入欄位整個隱藏起來,讓畫面感覺
+// 像是切換到「另一個畫面」(不是真的跳轉網址,單頁應用程式內的顯示切換而已),
+// 並在表單最上方加一個「← 返回登入」讓使用者可以退回登入畫面。以下2支函式集中處理
+// 這個顯示切換,取代原本各處各自直接操作memberCreateForm.style.display的寫法。
+function showMemberCreateForm() {
+  document.getElementById("loginFormFields").style.display = "none";
+  const form = document.getElementById("memberCreateForm");
+  form.style.display = "block";
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function cancelMemberCreate() {
+  document.getElementById("memberCreateForm").style.display = "none";
+  document.getElementById("loginFormFields").style.display = "block";
+}
+
 // 直接點「立即註冊」進來的路徑:三個欄位(姓名/手機/Email)都是空白、可以自己填,
 // 送出時才交給後端做Email是否重複的判斷(Email重複的話,create-member那支API會
 // 回傳錯誤訊息,而不是靜默覆蓋既有會員)。這是Email註冊,需要一併設定登入密碼。
@@ -1490,9 +1510,7 @@ function openRegisterForm() {
   document.getElementById("mPasswordFieldsWrap").style.display = "block";
   window._pendingProvider = "email";
   window._pendingExternalId = null;
-  const form = document.getElementById("memberCreateForm");
-  form.style.display = "block";
-  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  showMemberCreateForm();
 }
 
 // 台灣手機號碼格式驗證:允許使用者輸入時夾雜空格或「-」(例如 0912-345-678),
@@ -7265,7 +7283,7 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
     document.getElementById("mEmail").readOnly = !!data.prefill_email;
     document.getElementById("memberCreateStatus").textContent = "";
     document.getElementById("mPasswordFieldsWrap").style.display = "none";
-    document.getElementById("memberCreateForm").style.display = "block";
+    showMemberCreateForm();
     window._pendingProvider = "google";
     window._pendingExternalId = data.prefill_email;
   } else {
@@ -7318,7 +7336,7 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
     document.getElementById("mEmail").readOnly = false;
     document.getElementById("memberCreateStatus").textContent = "";
     document.getElementById("mPasswordFieldsWrap").style.display = "none";
-    document.getElementById("memberCreateForm").style.display = "block";
+    showMemberCreateForm();
     window._pendingProvider = "line";
     window._pendingExternalId = data.prefill_line_user_id;
   } else {
