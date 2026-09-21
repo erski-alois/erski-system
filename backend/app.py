@@ -159,27 +159,6 @@ def serve_csia_shuttle_schedule():
     return send_from_directory(os.path.join(FRONTEND_DIR, "assets"), "csia-shuttle-schedule.png", mimetype="image/png")
 
 
-@app.route("/privacy")
-def serve_privacy_policy():
-    """2026-09新增:隱私權政策頁面。起因是申請LINE Login Channel時,LINE的申請表單
-    裡有一欄「Privacy policy URL」,當時網站還沒有這個頁面可以填。這是獨立的靜態
-    HTML頁面(不是frontend/index.html那個單頁應用程式的一部分),用跟上面icon/logo
-    同樣的個別路由寫法提供,不用快取(跟index.html一樣,避免修改後使用者看到舊版)。"""
-    resp = send_from_directory(FRONTEND_DIR, "privacy.html")
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return resp
-
-
-@app.route("/terms")
-def serve_terms_of_use():
-    """2026-09新增:服務條款頁面。同樣起因是申請LINE Login Channel時,表單裡另一欄
-    「Terms of use URL」當時也還沒有頁面可以填,做法跟上面serve_privacy_policy()
-    完全對稱。"""
-    resp = send_from_directory(FRONTEND_DIR, "terms.html")
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return resp
-
-
 @app.after_request
 def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
