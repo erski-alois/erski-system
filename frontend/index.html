@@ -2280,8 +2280,45 @@ async function renderClearTestDataTools() {
       <button class="small" onclick="submitMigratePhotosToR2()">開始搬移</button>
       <div id="migratePhotosR2Result" style="margin-top:8px;"></div>
     </div>
+    <div class="person-card" style="border:1px solid #1565c0; margin-top:16px;">
+      <b style="color:#1565c0;">上線前壓力測試</b>
+      <p class="note">模擬多位使用者同時查詢公開頁面(教練名單/價格/雪場/CSIA課程等),不會建立/修改/刪除任何資料,
+        用來評估系統在高併發下撐不撐得住。<b>請挑離峰時段(例如深夜/清晨)執行</b>,測試期間網站資源會被測試流量
+        占用,真實使用者當下可能感覺變慢。建議先按「輕量測試」,確認錯誤率是0、延遲數字正常,再按「中量測試」
+        往上加大;如果輕量測試就已經出現錯誤或延遲明顯飆高,先不要繼續加大,把結果截圖回報。</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="small secondary" onclick="submitStressTest(10, 30)">輕量測試(10併發 / 30秒)</button>
+        <button class="small secondary" onclick="submitStressTest(30, 60)">中量測試(30併發 / 60秒)</button>
+      </div>
+      <div id="stressTestResult" style="margin-top:8px;"></div>
+    </div>
   `;
   await loadTestDataSummary();
+}
+async function submitStressTest(concurrency, durationSeconds) {
+  const resultEl = document.getElementById("stressTestResult");
+  resultEl.innerHTML = `測試執行中,請稍候約${durationSeconds}秒...(這段期間請不要重新整理頁面或再按一次)`;
+  const { ok, data } = await api("/admin/system/stress-test", {
+    method: "POST",
+    body: JSON.stringify({ concurrency, duration_seconds: durationSeconds }),
+  });
+  if (!ok) { resultEl.innerHTML = `<p class="note" style="color:#c0392b;">${data.error || "測試執行失敗,請稍後再試或聯絡工程協助。"}</p>`; return; }
+  const errColor = data.error_count > 0 ? "#c0392b" : "#2e7d32";
+  let html = `
+    <table style="width:100%; font-size:13px; border-collapse:collapse; margin-top:4px;">
+      <tbody>
+        <tr><td style="padding:2px 0;">併發數(concurrency)</td><td style="text-align:right;">${data.concurrency}</td></tr>
+        <tr><td style="padding:2px 0;">實際執行秒數</td><td style="text-align:right;">${data.actual_elapsed_seconds}</td></tr>
+        <tr><td style="padding:2px 0;">總請求數</td><td style="text-align:right;">${data.total_requests}</td></tr>
+        <tr><td style="padding:2px 0;">每秒請求數(RPS)</td><td style="text-align:right;">${data.requests_per_second}</td></tr>
+        <tr><td style="padding:2px 0; color:${errColor};">錯誤數 / 錯誤率</td><td style="text-align:right; color:${errColor};">${data.error_count} 筆(${(data.error_rate * 100).toFixed(2)}%)</td></tr>
+        <tr><td style="padding:2px 0;">延遲(ms) p50 / p90 / p99 / max</td><td style="text-align:right;">${data.latency_ms.p50} / ${data.latency_ms.p90} / ${data.latency_ms.p99} / ${data.latency_ms.max}</td></tr>
+      </tbody>
+    </table>`;
+  if (data.sample_errors && data.sample_errors.length) {
+    html += `<p class="note" style="color:#c0392b; margin-top:6px;">錯誤範例:${data.sample_errors.join("; ")}</p>`;
+  }
+  resultEl.innerHTML = html;
 }
 async function submitMigratePhotosToR2() {
   const resultEl = document.getElementById("migratePhotosR2Result");

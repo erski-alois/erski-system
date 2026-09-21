@@ -1,10 +1,15 @@
 from flask import Flask, request, jsonify, send_from_directory, Response, send_file, redirect
 import urllib.parse
+import urllib.request
+import urllib.error
 from werkzeug.middleware.proxy_fix import ProxyFix
 import functools
 import os
 import json
 import base64
+import threading
+import queue
+import time
 
 from db import get_conn, init_db, rows_to_dicts, NOW_SQL
 import db as _db
@@ -3806,6 +3811,130 @@ def admin_migrate_certificate_files_to_r2():
             failed.append({"id": row["id"], "coach_id": row["coach_id"], "category": row["category"], "error": str(e)})
     conn.close()
     return jsonify({"ok": True, "total_found": len(rows), "migrated": migrated, "failed": failed})
+
+
+# ------------------------------------------------------------------
+# 上線前壓力測試:模擬多位使用者同時查詢，評估正式站在高併發下的穩定度
+#
+# 因為工作環境本身對外連線受限，沒辦法從外部真的對正式網址發送大量請求，
+# 所以改成這支「內部限定」的測試端點：由正式站自己(同一個gunicorn process)
+# 透過本機127.0.0.1對自己的公開唯讀API發送大量並行請求，量測到的併發能力
+# 反映的是這台服務真實能承受的量(包含gunicorn worker數量、資料庫連線池
+# 等實際限制)，不是憑空模擬。只打「不會建立/修改/刪除任何資料」的公開
+# 唯讀API，不會弄髒正式資料。只有老闆(boss)權限能觸發，建議挑離峰時段執行，
+# 執行期間這台服務的資源會被測試流量占用，可能讓真實使用者當下感覺變慢。
+# ------------------------------------------------------------------
+_STRESS_TEST_SAFE_PATHS = [
+    "/api/coaches",
+    "/api/pricing",
+    "/api/resorts",
+    "/api/japan-regions",
+    "/api/csia/courses",
+]
+_STRESS_TEST_STATE = {"active": False}
+_STRESS_TEST_LOCK = threading.Lock()
+
+
+@app.route("/api/admin/system/stress-test", methods=["POST"])
+@require_role("boss")
+def admin_run_stress_test():
+    """執行一輪內部壓力測試。body可帶concurrency(同時併發的模擬使用者數，
+    預設10，上限80)、duration_seconds(測試持續秒數，預設30，上限120)。
+    同一時間只允許一個測試在跑，避免不小心疊加成更大的負載或忘記自己已經
+    啟動過。回傳這一輪的總請求數、每秒請求數(RPS)、錯誤率、延遲百分位數，
+    可以用來跟「調整前/調整後」互相比較，或觀察什麼併發量開始出現錯誤/
+    延遲飆高，藉此評估目前方案(gunicorn -w 2)撐不撐得住預期的正式流量。"""
+    with _STRESS_TEST_LOCK:
+        if _STRESS_TEST_STATE["active"]:
+            return jsonify({"error": "已經有一個測試正在執行中,請等它結束(或稍後重新整理頁面查看)"}), 409
+        _STRESS_TEST_STATE["active"] = True
+
+    try:
+        data = request.get_json(silent=True) or {}
+        concurrency = max(1, min(int(data.get("concurrency", 10)), 80))
+        duration_seconds = max(5, min(int(data.get("duration_seconds", 30)), 120))
+
+        port = os.environ.get("PORT", "10000")
+        base_url = f"http://127.0.0.1:{port}"
+
+        results_queue = queue.Queue()
+        stop_flag = threading.Event()
+        path_cycle_lock = threading.Lock()
+        path_index = {"i": 0}
+
+        def _next_path():
+            with path_cycle_lock:
+                p = _STRESS_TEST_SAFE_PATHS[path_index["i"] % len(_STRESS_TEST_SAFE_PATHS)]
+                path_index["i"] += 1
+                return p
+
+        def _worker():
+            while not stop_flag.is_set():
+                path = _next_path()
+                t0 = time.time()
+                try:
+                    req = urllib.request.Request(
+                        base_url + path, headers={"User-Agent": "erski-internal-stress-test"}
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        elapsed = time.time() - t0
+                        results_queue.put((path, resp.status, elapsed, None))
+                except urllib.error.HTTPError as e:
+                    elapsed = time.time() - t0
+                    results_queue.put((path, e.code, elapsed, str(e)))
+                except Exception as e:
+                    elapsed = time.time() - t0
+                    results_queue.put((path, None, elapsed, str(e)))
+
+        threads = [threading.Thread(target=_worker, daemon=True) for _ in range(concurrency)]
+        t_start = time.time()
+        for t in threads:
+            t.start()
+        time.sleep(duration_seconds)
+        stop_flag.set()
+        for t in threads:
+            t.join(timeout=5)
+        actual_elapsed = time.time() - t_start
+
+        all_results = []
+        while not results_queue.empty():
+            all_results.append(results_queue.get())
+
+        total = len(all_results)
+        errors = [r for r in all_results if r[1] != 200]
+        latencies_ms = sorted(r[2] * 1000 for r in all_results)
+
+        def _pct(p):
+            if not latencies_ms:
+                return None
+            idx = min(len(latencies_ms) - 1, int(len(latencies_ms) * p))
+            return round(latencies_ms[idx], 1)
+
+        by_path = {}
+        for path, status, _elapsed, _err in all_results:
+            entry = by_path.setdefault(path, {"count": 0, "errors": 0})
+            entry["count"] += 1
+            if status != 200:
+                entry["errors"] += 1
+
+        return jsonify({
+            "ok": True,
+            "concurrency": concurrency,
+            "duration_seconds": duration_seconds,
+            "actual_elapsed_seconds": round(actual_elapsed, 1),
+            "total_requests": total,
+            "requests_per_second": round(total / actual_elapsed, 1) if actual_elapsed else 0,
+            "error_count": len(errors),
+            "error_rate": round(len(errors) / total, 4) if total else 0,
+            "latency_ms": {
+                "p50": _pct(0.5), "p90": _pct(0.9), "p99": _pct(0.99),
+                "max": round(max(latencies_ms), 1) if latencies_ms else None,
+            },
+            "by_path": by_path,
+            "sample_errors": [r[3] for r in errors[:5]],
+        })
+    finally:
+        _STRESS_TEST_STATE["active"] = False
 
 
 # ------------------------------------------------------------------
