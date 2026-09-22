@@ -326,7 +326,7 @@ def main() -> int:
 
     append_audit(tp_root, scanned, completed, rejected, pending, notes, args.dry_run)
     print(f"TP 回寫掃描 {scanned} 筆；完成 {completed}、拒絕 {rejected}、暫留 {pending}。")
-    return 0
+    return 1 if pending else 0
 
 
 if __name__ == "__main__":
