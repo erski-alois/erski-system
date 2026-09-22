@@ -820,7 +820,8 @@ INSERT INTO japan_regions (code, name, requires_resort_selection, allow_designat
  ('hokkaido', '北海道滑雪場', 1, 1, 0, 0, 2),
  ('onikoube', '鬼首滑雪', 0, 1, 1, 0, 3),
  ('hakuba', '白馬地區滑雪場', 1, 1, 0, 1, 4),
- ('other', '其他雪場', 1, 0, 0, 1, 5);
+ ('myoko', '妙高高原', 0, 1, 0, 0, 5),
+ ('other', '其他雪場', 1, 0, 0, 1, 6);
 
 -- 藏王(免選雪場)自動建立一個對應雪場
 INSERT INTO ski_resorts (region_id, code, name)
@@ -841,6 +842,10 @@ INSERT INTO ski_resorts (region_id, code, name)
 -- 鬼首(免選雪場)自動建立一個對應雪場
 INSERT INTO ski_resorts (region_id, code, name)
  SELECT id, 'onikoube_main', '鬼首滑雪' FROM japan_regions WHERE code='onikoube';
+
+-- 妙高高原(免選雪場)自動建立一個對應雪場
+INSERT INTO ski_resorts (region_id, code, name)
+ SELECT id, 'myoko_main', '妙高高原' FROM japan_regions WHERE code='myoko';
 
 -- 白馬、其他雪場:雪場清單由後台自行新增,先不建立示範資料
 
