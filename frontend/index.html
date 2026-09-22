@@ -1,8 +1,19 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-Hant" translate="no">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 2026-09-22新增:修正回報的bug「使用LINE登入後頁面全部跑掉」——實際上不是程式
+     壞掉,是瀏覽器(Chrome)的自動翻譯功能被誤觸發,把整頁中文業務用語(包機/自主
+     練習/會員中心等)機器翻譯成另一種語言又翻回中文,結果變成語意相近但完全不對的
+     詞(例如「包機」變成「包裝機」、「自主練習」變成「獨立執業」、「會員中心」變成
+     「以會員為中心」),畫面版面/按鈕位置本身沒有壞,純粹是文字內容被翻譯工具亂改。
+     這個頁面本來就有繁體中文lang標籤,但頁面裡混雜了日文裝飾文字(登入頁的品牌標語)
+     跟大量地名/雪場名稱,可能讓Chrome的語言偵測誤判、在LINE登入導轉重新載入頁面時
+     跳出/自動套用翻譯。加上notranslate這兩個標記(html的translate屬性+下面這個
+     meta標籤)明確告訴Chrome「這頁不要提供/套用翻譯」,是網站避免這類問題最標準的
+     做法。-->
+<meta name="google" content="notranslate">
 <title>ERSKI 滑雪急診室 - 預約系統</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0b1f33">
@@ -374,7 +385,7 @@
               <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:0;">
                 <input type="checkbox" style="width:auto; margin:0;"> 記住我
               </label>
-              <a onclick="alert('請洽客服協助重設密碼(客服可在後台清除你的登入密碼,清除後下次登入會請你直接設定一組新密碼)。')">忘記密碼？</a>
+              <a onclick="openForgotPasswordForm()">忘記密碼？</a>
             </div>
 
             <button class="btn-primary" onclick="emailLogin()">登入</button>
@@ -417,6 +428,28 @@
             </div>
             <div id="memberCreateStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
             <button onclick="createMember()">完成建立會員</button>
+          </div>
+
+          <!-- 2026-09-22新增:忘記密碼——輸入Email申請重設密碼信,取代原本點下去只會
+               alert()叫你去洽客服的做法。 -->
+          <div id="forgotPasswordForm" style="display:none; text-align:left;">
+            <a onclick="cancelForgotPassword()" style="display:inline-flex; align-items:center; gap:4px; font-size:12.5px; color:#8a8375; cursor:pointer; margin-bottom:10px;">← 返回登入</a>
+            <h3 style="font-size:14px;">忘記密碼</h3>
+            <p class="note" style="margin-top:-4px;">請輸入註冊時使用的Email,我們會寄一封重設密碼連結給你(連結30分鐘內有效)。</p>
+            <label>Email</label><input id="forgotPwEmail" placeholder="you@example.com" type="email">
+            <div id="forgotPwStatus" style="margin-top:6px; font-size:12.5px;"></div>
+            <button onclick="submitForgotPassword()">寄送重設密碼連結</button>
+          </div>
+
+          <!-- 2026-09-22新增:點擊Email裡的重設密碼連結後(網址帶reset_token參數),
+               頁面載入時會直接切換顯示這個表單,見底下handleResetPasswordLink()。 -->
+          <div id="resetPasswordForm" style="display:none; text-align:left;">
+            <h3 style="font-size:14px;">設定新密碼</h3>
+            <p class="note" style="margin-top:-4px;">請輸入你的新登入密碼(至少6碼)。</p>
+            <label>新密碼</label><input id="resetPwNew" type="password">
+            <label>再輸入一次新密碼</label><input id="resetPwConfirm" type="password">
+            <div id="resetPwStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
+            <button onclick="submitResetPassword()">設定新密碼</button>
           </div>
         </div>
 
@@ -1273,7 +1306,12 @@ let pricingData = null;
 // 先閃一下登入頁才又跳回會員畫面——真正驗證token是否還有效是非同步的,交給
 // restoreMemberSession()處理,驗證失敗會再把登入頁顯示回來。
 try {
-  if (localStorage.getItem("erski_member_token") && window.location.pathname.replace(/\/$/, "") !== "/coach") {
+  // reset_token存在時代表使用者是點Email裡的「重設密碼」連結進來(見底下
+  // handleResetPasswordLink()),要讓他看到設定新密碼的表單,不能被這裡提前隱藏
+  // 登入頁的邏輯蓋過去。
+  const hasResetToken = new URLSearchParams(window.location.search).get("reset_token");
+  if (!hasResetToken && localStorage.getItem("erski_member_token")
+      && window.location.pathname.replace(/\/$/, "") !== "/coach") {
     const el = document.getElementById("loginScreen");
     if (el) el.style.display = "none";
   }
@@ -1549,6 +1587,72 @@ function showMemberCreateForm() {
 function cancelMemberCreate() {
   document.getElementById("memberCreateForm").style.display = "none";
   document.getElementById("loginFormFields").style.display = "block";
+}
+
+// 2026-09-22新增:忘記密碼——同一套「切換顯示」模式,跟上面showMemberCreateForm()/
+// cancelMemberCreate()一致。
+function openForgotPasswordForm() {
+  document.getElementById("loginFormFields").style.display = "none";
+  document.getElementById("forgotPwEmail").value = "";
+  const statusEl = document.getElementById("forgotPwStatus");
+  statusEl.textContent = "";
+  statusEl.style.color = "#c0392b";
+  const form = document.getElementById("forgotPasswordForm");
+  form.style.display = "block";
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function cancelForgotPassword() {
+  document.getElementById("forgotPasswordForm").style.display = "none";
+  document.getElementById("loginFormFields").style.display = "block";
+}
+async function submitForgotPassword() {
+  const email = document.getElementById("forgotPwEmail").value.trim();
+  const statusEl = document.getElementById("forgotPwStatus");
+  if (!isValidEmail(email)) {
+    statusEl.style.color = "#c0392b";
+    statusEl.textContent = "請輸入正確的Email格式";
+    return;
+  }
+  statusEl.style.color = "#77716a";
+  statusEl.textContent = "寄送中...";
+  const { ok, data } = await api("/auth/forgot-password", {
+    method: "POST", body: JSON.stringify({ email })
+  });
+  if (!ok) {
+    statusEl.style.color = "#c0392b";
+    statusEl.textContent = data.error || "寄送失敗,請稍後再試;如持續發生請洽客服協助。";
+    return;
+  }
+  statusEl.style.color = "#2e7d32";
+  statusEl.textContent = data.message || "如果這個Email有註冊,重設密碼信已經寄出,請至信箱收信(記得檢查垃圾郵件夾)。";
+}
+
+// 2026-09-22新增:設定新密碼(從Email裡的重設密碼連結進來,見底下handleResetPasswordLink()
+// 把reset_token存進window._pendingResetToken)。
+async function submitResetPassword() {
+  const newPw = document.getElementById("resetPwNew").value;
+  const confirmPw = document.getElementById("resetPwConfirm").value;
+  const statusEl = document.getElementById("resetPwStatus");
+  if (!newPw || newPw.length < 6) { statusEl.textContent = "請設定至少6碼的新密碼"; return; }
+  if (newPw !== confirmPw) { statusEl.textContent = "兩次輸入的密碼不一致,請重新輸入"; return; }
+  if (!window._pendingResetToken) { statusEl.textContent = "重設連結已失效,請重新申請一次。"; return; }
+  statusEl.style.color = "#77716a";
+  statusEl.textContent = "處理中...";
+  const { ok, data } = await api("/auth/reset-password", {
+    method: "POST", body: JSON.stringify({ reset_token: window._pendingResetToken, new_password: newPw })
+  });
+  if (!ok) {
+    statusEl.style.color = "#c0392b";
+    statusEl.textContent = data.error || "重設失敗,請重新申請一次重設密碼連結。";
+    return;
+  }
+  window._pendingResetToken = null;
+  document.getElementById("resetPasswordForm").style.display = "none";
+  document.getElementById("loginFormFields").style.display = "block";
+  if (data.email) document.getElementById("emailLoginInput").value = data.email;
+  document.getElementById("passwordLoginInput").value = "";
+  document.getElementById("emailLoginStatus").textContent = "";
+  alert("密碼已重設成功,請用新密碼登入。");
 }
 
 // 直接點「立即註冊」進來的路徑:三個欄位(姓名/手機/Email)都是空白、可以自己填,
@@ -2365,6 +2469,18 @@ async function renderImportTools() {
       <button class="small" onclick="submitImport('charter-passes')">開始匯入</button>
       <div id="importResult-charter-passes" style="margin-top:8px;"></div>
     </div>
+
+    <div class="person-card">
+      <b>匯入教練班表/請假紀錄</b>
+      <p class="note">欄位:coach_work_id(教練工號,必填), work_date(YYYY-MM-DD,必填), status(必填:working=上班/personal_leave=事假/sick_leave=病假/annual_leave=特休/business_trip=出差), reason(請假原因,選填)。
+        用來把TimeTree等舊系統上的教練請假/出差紀錄一次搬進「共用班表日曆」——TimeTree本身沒有CSV匯出功能,需自行把資料整理成這個格式。
+        沒有請假紀錄的日期本來就預設是上班,通常只需要匯入「有請假/出差」的那幾天即可,不用整年每天都填working。
+        同一位教練同一天重複匯入會直接覆蓋舊資料,方便發現有誤時重新匯入更正。</p>
+      <button class="small secondary" onclick="downloadCsvTemplate('coach-schedule')">下載範本</button>
+      <input type="file" accept=".csv" id="importFile-coach-schedule">
+      <button class="small" onclick="submitImport('coach-schedule')">開始匯入</button>
+      <div id="importResult-coach-schedule" style="margin-top:8px;"></div>
+    </div>
   `;
 }
 
@@ -2372,6 +2488,7 @@ const CSV_TEMPLATES = {
   members: "name,phone,email,birth_date,gender,address,emergency_contact_name,emergency_contact_phone\n陳大文,0911111111,chen@example.com,1990-01-15,male,高雄市左營區,陳媽媽,0922222222",
   coaches: "name,work_id,birthday,phone,branch\n周教練,0010,1988-08-08,0944444444,高雄",
   "charter-passes": "member_phone_or_email,package_size,headcount_type,remaining\n0911111111,10,1,7",
+  "coach-schedule": "coach_work_id,work_date,status,reason\n0010,2026-10-05,personal_leave,家中有事\n0010,2026-10-06,personal_leave,家中有事\n0022,2026-11-20,business_trip,日本團出差",
 };
 function downloadCsvTemplate(type) {
   const blob = new Blob(["\uFEFF" + CSV_TEMPLATES[type]], { type: "text/csv;charset=utf-8" });
@@ -2390,7 +2507,10 @@ async function submitImport(type) {
   const { ok, data } = await api(`/admin/import/${type}`, { method: "POST", body: JSON.stringify({ csv_text }) });
   const resultEl = document.getElementById(`importResult-${type}`);
   if (!ok) { resultEl.innerHTML = `<span class="status-tag warn">${data.error}</span>`; return; }
-  let html = `<div class="list-item"><b>成功匯入 ${data.created.length} 筆</b>${data.skipped ? `,略過 ${data.skipped.length} 筆(已存在)` : ""},失敗 ${data.failed.length} 筆</div>`;
+  // coach-schedule匯入是upsert(新增或覆蓋更新),沒有created/skipped的概念,回傳的是upserted
+  const successList = data.created || data.upserted || [];
+  const successLabel = data.upserted ? "筆(新增或覆蓋更新)" : "筆";
+  let html = `<div class="list-item"><b>成功匯入 ${successList.length} ${successLabel}</b>${data.skipped ? `,略過 ${data.skipped.length} 筆(已存在)` : ""},失敗 ${data.failed.length} 筆</div>`;
   if (data.failed.length) {
     html += data.failed.map(f => `<div class="list-item">第${f.row}列失敗:${escapeHtml(f.reason)}</div>`).join("");
   }
@@ -7636,6 +7756,28 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
   }
 })();
 
+// 2026-09-22新增:會員點擊「忘記密碼」信裡的重設連結,後端信裡的連結是直接導回
+// 這個網址、帶上reset_token查詢參數(不像Google/LINE OAuth需要先跟後端交換,
+// 這組token本身已經是簽章過的憑證,直接留在前端等使用者送出新密碼時一起送到
+// /api/auth/reset-password驗證即可)。這裡是同步函式(不用await任何東西),
+// 執行完就把「設定新密碼」表單顯示出來。
+(function handleResetPasswordLink() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("reset_token");
+  if (!token) return;
+  window.history.replaceState({}, document.title, window.location.pathname);
+  window._pendingResetToken = token;
+  document.getElementById("loginScreen").style.display = "block";
+  document.getElementById("mainScreen").style.display = "none";
+  document.getElementById("loginFormFields").style.display = "none";
+  document.getElementById("memberCreateForm").style.display = "none";
+  document.getElementById("forgotPasswordForm").style.display = "none";
+  document.getElementById("resetPwNew").value = "";
+  document.getElementById("resetPwConfirm").value = "";
+  document.getElementById("resetPwStatus").textContent = "";
+  document.getElementById("resetPasswordForm").style.display = "block";
+})();
+
 // 2026-09-22新增:還原會員登入狀態(修正回報的bug:「按重新整理頁面都會跑到登入
 // 頁」)——上面存進localStorage的token,頁面重新載入時在這裡拿去問後端還有沒有效,
 // 有效就直接進會員中心,不用重新輸入帳號密碼/重新走一次LINE或Google登入。
@@ -7646,7 +7788,7 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
 (async function restoreMemberSession() {
   if (window.location.pathname.replace(/\/$/, "") === "/coach") return;
   const params = new URLSearchParams(window.location.search);
-  if (params.get("exchange_code") || params.get("oauth_error")) return;
+  if (params.get("exchange_code") || params.get("oauth_error") || params.get("reset_token")) return;
   if (currentMemberId) return;  // 已經被其他登入流程處理完成
 
   let savedToken, savedId;

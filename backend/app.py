@@ -22,7 +22,6 @@ import payroll
 import config
 import csia
 import storage_r2
-import tp_sync
 
 # ------------------------------------------------------------------
 # Sentry錯誤監控:必須在Flask app建立「之前」呼叫sentry_sdk.init()，
@@ -273,7 +272,7 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     # 2026-08:X-Staff-Id(未簽章、可偽造的純工號)全面改成X-Staff-Token/X-Member-Token
     # (見authtoken.py),詳見README_部署交接指南.md第二節「會員身分沒有真的驗證」。
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token, X-ERSKI-TP-Sync-Key"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
@@ -282,45 +281,6 @@ def add_cors_headers(response):
 def cors_preflight(_any):
     return "", 204
 
-
-# ------------------------------------------------------------------
-# Render/PostgreSQL -> TurboPlus 的唯讀營運鏡像 API
-# ------------------------------------------------------------------
-# TP 是同步營運後台，不是主資料庫。這兩支介面只輸出 tp_sync.py 明確列出的
-# 最小必要欄位，不含密碼、password hash、身分證、地址、健康資料、ATM 虛擬帳號或
-# 任何第三方服務金鑰。TP 端需以 X-ERSKI-TP-Sync-Key 帶入獨立同步金鑰。
-def _require_tp_sync_key():
-    if not config.TP_SYNC_CONFIGURED:
-        return jsonify({"error": "TP 同步尚未啟用"}), 503
-    supplied = request.headers.get("X-ERSKI-TP-Sync-Key", "")
-    if not tp_sync.constant_time_authorized(supplied, config.TP_SYNC_SHARED_SECRET):
-        # 不記錄 header、金鑰、會員資料或請求參數，避免同步憑證意外出現在 log。
-        return jsonify({"error": "未授權的同步請求"}), 401
-    return None
-
-
-@app.route("/api/integrations/tp/v1/manifest", methods=["GET"])
-def tp_sync_manifest():
-    denied = _require_tp_sync_key()
-    if denied:
-        return denied
-    return jsonify(tp_sync.get_manifest())
-
-
-@app.route("/api/integrations/tp/v1/snapshot/<entity>", methods=["GET"])
-def tp_sync_snapshot(entity):
-    denied = _require_tp_sync_key()
-    if denied:
-        return denied
-    try:
-        after_id, limit = tp_sync.parse_page_arguments(
-            request.args.get("after_id"), request.args.get("limit"), config.TP_SYNC_MAX_PAGE_SIZE
-        )
-        return jsonify(tp_sync.get_snapshot(entity, after_id, limit))
-    except KeyError:
-        return jsonify({"error": "不支援的同步資料類型"}), 404
-    except ValueError:
-        return jsonify({"error": "同步分頁參數不正確"}), 400
 
 ROLE_RANK = {"coach": 1, "cs": 2, "manager": 3, "boss": 4}
 # 2026-09:資料庫欄位(staff.role的CHECK約束)、教練自助頁面等「純粹判斷是不是有登入
@@ -4827,6 +4787,79 @@ def admin_import_charter_passes():
     conn.commit()
     conn.close()
     return jsonify({"created": created, "failed": failed})
+
+
+@app.route("/api/admin/import/coach-schedule", methods=["POST"])
+@require_section("system")
+def admin_import_coach_schedule():
+    """
+    匯入教練班表/請假紀錄(例如把TimeTree等舊系統上的教練請假/出差紀錄,一次性搬到
+    「共用班表日曆」coach_schedule表)。TimeTree官方沒有CSV/穩定API匯出功能,所以這裡
+    只提供「匯入我們自己格式的CSV」,由店家自行把TimeTree上的資料整理成這個格式
+    (畫面上有範本可以下載)。
+    CSV欄位:coach_work_id,work_date,status,reason
+      - coach_work_id:教練工號(對應staff.work_id,不用姓名,避免同名教練對不起來),必填
+      - work_date:YYYY-MM-DD,必填
+      - status:working/personal_leave/sick_leave/annual_leave/business_trip其中之一,必填
+        (沒有請假紀錄的日期本來就預設視為working,所以通常只需要匯入「有請假/出差」的
+         那幾天,不用把整年每天都填一列working)
+      - reason:請假原因,選填
+    以coach_id+work_date為unique key,跟後台手動設定班表共用同一個ON CONFLICT UPSERT邏輯,
+    已存在的那天會直接被覆蓋——這樣如果店家發現匯入資料有誤,重新匯出/匯入一次即可更正,
+    不用手動一天一天刪除重填。
+    """
+    from datetime import datetime as _dt
+
+    d = request.json
+    try:
+        rows = _parse_csv(d["csv_text"])
+    except Exception as e:
+        return jsonify({"error": f"CSV格式解析失敗:{e}"}), 400
+
+    valid_statuses = {"working", "personal_leave", "sick_leave", "annual_leave", "business_trip"}
+    conn = get_conn()
+    upserted, failed = [], []
+    for i, row in enumerate(rows, start=2):  # row 2 = 第一筆資料(第1行是標題)
+        work_id = (row.get("coach_work_id") or "").strip()
+        work_date = (row.get("work_date") or "").strip()
+        status = (row.get("status") or "").strip()
+        reason = (row.get("reason") or "").strip() or None
+        if not work_id or not work_date or not status:
+            failed.append({"row": i, "reason": "coach_work_id/work_date/status為必填"})
+            continue
+        if status not in valid_statuses:
+            failed.append({"row": i, "reason": f"status必須是{'/'.join(sorted(valid_statuses))}其中之一"})
+            continue
+        try:
+            _dt.strptime(work_date, "%Y-%m-%d")
+        except ValueError:
+            failed.append({"row": i, "reason": "work_date格式須為YYYY-MM-DD"})
+            continue
+        coach = conn.execute(
+            "SELECT id FROM staff WHERE work_id=? AND role='coach'", (work_id,)
+        ).fetchone()
+        if not coach:
+            failed.append({"row": i, "reason": f"找不到工號為{work_id}的教練帳號"})
+            continue
+        try:
+            conn.execute(
+                """INSERT INTO coach_schedule (coach_id, work_date, status, reason)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(coach_id, work_date) DO UPDATE SET status=excluded.status, reason=excluded.reason""",
+                (coach["id"], work_date, status, reason),
+            )
+            upserted.append({"row": i, "coach_id": coach["id"], "work_date": work_date, "status": status})
+        except Exception as e:
+            failed.append({"row": i, "reason": str(e)})
+    conn.commit()
+    conn.execute(
+        """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
+           VALUES (?, 'import_coach_schedule', 'coach_schedule', 0, '{}', ?)""",
+        (request.current_staff["id"], json.dumps({"upserted": len(upserted), "failed": len(failed)})),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"upserted": upserted, "failed": failed})
 
 
 @app.route("/api/admin/orders", methods=["GET"])
