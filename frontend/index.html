@@ -374,7 +374,7 @@
               <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin:0;">
                 <input type="checkbox" style="width:auto; margin:0;"> 記住我
               </label>
-              <a onclick="openForgotPasswordForm()">忘記密碼？</a>
+              <a onclick="alert('請洽客服協助重設密碼(客服可在後台清除你的登入密碼,清除後下次登入會請你直接設定一組新密碼)。')">忘記密碼？</a>
             </div>
 
             <button class="btn-primary" onclick="emailLogin()">登入</button>
@@ -417,28 +417,6 @@
             </div>
             <div id="memberCreateStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
             <button onclick="createMember()">完成建立會員</button>
-          </div>
-
-          <!-- 2026-09-22新增:忘記密碼——輸入Email申請重設密碼信,取代原本點下去只會
-               alert()叫你去洽客服的做法。 -->
-          <div id="forgotPasswordForm" style="display:none; text-align:left;">
-            <a onclick="cancelForgotPassword()" style="display:inline-flex; align-items:center; gap:4px; font-size:12.5px; color:#8a8375; cursor:pointer; margin-bottom:10px;">← 返回登入</a>
-            <h3 style="font-size:14px;">忘記密碼</h3>
-            <p class="note" style="margin-top:-4px;">請輸入註冊時使用的Email,我們會寄一封重設密碼連結給你(連結30分鐘內有效)。</p>
-            <label>Email</label><input id="forgotPwEmail" placeholder="you@example.com" type="email">
-            <div id="forgotPwStatus" style="margin-top:6px; font-size:12.5px;"></div>
-            <button onclick="submitForgotPassword()">寄送重設密碼連結</button>
-          </div>
-
-          <!-- 2026-09-22新增:點擊Email裡的重設密碼連結後(網址帶reset_token參數),
-               頁面載入時會直接切換顯示這個表單,見底下handleResetPasswordLink()。 -->
-          <div id="resetPasswordForm" style="display:none; text-align:left;">
-            <h3 style="font-size:14px;">設定新密碼</h3>
-            <p class="note" style="margin-top:-4px;">請輸入你的新登入密碼(至少6碼)。</p>
-            <label>新密碼</label><input id="resetPwNew" type="password">
-            <label>再輸入一次新密碼</label><input id="resetPwConfirm" type="password">
-            <div id="resetPwStatus" style="margin-top:6px; font-size:12.5px; color:#c0392b;"></div>
-            <button onclick="submitResetPassword()">設定新密碼</button>
           </div>
         </div>
 
@@ -1295,12 +1273,7 @@ let pricingData = null;
 // 先閃一下登入頁才又跳回會員畫面——真正驗證token是否還有效是非同步的,交給
 // restoreMemberSession()處理,驗證失敗會再把登入頁顯示回來。
 try {
-  // reset_token存在時代表使用者是點Email裡的「重設密碼」連結進來(見底下
-  // handleResetPasswordLink()),要讓他看到設定新密碼的表單,不能被這裡提前隱藏
-  // 登入頁的邏輯蓋過去。
-  const hasResetToken = new URLSearchParams(window.location.search).get("reset_token");
-  if (!hasResetToken && localStorage.getItem("erski_member_token")
-      && window.location.pathname.replace(/\/$/, "") !== "/coach") {
+  if (localStorage.getItem("erski_member_token") && window.location.pathname.replace(/\/$/, "") !== "/coach") {
     const el = document.getElementById("loginScreen");
     if (el) el.style.display = "none";
   }
@@ -1576,72 +1549,6 @@ function showMemberCreateForm() {
 function cancelMemberCreate() {
   document.getElementById("memberCreateForm").style.display = "none";
   document.getElementById("loginFormFields").style.display = "block";
-}
-
-// 2026-09-22新增:忘記密碼——同一套「切換顯示」模式,跟上面showMemberCreateForm()/
-// cancelMemberCreate()一致。
-function openForgotPasswordForm() {
-  document.getElementById("loginFormFields").style.display = "none";
-  document.getElementById("forgotPwEmail").value = "";
-  const statusEl = document.getElementById("forgotPwStatus");
-  statusEl.textContent = "";
-  statusEl.style.color = "#c0392b";
-  const form = document.getElementById("forgotPasswordForm");
-  form.style.display = "block";
-  form.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-function cancelForgotPassword() {
-  document.getElementById("forgotPasswordForm").style.display = "none";
-  document.getElementById("loginFormFields").style.display = "block";
-}
-async function submitForgotPassword() {
-  const email = document.getElementById("forgotPwEmail").value.trim();
-  const statusEl = document.getElementById("forgotPwStatus");
-  if (!isValidEmail(email)) {
-    statusEl.style.color = "#c0392b";
-    statusEl.textContent = "請輸入正確的Email格式";
-    return;
-  }
-  statusEl.style.color = "#77716a";
-  statusEl.textContent = "寄送中...";
-  const { ok, data } = await api("/auth/forgot-password", {
-    method: "POST", body: JSON.stringify({ email })
-  });
-  if (!ok) {
-    statusEl.style.color = "#c0392b";
-    statusEl.textContent = data.error || "寄送失敗,請稍後再試;如持續發生請洽客服協助。";
-    return;
-  }
-  statusEl.style.color = "#2e7d32";
-  statusEl.textContent = data.message || "如果這個Email有註冊,重設密碼信已經寄出,請至信箱收信(記得檢查垃圾郵件夾)。";
-}
-
-// 2026-09-22新增:設定新密碼(從Email裡的重設密碼連結進來,見底下handleResetPasswordLink()
-// 把reset_token存進window._pendingResetToken)。
-async function submitResetPassword() {
-  const newPw = document.getElementById("resetPwNew").value;
-  const confirmPw = document.getElementById("resetPwConfirm").value;
-  const statusEl = document.getElementById("resetPwStatus");
-  if (!newPw || newPw.length < 6) { statusEl.textContent = "請設定至少6碼的新密碼"; return; }
-  if (newPw !== confirmPw) { statusEl.textContent = "兩次輸入的密碼不一致,請重新輸入"; return; }
-  if (!window._pendingResetToken) { statusEl.textContent = "重設連結已失效,請重新申請一次。"; return; }
-  statusEl.style.color = "#77716a";
-  statusEl.textContent = "處理中...";
-  const { ok, data } = await api("/auth/reset-password", {
-    method: "POST", body: JSON.stringify({ reset_token: window._pendingResetToken, new_password: newPw })
-  });
-  if (!ok) {
-    statusEl.style.color = "#c0392b";
-    statusEl.textContent = data.error || "重設失敗,請重新申請一次重設密碼連結。";
-    return;
-  }
-  window._pendingResetToken = null;
-  document.getElementById("resetPasswordForm").style.display = "none";
-  document.getElementById("loginFormFields").style.display = "block";
-  if (data.email) document.getElementById("emailLoginInput").value = data.email;
-  document.getElementById("passwordLoginInput").value = "";
-  document.getElementById("emailLoginStatus").textContent = "";
-  alert("密碼已重設成功,請用新密碼登入。");
 }
 
 // 直接點「立即註冊」進來的路徑:三個欄位(姓名/手機/Email)都是空白、可以自己填,
@@ -7729,28 +7636,6 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
   }
 })();
 
-// 2026-09-22新增:會員點擊「忘記密碼」信裡的重設連結,後端信裡的連結是直接導回
-// 這個網址、帶上reset_token查詢參數(不像Google/LINE OAuth需要先跟後端交換,
-// 這組token本身已經是簽章過的憑證,直接留在前端等使用者送出新密碼時一起送到
-// /api/auth/reset-password驗證即可)。這裡是同步函式(不用await任何東西),
-// 執行完就把「設定新密碼」表單顯示出來。
-(function handleResetPasswordLink() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get("reset_token");
-  if (!token) return;
-  window.history.replaceState({}, document.title, window.location.pathname);
-  window._pendingResetToken = token;
-  document.getElementById("loginScreen").style.display = "block";
-  document.getElementById("mainScreen").style.display = "none";
-  document.getElementById("loginFormFields").style.display = "none";
-  document.getElementById("memberCreateForm").style.display = "none";
-  document.getElementById("forgotPasswordForm").style.display = "none";
-  document.getElementById("resetPwNew").value = "";
-  document.getElementById("resetPwConfirm").value = "";
-  document.getElementById("resetPwStatus").textContent = "";
-  document.getElementById("resetPasswordForm").style.display = "block";
-})();
-
 // 2026-09-22新增:還原會員登入狀態(修正回報的bug:「按重新整理頁面都會跑到登入
 // 頁」)——上面存進localStorage的token,頁面重新載入時在這裡拿去問後端還有沒有效,
 // 有效就直接進會員中心,不用重新輸入帳號密碼/重新走一次LINE或Google登入。
@@ -7761,7 +7646,7 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
 (async function restoreMemberSession() {
   if (window.location.pathname.replace(/\/$/, "") === "/coach") return;
   const params = new URLSearchParams(window.location.search);
-  if (params.get("exchange_code") || params.get("oauth_error") || params.get("reset_token")) return;
+  if (params.get("exchange_code") || params.get("oauth_error")) return;
   if (currentMemberId) return;  // 已經被其他登入流程處理完成
 
   let savedToken, savedId;
