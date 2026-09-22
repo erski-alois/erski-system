@@ -1193,6 +1193,10 @@ def get_pricing():
         "group_class_min": pricing.get_config("group_class_min"),
         "group_class_max": pricing.get_config("group_class_max"),
         "indoor_hours": {"start": pricing.get_config("indoor_start_hour"), "last_start": pricing.get_config("indoor_last_start_hour")},
+        # 2026-09新增:室內滑雪機台公休日(0~6對應星期一~星期日,例如[0]代表星期一公休)。
+        # 前端月曆(renderCalendar)依這個值把公休日當天灰掉、不可點選,跟後端
+        # pricing.validate_indoor_not_closed_day()的擋控邏輯保持一致。
+        "indoor_closed_weekdays": pricing.get_config("indoor_closed_weekdays", []),
         "plan_quota": pricing.get_config("plan_quota"),
         "plan_fee": pricing.get_config("plan_fee"),
         "booking_window_days": pricing.get_config("booking_window_days"),

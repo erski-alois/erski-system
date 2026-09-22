@@ -200,11 +200,13 @@
              border-radius:8px; font-size:13px; cursor:pointer; border:1px solid transparent; position:relative; }
   .cal-day.empty { visibility:hidden; }
   .cal-day.past { color:#c7ccd2; cursor:not-allowed; }
+  .cal-day.closed { color:#c7ccd2; cursor:not-allowed; background:#f7f3ee; }
   .cal-day.today { border-color:#000; font-weight:600; }
   .cal-day.selected { background:#000; color:white; }
   .cal-day.in-range { background:#eef1f5; }
-  .cal-day:not(.past):not(.selected):hover { background:#f4f6f9; }
+  .cal-day:not(.past):not(.closed):not(.selected):hover { background:#f4f6f9; }
   .cal-dot { width:5px; height:5px; border-radius:50%; background:#e08a2e; margin-top:2px; }
+  .cal-closed-label { font-size:9px; line-height:1; margin-top:1px; }
 
   @media (max-width: 720px) {
     #mainLayout { flex-direction: column; }
@@ -1266,6 +1268,30 @@ let myCompanions = [];
 let myProfile = {};
 let _pendingPayment = null;
 
+// 2026-09新增:共用HTML跳脫函式,避免使用者自由輸入文字(姓名、備註等)
+// 未經處理就塞進innerHTML樣板字串,造成儲存型XSS(stored XSS)。
+// 規則:任何「別人打的文字」要顯示給任何人看,一律要先經過這個函式。
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+// 2026-09新增:專門給「塞進onclick="fn('...')"這種inline事件處理器裡的JS字串參數」用。
+// 注意escapeHtml在這裡不夠用——瀏覽器會先把HTML屬性值做entity解碼、才把結果當JS原始碼
+// 解析,所以就算把單引號轉成&#39;,解碼後還是變回單引號,一樣能跳脫出JS字串邊界;
+// 而雙引號沒處理的話又能跳脫出外層onclick="..."這個HTML屬性本身,插入額外屬性
+// (例如onmouseover=...)。這裡索性把單引號、雙引號、反斜線都直接拿掉,不留給
+// 使用者可以拿來跳脫任何一層的字元(這幾個位置本來就只是拿來組出確認訊息用的顯示
+// 名稱,拿掉這幾個符號不影響實際用途)。
+function jsAttrArg(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/['"\\]/g, "");
+}
+
 function requestPayment(amount, ref_type, ref_id, cardEligible) {
   if (!amount || amount <= 0) return; // 免付費項目(例如額度內預約、團課)不跳付款
   // 2026-09依你的要求新增:cardEligible代表「這筆訂單能不能直接用信用卡走綠界即時扣款」,
@@ -1306,10 +1332,10 @@ function bankAccountHintHtml(acc) {
     return `<p class="note" style="margin:0;">校方尚未設定匯款帳號,請改選其他付款方式,或洽詢客服取得匯款資訊。</p>`;
   }
   return `
-    <div><b>銀行</b>:${acc.bank_name || ""}${acc.bank_code ? `(代碼 ${acc.bank_code})` : ""}</div>
-    <div><b>帳號</b>:${acc.account_number}</div>
-    <div><b>戶名</b>:${acc.account_name || ""}</div>
-    ${acc.note ? `<div class="note" style="margin-top:4px;">${acc.note}</div>` : ""}
+    <div><b>銀行</b>:${escapeHtml(acc.bank_name || "")}${acc.bank_code ? `(代碼 ${escapeHtml(acc.bank_code)})` : ""}</div>
+    <div><b>帳號</b>:${escapeHtml(acc.account_number)}</div>
+    <div><b>戶名</b>:${escapeHtml(acc.account_name || "")}</div>
+    ${acc.note ? `<div class="note" style="margin-top:4px;">${escapeHtml(acc.note)}</div>` : ""}
   `;
 }
 function updatePaymentMethodHint() {
@@ -1975,7 +2001,7 @@ async function loadStaffNotifList() {
   }
   listEl.innerHTML = data.map(n => `
     <div style="padding:8px 12px; border-bottom:1px solid #F1F2F5; ${n.is_read ? "opacity:0.55;" : ""} cursor:pointer;" onclick="markNotifRead(${n.id})">
-      <div style="font-size:13px;">${n.message}</div>
+      <div style="font-size:13px;">${escapeHtml(n.message)}</div>
       <div style="font-size:11px; color:#8A93A3; margin-top:2px;">${n.created_at}${n.is_read ? "" : " ・ 未讀"}</div>
     </div>
   `).join("");
@@ -2122,7 +2148,7 @@ async function renderDashboardTab() {
 
 async function renderStaffAssistTab() {
   const { data: members } = await api("/admin/members");
-  const memberOptions = members.map(m => `<option value="${m.id}">${m.name}(${m.phone || m.email || ""})</option>`).join("");
+  const memberOptions = members.map(m => `<option value="${m.id}">${escapeHtml(m.name)}(${escapeHtml(m.phone || m.email || "")})</option>`).join("");
   document.getElementById("staffTab-assist").innerHTML = `
     <h3 style="font-size:14px;">代客訂課</h3>
     <p class="note">選擇會員與課程種類後,直接幫客戶完成預約(不受客戶自行預約的介面限制,仍會檢查時段衝突/額度)。</p>
@@ -2312,7 +2338,7 @@ async function submitImport(type) {
   if (!ok) { resultEl.innerHTML = `<span class="status-tag warn">${data.error}</span>`; return; }
   let html = `<div class="list-item"><b>成功匯入 ${data.created.length} 筆</b>${data.skipped ? `,略過 ${data.skipped.length} 筆(已存在)` : ""},失敗 ${data.failed.length} 筆</div>`;
   if (data.failed.length) {
-    html += data.failed.map(f => `<div class="list-item">第${f.row}列失敗:${f.reason}</div>`).join("");
+    html += data.failed.map(f => `<div class="list-item">第${f.row}列失敗:${escapeHtml(f.reason)}</div>`).join("");
   }
   resultEl.innerHTML = html;
 }
@@ -2483,7 +2509,7 @@ async function renderPartnerManageTools() {
 
   html += partners.map(p => `
     <div class="person-card">
-      <b>${p.name}</b>${p.is_active ? "" : "<span class=\"status-tag warn\">已停用</span>"}
+      <b>${escapeHtml(p.name)}</b>${p.is_active ? "" : "<span class=\"status-tag warn\">已停用</span>"}
       <div class="list-item">優惠碼:<b>${p.code}</b>(建立後無法更改)</div>
       <div class="field-grid" style="margin-top:6px;">
         <div><label>單位名稱</label><input id="partnerEditName-${p.id}" value="${(p.name||"").replace(/"/g,'&quot;')}"></div>
@@ -2570,7 +2596,7 @@ async function viewPartnerReport(partnerId) {
     <div class="list-item">首購總營收(每位會員只算第一筆已付款訂單):NT$${data.total_paid_revenue}</div>
     <div class="list-item"><b>應回饋金額:NT$${data.rebate_amount}</b></div>
     <div class="note">${data.rebate_basis || ""}</div>
-    ${data.referred_members.map(m => `<div class="list-item">${m.name}(${m.phone || m.email || ""})</div>`).join("")}
+    ${data.referred_members.map(m => `<div class="list-item">${escapeHtml(m.name)}(${escapeHtml(m.phone || m.email || "")})</div>`).join("")}
   `;
 }
 
@@ -2583,7 +2609,7 @@ async function renderFaqManageTab() {
   let html = `<h3 style="margin-top:16px; font-size:14px;">待回覆問題</h3>`;
   html += unanswered.length ? unanswered.map(u => `
     <div class="person-card">
-      ${u.member_name ? `${u.member_name} 提問:` : ""}${u.question_text}
+      ${u.member_name ? `${escapeHtml(u.member_name)} 提問:` : ""}${escapeHtml(u.question_text)}
       <input id="faqResolveNote-${u.id}" placeholder="處理備註(選填)">
       <button class="small" onclick="resolveFaqUnanswered(${u.id})">標記已處理</button>
     </div>
@@ -2659,7 +2685,7 @@ async function renderEquipmentTab() {
     const { data: closures } = await api(`/admin/equipment/${eq.id}/closures`);
     html += `
       <div class="person-card">
-        <b>${eq.name}</b>(${EQUIPMENT_TYPE_LABEL[eq.equipment_type] || eq.equipment_type})
+        <b>${escapeHtml(eq.name)}</b>(${EQUIPMENT_TYPE_LABEL[eq.equipment_type] || escapeHtml(eq.equipment_type)})
         <span class="status-tag ${eq.status==='active'?'ok':'warn'}">${EQUIPMENT_STATUS_LABEL[eq.status]}</span>
         <div class="row" style="margin-top:6px;">
           <select id="eqStatus-${eq.id}">
@@ -2688,12 +2714,12 @@ async function renderEquipmentTab() {
           <input id="eqClosureReason-${eq.id}" placeholder="原因">
           <button class="small secondary" onclick="addEquipmentClosure(${eq.id})">新增停用日</button>
         </div>
-        ${closures.map(c => `<div class="list-item">${c.closure_date} — ${c.reason || ""} <a onclick="removeEquipmentClosure(${c.id}, ${eq.id})" style="cursor:pointer; color:#a6650a;">✕</a></div>`).join("")}
+        ${closures.map(c => `<div class="list-item">${c.closure_date} — ${escapeHtml(c.reason || "")} <a onclick="removeEquipmentClosure(${c.id}, ${eq.id})" style="cursor:pointer; color:#a6650a;">✕</a></div>`).join("")}
 
         <label style="margin-top:8px;">歷史紀錄</label>
         ${logs.map(l => `
           <div class="list-item">
-            ${l.created_at} — ${LOG_TYPE_LABEL[l.log_type]}${l.description ? `:${l.description}` : ""}
+            ${l.created_at} — ${LOG_TYPE_LABEL[l.log_type]}${l.description ? `:${escapeHtml(l.description)}` : ""}
             <span class="status-tag ${l.status==='resolved'?'ok':'warn'}">${l.status==='resolved'?'已改善':'待處理'}</span>
             ${l.status!=='resolved' ? `<button class="small secondary" onclick="resolveEquipmentLog(${l.id}, ${eq.id})">標記已改善</button>` : ""}
           </div>
@@ -2780,7 +2806,7 @@ async function renderJapanBookingsTools() {
          <tr><th style="text-align:left;">教練</th><th style="text-align:right;">應收尾款</th><th style="text-align:right;">筆數</th></tr>
          ${receivables.map(r => `
            <tr>
-             <td>${r.coach_name}</td>
+             <td>${escapeHtml(r.coach_name)}</td>
              <td style="text-align:right;">NT$ ${r.amount.toLocaleString()}</td>
              <td style="text-align:right;">${r.booking_count}</td>
            </tr>`).join("")}
@@ -2811,15 +2837,15 @@ async function loadJapanBookingsList() {
   order.sort((a, b) => (a === "尚未指派教練") - (b === "尚未指派教練") || a.localeCompare(b, "zh-Hant"));
 
   wrap.innerHTML = order.map(coachName => `
-    <div class="sub-section-title" style="margin-top:14px;">${coachName}(${groups[coachName].length}筆)</div>
+    <div class="sub-section-title" style="margin-top:14px;">${escapeHtml(coachName)}(${groups[coachName].length}筆)</div>
     ${groups[coachName].map(b => renderJapanBookingCard(b, isManagerUp, isBoss)).join("")}
   `).join("") || `<p class="note">查無日本教練課訂單</p>`;
 }
 function renderJapanBookingCard(b, isManagerUp, isBoss) {
   return `
     <div class="person-card">
-      <b>${b.booking_date} ${b.resort_name || ""} — ${b.member_name}</b>
-      <p class="note" style="margin:4px 0;">${b.equipment_type==="ski"?"雙板":"單板"}・${b.day_type==="full"?"全日":"半日"}・${b.headcount}人・教練:${b.coach_name || "不指定"}${b.designate_fee ? "(指定費NT$"+b.designate_fee+")" : ""}</p>
+      <b>${b.booking_date} ${escapeHtml(b.resort_name || "")} — ${escapeHtml(b.member_name)}</b>
+      <p class="note" style="margin:4px 0;">${b.equipment_type==="ski"?"雙板":"單板"}・${b.day_type==="full"?"全日":"半日"}・${b.headcount}人・教練:${escapeHtml(b.coach_name || "不指定")}${b.designate_fee ? "(指定費NT$"+b.designate_fee+")" : ""}</p>
       <p class="note" style="margin:0;">報價NT$${b.price}・付款方式:${b.payment_plan==="full"?"全額":"訂金/尾款"}
         ・訂金${b.deposit_paid?"已繳":"未繳"}(NT$${b.deposit_amount})
         ${b.payment_plan==="deposit" ? `・尾款${b.balance_paid?"已繳":"未繳"}(NT$${b.balance_amount})` : ""}</p>
@@ -2834,7 +2860,7 @@ function renderJapanBookingCard(b, isManagerUp, isBoss) {
         <div class="row">
           <select id="jbRebatePartner-${b.id}">
             <option value="">無</option>
-            ${window._partnerList.map(p => `<option value="${p.id}" ${b.rebate_partner_id===p.id?"selected":""}>${p.name}</option>`).join("")}
+            ${window._partnerList.map(p => `<option value="${p.id}" ${b.rebate_partner_id===p.id?"selected":""}>${escapeHtml(p.name)}</option>`).join("")}
           </select>
           <input type="number" id="jbRebateAmount-${b.id}" placeholder="退介紹費金額" value="${b.rebate_amount||''}">
           <button class="small secondary" onclick="saveJapanRebate(${b.id})">儲存退佣</button>
@@ -2849,7 +2875,7 @@ function renderJapanBookingCard(b, isManagerUp, isBoss) {
         </div>` : ""}
       <div id="jbStatus-${b.id}" style="margin-top:6px;"></div>
       <div class="row" style="margin-top:6px;">
-        <button class="small secondary" onclick="cancelJapanBookingAdmin('${b.group_key}', ${b.id})">取消此筆預約</button>
+        <button class="small secondary" onclick="cancelJapanBookingAdmin('${jsAttrArg(b.group_key)}', ${b.id})">取消此筆預約</button>
       </div>
     </div>
   `;
@@ -2941,7 +2967,7 @@ async function renderTeamCalendarTools() {
     <div class="person-card">
       <b>設定教練出勤</b>
       <div class="field-grid" style="margin-top:8px;">
-        <div><label>教練</label><select id="csCoachSel">${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("") || `<option value="">(尚無教練)</option>`}</select></div>
+        <div><label>教練</label><select id="csCoachSel">${coaches.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("") || `<option value="">(尚無教練)</option>`}</select></div>
         <div><label>日期</label><input type="date" id="csWorkDate"></div>
         <div><label>狀態</label><select id="csStatus">
           <option value="working">上班</option>
@@ -2961,7 +2987,7 @@ async function renderTeamCalendarTools() {
         <div><label>查詢月份</label><input type="month" id="csListMonth" value="${defaultMonth}"></div>
         <div><label>教練(選填,不選=全部教練)</label><select id="csListCoachFilter">
           <option value="">全部教練</option>
-          ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+          ${coaches.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
         </select></div>
         <button class="small secondary" style="align-self:flex-end;" onclick="loadCoachScheduleList()">查詢</button>
       </div>
@@ -3004,12 +3030,12 @@ async function loadTeamCalendar() {
       ${entries.map(e => {
         if (e.status !== "working") {
           const cls = e.status === "business_trip" ? "trip" : "leave";
-          return `<div class="team-cal-entry ${cls}">${e.coach_name}・${SCHEDULE_STATUS_LABEL[e.status]||e.status}</div>`;
+          return `<div class="team-cal-entry ${cls}">${escapeHtml(e.coach_name)}・${SCHEDULE_STATUS_LABEL[e.status]||e.status}</div>`;
         }
-        const japanNote = e.japan_resort_name ? `(日本:${e.japan_resort_name})` : "";
-        return `<div class="team-cal-entry session">${e.coach_name}・${e.session_count}堂課${japanNote}</div>`;
+        const japanNote = e.japan_resort_name ? `(日本:${escapeHtml(e.japan_resort_name)})` : "";
+        return `<div class="team-cal-entry session">${escapeHtml(e.coach_name)}・${e.session_count}堂課${japanNote}</div>`;
       }).join("")}
-      ${unassignedJapan.map(u => `<div class="team-cal-entry session">未指定教練・日本${u.resort_name}・${u.count}組</div>`).join("")}
+      ${unassignedJapan.map(u => `<div class="team-cal-entry session">未指定教練・日本${escapeHtml(u.resort_name)}・${u.count}組</div>`).join("")}
       ${unassignedIndoor.map(u => `<div class="team-cal-entry session">未指定教練・高雄${u.category_label}・${u.count}堂</div>`).join("")}
     </div>`;
   }
@@ -3050,11 +3076,11 @@ async function openJapanQuickCreate(dateStr) {
       <b>${dateStr} 建立日本教練課訂單</b>
       <div class="field-grid" style="margin-top:8px;">
         <div><label>會員(輸入姓名/電話搜尋)</label><input id="jqcMemberSearch" oninput="searchJapanQuickMember()"><div id="jqcMemberResults"></div></div>
-        <div><label>雪場</label><select id="jqcResort" onchange="updateJapanQuickGroupKey()">${resorts.map(r => `<option value="${r.id}">${r.name}</option>`).join("")}</select></div>
+        <div><label>雪場</label><select id="jqcResort" onchange="updateJapanQuickGroupKey()">${resorts.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join("")}</select></div>
         <div><label>滑行項目</label><select id="jqcEquipment" onchange="updateJapanQuickGroupKey()"><option value="ski">SKI(雙板)</option><option value="snowboard">SNOWBOARD(單板)</option></select></div>
         <div><label>課程時間</label><select id="jqcDayType" onchange="updateJapanQuickGroupKey()"><option value="full">全日</option><option value="half">半日</option></select></div>
         <div><label>人數</label><input type="number" id="jqcHeadcount" value="1" min="1" max="4" onchange="updateJapanQuickGroupKey()"></div>
-        <div><label>教練</label><select id="jqcCoach" onchange="updateJapanQuickGroupKey()"><option value="">不指定</option>${coachList.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}</select></div>
+        <div><label>教練</label><select id="jqcCoach" onchange="updateJapanQuickGroupKey()"><option value="">不指定</option>${coachList.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}</select></div>
         <div><label>付款方式</label><select id="jqcPaymentPlan"><option value="full">全額繳清</option><option value="deposit">先繳訂金</option></select></div>
       </div>
       <label style="margin-top:8px;">群組名稱(可自行修改)</label>
@@ -3090,7 +3116,7 @@ function searchJapanQuickMember() {
       (m.name || "").includes(keyword) || (m.phone || "").includes(keyword)
     ).slice(0, 5);
     document.getElementById("jqcMemberResults").innerHTML = matched.map(m => `
-      <div class="list-item" style="cursor:pointer;" onclick="selectJapanQuickMember(${m.id}, '${(m.name||"").replace(/'/g,"")}')">${m.name} - ${m.phone||""}</div>
+      <div class="list-item" style="cursor:pointer;" onclick="selectJapanQuickMember(${m.id}, '${jsAttrArg(m.name||"")}')">${escapeHtml(m.name)} - ${escapeHtml(m.phone||"")}</div>
     `).join("");
   }, 250);
 }
@@ -3135,7 +3161,7 @@ async function renderCheckInTab() {
   html += `<h4 style="font-size:13px;">室內課程</h4>`;
   html += data.indoor.length ? data.indoor.map(s => `
     <div class="person-card">
-      ${s.booking_date} ${s.start_hour}:00 — ${s.member_names}${s.coach_name ? `・教練:${s.coach_name}` : ""}
+      ${s.booking_date} ${s.start_hour}:00 — ${escapeHtml(s.member_names)}${s.coach_name ? `・教練:${escapeHtml(s.coach_name)}` : ""}
       <input id="checkinNote-indoor-${s.id}" placeholder="教學內容/異常記錄(選填)">
       <button class="small" onclick="doCheckIn('indoor', ${s.id}, 'completed')">已完成報到</button>
       <button class="small secondary" onclick="doCheckIn('indoor', ${s.id}, 'no_show')">標記未到</button>
@@ -3145,7 +3171,7 @@ async function renderCheckInTab() {
   html += `<h4 style="font-size:13px; margin-top:12px;">跳台體驗</h4>`;
   html += data.jump.length ? data.jump.map(s => `
     <div class="person-card">
-      ${s.booking_date} ${s.start_time} — ${s.member_name}
+      ${s.booking_date} ${s.start_time} — ${escapeHtml(s.member_name)}
       <input id="checkinNote-jump-${s.id}" placeholder="備註(選填)">
       <button class="small" onclick="doCheckIn('jump', ${s.id}, 'completed')">已完成報到</button>
       <button class="small secondary" onclick="doCheckIn('jump', ${s.id}, 'no_show')">標記未到</button>
@@ -3163,7 +3189,7 @@ async function renderCheckInTab() {
     }).join("、") : "";
     return `
     <div class="person-card">
-      ${s.booking_date} ${s.day_type==="full"?"全日":"半日"} — ${s.member_name}・${s.resort_name}${s.coach_name ? `・教練:${s.coach_name}` : ""}
+      ${s.booking_date} ${s.day_type==="full"?"全日":"半日"} — ${escapeHtml(s.member_name)}・${escapeHtml(s.resort_name)}${s.coach_name ? `・教練:${escapeHtml(s.coach_name)}` : ""}
       ${progressNote ? `<p class="note" style="margin:4px 0;">教練上下課碼進度:${progressNote}</p>` : ""}
       ${started ? `<p class="note" style="margin:0; color:#b45309;">⚠️教練已經開始使用上下課碼報到,若在此手動覆蓋,教練那邊之後仍可能繼續刷入編碼但不會再改變報到結果,請先與教練確認狀況再操作。</p>` : ""}
       <input id="checkinNote-japan-${s.id}" placeholder="教學內容/異常記錄(選填)">
@@ -3225,7 +3251,7 @@ async function renderPricingConfigTools() {
     <div class="person-card">
       <b>${c.label || c.config_key}</b>
       <p class="note">鍵值:${c.config_key}${c.updated_at ? `・最後更新:${c.updated_at}` : ""}</p>
-      <textarea id="pricingVal-${c.config_key}" style="width:100%; min-height:60px; font-family:monospace; font-size:12px; padding:8px; border-radius:8px; border:1px solid #d0d7de;">${c.config_value}</textarea>
+      <textarea id="pricingVal-${c.config_key}" style="width:100%; min-height:60px; font-family:monospace; font-size:12px; padding:8px; border-radius:8px; border:1px solid #d0d7de;">${escapeHtml(c.config_value)}</textarea>
       <button class="small" onclick="savePricingConfig('${c.config_key}')">儲存</button>
       <div id="pricingStatus-${c.config_key}" style="margin-top:4px;"></div>
     </div>
@@ -3274,7 +3300,7 @@ async function renderOrdersManageTab() {
       <p class="note">以下是包機(室內滑雪)會員自選教練、需要加收指定費,但還沒標記已收款的場次。收到款項後請按「標記已收款」。</p>
       ${unpaidDesignateFees.map(f => `
         <div class="list-item">
-          ${f.booking_date} ${f.start_hour}:00 — 教練:${f.coach_name || "-"}・會員:${f.member_names || "-"}・指定費NT$${f.designate_fee}
+          ${f.booking_date} ${f.start_hour}:00 — 教練:${escapeHtml(f.coach_name || "-")}・會員:${escapeHtml(f.member_names || "-")}・指定費NT$${f.designate_fee}
           <button class="small" onclick="markDesignateFeeCollected(${f.session_id})">標記已收款</button>
         </div>
       `).join("")}
@@ -3288,9 +3314,9 @@ async function renderOrdersManageTab() {
         const isSelf = r.pending_refund_requested_by === window.currentStaffId;
         return `
         <div class="list-item">
-          #${r.order_id} ${r.member_name} — 申請退款NT$${r.pending_refund_amount}
-          ${r.pending_refund_reason ? `(原因:${r.pending_refund_reason})` : ""}
-          ・申請人:${r.requested_by_name || "-"}
+          #${r.order_id} ${escapeHtml(r.member_name)} — 申請退款NT$${r.pending_refund_amount}
+          ${r.pending_refund_reason ? `(原因:${escapeHtml(r.pending_refund_reason)})` : ""}
+          ・申請人:${escapeHtml(r.requested_by_name || "-")}
           ${isSelf ? `<span class="note">(這是你自己送出的申請,需要另一位主管/老闆核准)</span>` : `
             <button class="small" onclick="approveRefund(${r.order_id})">核准並執行退款</button>
             <button class="small secondary" onclick="rejectRefund(${r.order_id})">駁回</button>
@@ -3317,7 +3343,7 @@ async function renderOrdersManageTab() {
       const prefillOnsite = o.customer_payment_method === "onsite" && remaining > 0;
       return `
         <div class="person-card">
-          <b>#${o.id} ${o.member_name}</b> — ${catLabelMap[o.order_type] || o.order_type}
+          <b>#${o.id} ${escapeHtml(o.member_name)}</b> — ${catLabelMap[o.order_type] || o.order_type}
           <span class="status-tag ${o.status === 'paid' ? 'ok' : 'warn'}">${statusLabelMap[o.status] || o.status}</span>
           ${o.customer_payment_method ? `<span class="status-tag ${o.customer_payment_method === 'onsite' ? 'ok' : 'warn'}">客戶已選:${{onsite:"現場付款",bank_transfer:"匯款轉帳",online_card:"線上刷卡",webatm:"網路ATM",atm:"ATM櫃員機"}[o.customer_payment_method] || o.customer_payment_method}</span>` : ""}
           <div class="list-item">
@@ -3426,9 +3452,9 @@ async function renderCsiaManageTab() {
 
   html += courses.map(c => `
     <div class="person-card">
-      <b>${levelLabel[c.level] || c.level} ${c.batch_label} ${c.course_name}</b>
+      <b>${levelLabel[c.level] || c.level} ${escapeHtml(c.batch_label)} ${escapeHtml(c.course_name)}</b>
       <span class="status-tag ${c.status === "cancelled" ? "warn" : "ok"}">${statusLabel[c.status] || c.status}</span>
-      <div class="list-item">${c.date_label}・${c.language === "chinese" ? "中文翻譯班" : "英文班"}${c.format_note ? `・${c.format_note}` : ""}</div>
+      <div class="list-item">${escapeHtml(c.date_label)}・${c.language === "chinese" ? "中文翻譯班" : "英文班"}${c.format_note ? `・${escapeHtml(c.format_note)}` : ""}</div>
       <div class="list-item">目前報名人數:${c.registered_count}人</div>
       <div class="field-grid" style="margin-top:8px;">
         <div><label>價格-課程本身(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceBasic-${c.id}" type="number" value="${c.price_jpy_basic === null || c.price_jpy_basic === undefined ? "" : c.price_jpy_basic}"></div>
@@ -3482,7 +3508,7 @@ async function renderCsiaManageTab() {
     <div class="row">
       <select id="csiaRegFilterCourse" onchange="filterCsiaRegistrations()">
         <option value="">全部場次</option>
-        ${courses.map(c => `<option value="${c.id}">${levelLabel[c.level]||c.level} ${c.batch_label} ${c.course_name}(${c.date_label})</option>`).join("")}
+        ${courses.map(c => `<option value="${c.id}">${levelLabel[c.level]||c.level} ${escapeHtml(c.batch_label)} ${escapeHtml(c.course_name)}(${escapeHtml(c.date_label)})</option>`).join("")}
       </select>
     </div>
     <div id="csiaRegistrationsWrap"></div>
@@ -3514,19 +3540,19 @@ function renderCsiaRegistrationsList(registrations) {
     const reasonText = reasons.map(k => reasonLabelMap[k] || k).join("、") + (r.reason_other ? `(${r.reason_other})` : "");
     return `
     <div class="person-card">
-      <b>${r.chinese_name}</b>${r.designation ? `(${r.designation})` : ""}
+      <b>${escapeHtml(r.chinese_name)}</b>${r.designation ? `(${escapeHtml(r.designation)})` : ""}
       <span class="status-tag ${r.status === "cancelled" ? "warn" : "ok"}">${regStatusLabel[r.status] || r.status}</span>
       <span class="status-tag ${r.payment_status === "paid" ? "ok" : "warn"}">${paymentLabel[r.payment_status] || r.payment_status}</span>
-      <div class="list-item">場次:${r.level} ${r.batch_label} ${r.course_name}(${r.date_label})</div>
-      <div class="list-item">會員:${r.member_name || "-"}・電話:${r.member_phone || "-"}・價格方案:${{basic:"課程本身",with_stay:"含住宿+早餐+晚餐"}[r.price_option] || r.price_option || "未選擇"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `JPY ${r.amount.toLocaleString()}${r.amount_twd === null || r.amount_twd === undefined ? "" : `(約NT$${r.amount_twd.toLocaleString()})`}`}</div>
-      <div class="list-item">聯絡方式:手機 ${r.mobile_number || "-"}・Email ${r.email || "-"}・LINE/WhatsApp ${r.line_or_whatsapp_id || "-"}</div>
-      <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${r.csia_member_number || "未填寫"}</div>
-      <div class="list-item">國家/地區:${r.address_country || "未填寫"}・中文通訊地址:${r.address_chinese || "未填寫"}・英文地址:${r.address_english || "未填寫"}</div>
-      <div class="list-item">緊急聯絡人:${r.emergency_contact_name || "未填寫"}・電話:${r.emergency_contact_phone || "未填寫"}</div>
-      <div class="list-item">報考原因:${reasonText || "未填寫"}</div>
-      ${r.existing_certifications ? `<div class="list-item">已持有證照:${r.existing_certifications}</div>` : ""}
-      ${r.ski_experience ? `<div class="list-item">滑雪經驗:${r.ski_experience}</div>` : ""}
-      ${r.teaching_experience ? `<div class="list-item">教學經驗:${r.teaching_experience}</div>` : ""}
+      <div class="list-item">場次:${r.level} ${escapeHtml(r.batch_label)} ${escapeHtml(r.course_name)}(${escapeHtml(r.date_label)})</div>
+      <div class="list-item">會員:${escapeHtml(r.member_name || "-")}・電話:${escapeHtml(r.member_phone || "-")}・價格方案:${{basic:"課程本身",with_stay:"含住宿+早餐+晚餐"}[r.price_option] || r.price_option || "未選擇"}・報名費:${r.amount === null || r.amount === undefined ? "金額洽詢" : `JPY ${r.amount.toLocaleString()}${r.amount_twd === null || r.amount_twd === undefined ? "" : `(約NT$${r.amount_twd.toLocaleString()})`}`}</div>
+      <div class="list-item">聯絡方式:手機 ${escapeHtml(r.mobile_number || "-")}・Email ${escapeHtml(r.email || "-")}・LINE/WhatsApp ${escapeHtml(r.line_or_whatsapp_id || "-")}</div>
+      <div class="list-item">性別:${{male:"男",female:"女",other:"其他"}[r.gender] || "未填寫"}・出生日期:${r.birth_date || "未填寫"}・CSIA會員編號:${escapeHtml(r.csia_member_number || "未填寫")}</div>
+      <div class="list-item">國家/地區:${escapeHtml(r.address_country || "未填寫")}・中文通訊地址:${escapeHtml(r.address_chinese || "未填寫")}・英文地址:${escapeHtml(r.address_english || "未填寫")}</div>
+      <div class="list-item">緊急聯絡人:${escapeHtml(r.emergency_contact_name || "未填寫")}・電話:${escapeHtml(r.emergency_contact_phone || "未填寫")}</div>
+      <div class="list-item">報考原因:${escapeHtml(reasonText || "未填寫")}</div>
+      ${r.existing_certifications ? `<div class="list-item">已持有證照:${escapeHtml(r.existing_certifications)}</div>` : ""}
+      ${r.ski_experience ? `<div class="list-item">滑雪經驗:${escapeHtml(r.ski_experience)}</div>` : ""}
+      ${r.teaching_experience ? `<div class="list-item">教學經驗:${escapeHtml(r.teaching_experience)}</div>` : ""}
       <div class="row" style="margin-top:6px; gap:16px;">
         <div>
           <div class="note">會員卡</div>
@@ -3796,7 +3822,7 @@ async function loadDailySchedule() {
     let coachControl = "";
     if (b.session_id && _INDOOR_COACH_CATEGORIES.has(b.category)) {
       const options = [`<option value="">不指定</option>`].concat(
-        indoorCoaches.map(c => `<option value="${c.id}" ${b.coach_id === c.id ? "selected" : ""}>${c.name}</option>`)
+        indoorCoaches.map(c => `<option value="${c.id}" ${b.coach_id === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
       );
       coachControl = `
         <span class="note" style="margin-left:8px;">教練:</span>
@@ -3805,10 +3831,10 @@ async function loadDailySchedule() {
         <span id="scheduleCoachStatus-${b.session_id}"></span>
       `;
     } else if (b.category === "japan") {
-      coachControl = `<span class="note" style="margin-left:8px;">教練:${b.coach_name || "不指定"}(日本教練課請至「日本教練課訂單」分頁調整)</span>`;
+      coachControl = `<span class="note" style="margin-left:8px;">教練:${escapeHtml(b.coach_name || "不指定")}(日本教練課請至「日本教練課訂單」分頁調整)</span>`;
     }
     return `<div class="list-item">
-      <b>${b.time || ""}</b> — ${b.category_label} — ${b.member_name || ""}${b.member_phone ? "("+b.member_phone+")" : ""}
+      <b>${b.time || ""}</b> — ${b.category_label} — ${escapeHtml(b.member_name || "")}${b.member_phone ? "("+escapeHtml(b.member_phone)+")" : ""}
       ${statusTag} ${payTag}
       ${coachControl}
     </div>`;
@@ -3836,7 +3862,7 @@ function renderMemberList() {
   listEl.innerHTML = filtered.map(m => `
     <div class="person-card">
       <div class="clickable-card" onclick="toggleMemberDetail(${m.id})" style="display:flex; justify-content:space-between; align-items:center; margin:-10px; padding:10px; border-radius:8px;">
-        <div><b>${m.name}</b> <span class="note">${m.phone || ""}${m.email ? "・"+m.email : ""}</span></div>
+        <div><b>${escapeHtml(m.name)}</b> <span class="note">${escapeHtml(m.phone || "")}${m.email ? "・"+escapeHtml(m.email) : ""}</span></div>
         <span class="note" id="memberToggleArrow-${m.id}">▾ 點擊查看詳情</span>
       </div>
       <div id="memberDetailWrap-${m.id}" style="display:none;"></div>
@@ -3919,7 +3945,7 @@ async function toggleMemberDetail(memberId) {
 
     <div class="sub-section-title">登入帳號</div>
     <div class="list-item">
-      Email:${m.email||"未設定"}
+      Email:${escapeHtml(m.email||"未設定")}
       <span id="memberPasswordBadge-${memberId}">${m.has_password
         ? '<span class="status-tag ok">已設定密碼</span>'
         : '<span class="status-tag warn">尚未設定密碼(登入時會引導設定)</span>'}</span>
@@ -3940,7 +3966,7 @@ async function toggleMemberDetail(memberId) {
 
     <div class="sub-section-title">最近預約(最多顯示10筆)</div>
     ${bookings.length
-      ? bookings.slice(0,10).map(b => `<div class="list-item">${b.date} ${b.time} — ${b.category_label}${b.coach_name ? "・教練:"+b.coach_name : ""} — NT$${b.price ?? 0} ${b.payment_label ? `<span class="status-tag ${b.payment_status==='confirmed'?'ok':'warn'}">${b.payment_label}</span>` : ""}</div>`).join("")
+      ? bookings.slice(0,10).map(b => `<div class="list-item">${b.date} ${b.time} — ${b.category_label}${b.coach_name ? "・教練:"+escapeHtml(b.coach_name) : ""} — NT$${b.price ?? 0} ${b.payment_label ? `<span class="status-tag ${b.payment_status==='confirmed'?'ok':'warn'}">${b.payment_label}</span>` : ""}</div>`).join("")
       : `<div class="list-item">尚無預約紀錄</div>`}
   `;
 }
@@ -4008,8 +4034,8 @@ let _lastCoachBookings = [];
 // 教練點選「我的課表」裡的某一堂課,進入簽到頁面:呈現當天課程資訊,
 // 並讓教練輸入學員提供的上課碼/下課碼(日本教練課才有此機制,見booking.py說明)。
 function coachBookingDetailHtml(b) {
-  const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
-  const resort = b.resort_name ? `${b.resort_name}・` : "";
+  const coach = b.coach_name ? `・教練:${escapeHtml(b.coach_name)}` : "";
+  const resort = b.resort_name ? `${escapeHtml(b.resort_name)}・` : "";
   const equip = b.equipment_type ? `・${b.equipment_type === "ski" ? "雙板" : "單板"}` : "";
   const attendanceTag = b.attendance_status === "completed" ? `<span class="status-tag ok">已完成報到</span>`
     : b.attendance_status === "no_show" ? `<span class="status-tag warn">未到</span>`
@@ -4017,9 +4043,9 @@ function coachBookingDetailHtml(b) {
 
   let html = `<a class="back" onclick="renderCoachOwnPanel(_lastCoachStaff, _lastCoachBodyElId)">← 返回我的課表</a>`;
   html += `<h3 style="margin-top:8px; font-size:15px;">${b.date} ${b.time} — ${resort}${b.category_label}</h3>`;
-  html += `<div class="list-item">學員:${b.member_name}${b.member_phone ? `(${b.member_phone})` : ""}${b.headcount ? `・${b.headcount}人` : ""}${equip}${coach}</div>`;
+  html += `<div class="list-item">學員:${escapeHtml(b.member_name)}${b.member_phone ? `(${escapeHtml(b.member_phone)})` : ""}${b.headcount ? `・${b.headcount}人` : ""}${equip}${coach}</div>`;
   html += `<div class="list-item">金額:NT$${b.price ?? 0}・${b.payment_label}</div>`;
-  if (b.lesson_notes) html += `<div class="list-item">教練備註:${b.lesson_notes}</div>`;
+  if (b.lesson_notes) html += `<div class="list-item">教練備註:${escapeHtml(b.lesson_notes)}</div>`;
   html += `<div class="list-item">報到狀態:${attendanceTag}</div>`;
 
   if (b.category !== "japan") {
@@ -4127,17 +4153,17 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
   body.innerHTML = `
     <h3 style="font-size:14px;">我的課表(未來)</h3>
     ${myBookings.length
-      ? myBookings.map(b => `<div class="list-item" style="cursor:pointer;" onclick="openCoachAttendanceCheckin(${b.booking_ref_id})">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""} <span class="note">(點選查看/簽到)</span></div>`).join("")
+      ? myBookings.map(b => `<div class="list-item" style="cursor:pointer;" onclick="openCoachAttendanceCheckin(${b.booking_ref_id})">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""} <span class="note">(點選查看/簽到)</span></div>`).join("")
       : `<div class="list-item">目前沒有已排定的課程</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
     ${myHistory.length
-      ? myHistory.map(b => `<div class="list-item">${b.date} ${b.time} — ${b.member_name} — ${b.category_label}${b.resort_name ? "・"+b.resort_name : ""}${b.status === "cancelled" ? "<span class=\"note\">(已取消)</span>" : ""}</div>`).join("")
+      ? myHistory.map(b => `<div class="list-item">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""}${b.status === "cancelled" ? "<span class=\"note\">(已取消)</span>" : ""}</div>`).join("")
       : `<div class="list-item">目前沒有上課歷史紀錄</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">我的請假紀錄</h3>
     ${upcomingLeave.length
-      ? upcomingLeave.map(s => `<div class="list-item">${s.work_date} — ${statusLabel[s.status] || s.status}${s.reason ? "("+s.reason+")" : ""}</div>`).join("")
+      ? upcomingLeave.map(s => `<div class="list-item">${s.work_date} — ${statusLabel[s.status] || s.status}${s.reason ? "("+escapeHtml(s.reason)+")" : ""}</div>`).join("")
       : `<div class="list-item">目前沒有請假紀錄</div>`}
 
     <h3 style="margin-top:14px; font-size:14px;">申請請假/出差</h3>
@@ -4196,7 +4222,7 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
     <div class="row" style="flex-wrap:wrap;" id="coachSelfCapWrap">
       ${capabilityOptions.map(cap => `
         <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
-          <input type="checkbox" class="coachSelfCap" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${cap.name}
+          <input type="checkbox" class="coachSelfCap" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${escapeHtml(cap.name)}
         </label>`).join("")}
     </div>
     <div class="row">
@@ -4244,7 +4270,7 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
 
     <label style="margin-top:8px;">代表教練一句話(30字以內)</label>
     <input id="coachSelfMotto" maxlength="30" value="${(details.coach_motto || "").replace(/"/g, '&quot;')}">
-    ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${details.self_intro.replace(/</g,"&lt;")}</p>` : ""}
+    ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${escapeHtml(details.self_intro)}</p>` : ""}
 
     ${coachPhotoGallerySectionHtml(staff.id, "promo_photo", "宣傳照上傳(可多張,對外顯示於教練團隊頁面,最早上傳的一張會當封面照)", certFiles)}
 
@@ -4390,7 +4416,7 @@ function coachCertFileSectionHtml(coachId, category, label, certFiles) {
       <label>${label}</label>
       <div id="coachCertFileList-${category}">
         ${files.length
-          ? files.map(f => `<div class="list-item">${(f.file_name || "檔案").replace(/</g,"&lt;")}<button class="small secondary" style="margin-left:8px;" onclick="deleteCoachCertFile(${coachId}, ${f.id})">刪除</button></div>`).join("")
+          ? files.map(f => `<div class="list-item">${escapeHtml(f.file_name || "檔案")}<button class="small secondary" style="margin-left:8px;" onclick="deleteCoachCertFile(${coachId}, ${f.id})">刪除</button></div>`).join("")
           : `<div class="list-item note">尚未上傳</div>`}
       </div>
       <input type="file" accept="image/*,application/pdf" multiple id="${inputId}">
@@ -4496,7 +4522,7 @@ function renderCoachPayrollSectionHtml(myPayroll) {
         <tr><td>體驗課</td><td style="text-align:right;">${r.trial_hours}小時・NT$ ${r.trial_amount.toLocaleString()}</td></tr>
         <tr><td>助教</td><td style="text-align:right;">${r.assistant_hours}小時・NT$ ${r.assistant_amount.toLocaleString()}</td></tr>
         <tr><td>加班獎金</td><td style="text-align:right;">NT$ ${r.overtime_bonus.toLocaleString()}</td></tr>
-        <tr><td>其他補貼${r.other_subsidy_note ? "("+r.other_subsidy_note+")" : ""}</td><td style="text-align:right;">NT$ ${r.other_subsidy.toLocaleString()}</td></tr>
+        <tr><td>其他補貼${r.other_subsidy_note ? "("+escapeHtml(r.other_subsidy_note)+")" : ""}</td><td style="text-align:right;">NT$ ${r.other_subsidy.toLocaleString()}</td></tr>
         <tr><td>日本出差補助</td><td style="text-align:right;">NT$ ${r.japan_travel_subsidy.toLocaleString()}</td></tr>
         <tr><td>日本交通補助</td><td style="text-align:right;">NT$ ${r.japan_transportation_subsidy.toLocaleString()}</td></tr>
         <tr><td>請假扣款(請假${r.leave_days}天)</td><td style="text-align:right;">-NT$ ${r.leave_deduction.toLocaleString()}</td></tr>
@@ -4504,7 +4530,7 @@ function renderCoachPayrollSectionHtml(myPayroll) {
         <tr><td>健保自付額</td><td style="text-align:right;">-NT$ ${r.health_insurance.toLocaleString()}</td></tr>
         <tr style="font-weight:bold;"><td>實際所得</td><td style="text-align:right;">NT$ ${r.net_pay.toLocaleString()}</td></tr>
       </table>
-      ${r.notes ? `<p class="note" style="margin-top:4px;">備註:${r.notes.replace(/</g,"&lt;")}</p>` : ""}
+      ${r.notes ? `<p class="note" style="margin-top:4px;">備註:${escapeHtml(r.notes)}</p>` : ""}
     </div>`).join("");
 }
 
@@ -4571,7 +4597,7 @@ async function renderPendingActions() {
   html += pendingPayments.length
     ? pendingPayments.map(t => `
         <div class="list-item">
-          ${t.member_name} — NT$${t.amount}(${methodLabel[t.payment_method] || t.payment_method})
+          ${escapeHtml(t.member_name)} — NT$${t.amount}(${methodLabel[t.payment_method] || t.payment_method})
           <button class="small" onclick="approvePayment(${t.id})">核准付款</button>
         </div>`).join("")
     : `<div class="list-item">目前沒有待核准的付款</div>`;
@@ -4580,7 +4606,7 @@ async function renderPendingActions() {
   html += reviewSessions.length
     ? reviewSessions.map(s => `
         <div class="list-item">
-          ${s.booking_date} ${s.start_hour}:00 — ${s.member_names}
+          ${s.booking_date} ${s.start_hour}:00 — ${escapeHtml(s.member_names)}
           <button class="small" onclick="resolveSessionConflict(${s.id})">確認保留此預約</button>
           <button class="small secondary" onclick="cancelSessionAsStaff(${s.id})">改為取消</button>
         </div>`).join("")
@@ -4590,7 +4616,7 @@ async function renderPendingActions() {
   html += pendingApplications.length
     ? pendingApplications.map(a => `
         <div class="list-item">
-          ${a.member_name} — 方案${a.plan_name}(${a.billing_cycle === "annual" ? "年繳" : "月繳"})
+          ${escapeHtml(a.member_name)} — 方案${a.plan_name}(${a.billing_cycle === "annual" ? "年繳" : "月繳"})
           <button class="small" onclick="reviewPlanApplication(${a.id}, true)">核准</button>
           <button class="small secondary" onclick="reviewPlanApplication(${a.id}, false)">拒絕</button>
         </div>`).join("")
@@ -4600,7 +4626,7 @@ async function renderPendingActions() {
   html += pendingBilling.length
     ? pendingBilling.map(b => `
         <div class="list-item">
-          ${b.member_name} — ${b.period} 月費 NT$${b.amount}
+          ${escapeHtml(b.member_name)} — ${b.period} 月費 NT$${b.amount}
           <button class="small" onclick="approvePlanBilling(${b.id})">核准繳費</button>
         </div>`).join("")
     : `<div class="list-item">目前沒有待核准的月繳費用</div>`;
@@ -4616,8 +4642,8 @@ async function renderPendingActions() {
           : "";
         return `
         <div class="list-item">
-          ${r.member_name}(${r.member_phone || "無電話"}) — ${typeLabel}
-          ${r.note ? `<div class="note">會員留言:${r.note}</div>` : ""}
+          ${escapeHtml(r.member_name)}(${escapeHtml(r.member_phone || "無電話")}) — ${typeLabel}
+          ${r.note ? `<div class="note">會員留言:${escapeHtml(r.note)}</div>` : ""}
           ${resizeInput}
           <button class="small" onclick="resolveCharterPassRequest(${r.id}, 'approve')">核准</button>
           <button class="small secondary" onclick="resolveCharterPassRequest(${r.id}, 'reject')">拒絕</button>
@@ -4629,12 +4655,12 @@ async function renderPendingActions() {
   html += otherResortRequests.length
     ? otherResortRequests.map(r => `
         <div class="list-item">
-          ${r.member_name}(${r.member_phone || "無電話"}) — 想去<b>${r.resort_name}</b>
+          ${escapeHtml(r.member_name)}(${escapeHtml(r.member_phone || "無電話")}) — 想去<b>${escapeHtml(r.resort_name)}</b>
           ・${r.start_date}${r.end_date !== r.start_date ? ` ~ ${r.end_date}` : ""}
           ・${r.day_type==="full"?"全日":"半日"}${r.half_day_slot ? `(${r.half_day_slot==="morning"?"上午":"下午"})` : ""}
           ・${r.headcount}人・${r.equipment_type==="ski"?"雙板":r.equipment_type==="snowboard"?"單板":"未填寫"}
           ${r.needs_accommodation ? "・需協助訂住宿" : ""}
-          ${r.note ? `<div class="note">需求說明:${r.note}</div>` : ""}
+          ${r.note ? `<div class="note">需求說明:${escapeHtml(r.note)}</div>` : ""}
           <button class="small" onclick="resolveOtherResortRequest(${r.id}, 'contacted')">標記已聯繫</button>
           <button class="small secondary" onclick="resolveOtherResortRequest(${r.id}, 'closed')">標記已結案</button>
         </div>`).join("")
@@ -4644,8 +4670,8 @@ async function renderPendingActions() {
   html += pendingFeedback.length
     ? pendingFeedback.map(f => `
         <div class="list-item">
-          ${f.member_name}(${f.member_phone || "無電話"}) ${f.category ? `・<b>${f.category}</b>` : ""}
-          <div class="note">${f.content.replace(/</g,"&lt;")}</div>
+          ${escapeHtml(f.member_name)}(${escapeHtml(f.member_phone || "無電話")}) ${f.category ? `・<b>${escapeHtml(f.category)}</b>` : ""}
+          <div class="note">${escapeHtml(f.content)}</div>
           <div class="note">送出時間:${f.created_at}</div>
           <input id="feedbackReplyNote-${f.id}" placeholder="回覆內容(選填,會員看得到)">
           <button class="small" onclick="resolveFeedback(${f.id}, 'contacted')">標記已聯繫</button>
@@ -4723,7 +4749,7 @@ async function renderGroupClassAssignTools() {
   const { data: sessions } = await api("/admin/group-classes");
   const { data: coaches } = await api("/coaches");
   const coachOptions = '<option value="">不指定</option>' +
-    coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+    coaches.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
 
   wrap.innerHTML = `
     <div class="admin-page-label">ERSKI OPERATIONS</div>
@@ -4732,7 +4758,7 @@ async function renderGroupClassAssignTools() {
     (sessions.length ? sessions.map(s => `
       <div class="list-item">
         ${s.booking_date} ${s.start_hour}:00 — ${s.enrolled_count}人已成班
-        目前教練:${s.coach_name || "尚未指派"}
+        目前教練:${escapeHtml(s.coach_name || "尚未指派")}
         <select id="groupCoachSel-${s.id}">${coachOptions}</select>
         <button class="small" onclick="assignGroupCoach(${s.id})">指派</button>
       </div>
@@ -4761,7 +4787,7 @@ async function loadJapanNeedsCoachList() {
   const coachOptions = window._groupAssignCoachOptions || "";
   wrap.innerHTML = rows.length ? rows.map(r => `
     <div class="list-item">
-      ${r.booking_date} ${r.resort_name} — ${r.member_name}
+      ${r.booking_date} ${escapeHtml(r.resort_name)} — ${escapeHtml(r.member_name)}
       ・${r.equipment_type==="ski"?"雙板":"單板"}・${r.day_type==="full"?"全日":"半日"}・${r.headcount}人
       <select id="japanAssignCoachSel-${r.id}">${coachOptions}</select>
       <button class="small" onclick="assignJapanBookingCoach(${r.id})">指派</button>
@@ -4834,7 +4860,7 @@ async function loadProfitLoss() {
 
     <div class="sub-section-title">薪資支出明細</div>
     ${pl.payroll_by_coach.length
-      ? pl.payroll_by_coach.map(c => `<div class="list-item">${c.coach_name}:實際所得NT$${c.net_pay.toLocaleString()} + 公司負擔NT$${c.employer_insurance.toLocaleString()}</div>`).join("")
+      ? pl.payroll_by_coach.map(c => `<div class="list-item">${escapeHtml(c.coach_name)}:實際所得NT$${c.net_pay.toLocaleString()} + 公司負擔NT$${c.employer_insurance.toLocaleString()}</div>`).join("")
       : `<div class="list-item">本月尚未產生任何教練薪資紀錄,請先到「薪資管理」分頁產生</div>`}
   `;
 }
@@ -4871,7 +4897,7 @@ async function loadPayrollList() {
   const wrap = document.getElementById("payrollListWrap");
   wrap.innerHTML = records.length ? records.map(r => `
     <div class="person-card">
-      <b style="font-size:15px;">${r.coach_name}</b>
+      <b style="font-size:15px;">${escapeHtml(r.coach_name)}</b>
       <span class="status-tag ok">${r.coach_rank || "職稱未設定"}</span>
       <div class="field-grid" style="margin-top:6px;">
         <div><label>基本薪資</label><input value="NT$${r.base_salary}" disabled></div>
@@ -5034,7 +5060,7 @@ async function loadAndRenderReport(dateFrom, dateTo) {
   html += Object.entries(r.booking_counts).map(([k,v]) => `<div class="list-item">${catLabel[k]||k}:${v} 筆</div>`).join("");
   html += `<div class="list-item" style="margin-top:8px;"><b>教練帶課績效(次數/時數/時薪/預估費用):</b></div>`;
   html += r.coach_performance.length
-    ? r.coach_performance.map(c => `<div class="list-item">${c.name}:${c.count} 堂・${c.hours} 小時${c.hourly_rate ? `・時薪NT$${c.hourly_rate}・預估費用NT$${c.estimated_pay}` : "(尚未設定時薪)"}</div>`).join("")
+    ? r.coach_performance.map(c => `<div class="list-item">${escapeHtml(c.name)}:${c.count} 堂・${c.hours} 小時${c.hourly_rate ? `・時薪NT$${c.hourly_rate}・預估費用NT$${c.estimated_pay}` : "(尚未設定時薪)"}</div>`).join("")
     : `<div class="list-item">尚無資料</div>`;
   html += `<div class="list-item" style="margin-top:8px;"><b>體驗課轉換率:${r.trial_conversion.trial_customers} 人上過體驗課,${r.trial_conversion.converted_to_paid} 人已轉正式課程(${r.trial_conversion.conversion_rate_pct}%)</b></div>`;
 
@@ -5081,7 +5107,7 @@ async function renderResortManageTools() {
             const availableCoaches = allCoaches.filter(c => !assigned.some(a => a.coach_id === c.id));
             return `
             <div class="list-item">
-              <b id="resortName-${r.id}">${r.name}${r.is_active ? "" : "(已停用)"}</b>
+              <b id="resortName-${r.id}">${escapeHtml(r.name)}${r.is_active ? "" : "(已停用)"}</b>
               ${r.is_active ? `
                 <input id="editResortName-${r.id}" placeholder="新名稱" style="width:auto; display:inline-block; margin:4px 4px;">
                 <button class="small secondary" onclick="editResortAdmin(${r.id}, ${region.id})">修改名稱</button>
@@ -5092,13 +5118,13 @@ async function renderResortManageTools() {
               <div style="margin-top:6px;">
                 <div class="note">駐點教練:</div>
                 ${assigned.length
-                  ? assigned.map(a => `<span class="status-tag ok" style="margin:2px;">${a.coach_name}
+                  ? assigned.map(a => `<span class="status-tag ok" style="margin:2px;">${escapeHtml(a.coach_name)}
                       <a onclick="removeResortCoachAdmin(${a.id}, ${region.id})" style="cursor:pointer; color:#a6650a; margin-left:4px;">✕</a></span>`).join("")
                   : `<span class="note">尚未指派教練</span>`}
               </div>
               <div class="row" style="margin-top:6px;">
                 <select id="assignCoachSel-${r.id}">
-                  ${availableCoaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("") || `<option value="">(所有教練都已指派)</option>`}
+                  ${availableCoaches.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("") || `<option value="">(所有教練都已指派)</option>`}
                 </select>
                 <button class="small" onclick="assignResortCoachAdmin(${r.id}, ${region.id})">指派教練</button>
               </div>
@@ -5145,7 +5171,7 @@ async function renderJapanAttendanceTools() {
       <input type="date" id="jaDateTo" value="${today}">
       <select id="jaCoachFilter">
         <option value="">全部教練</option>
-        ${coaches.map(c => `<option value="${c.id}">${c.name}</option>`).join("")}
+        ${coaches.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("")}
       </select>
       <button class="small" onclick="loadJapanAttendanceOverview()">查詢</button>
     </div>
@@ -5165,7 +5191,7 @@ async function loadJapanAttendanceOverview() {
   const slotLabel = { morning: "上午", afternoon: "下午" };
   wrap.innerHTML = rows.map(r => `
     <div class="list-item">
-      <b>${r.booking_date}</b> ${r.resort_name} — ${r.member_name} — 教練:${r.coach_name || "尚未指派"}
+      <b>${r.booking_date}</b> ${escapeHtml(r.resort_name)} — ${escapeHtml(r.member_name)} — 教練:${escapeHtml(r.coach_name || "尚未指派")}
       ${r.session_slot ? `(${slotLabel[r.session_slot] || r.session_slot})` : `<span class="note">(尚未產生上下課碼,通常是訂單還沒完成付款確認)</span>`}
       ${r.session_slot ? `
         <span class="status-tag ${r.checkin_done ? "ok" : "warn"}">上課${r.checkin_done ? "已完成" : "未完成"}</span>
@@ -5193,20 +5219,20 @@ async function loadDailyRoster() {
   html += `<div class="list-item"><b>上班中(${working.length}位)</b></div>`;
   html += working.length
     ? working.map(r => {
-        const japanNote = r.japan_resort_name ? `・日本:${r.japan_resort_name}` : "";
-        return `<div class="list-item">${r.coach_name} — ${r.session_count}堂課${japanNote}</div>`;
+        const japanNote = r.japan_resort_name ? `・日本:${escapeHtml(r.japan_resort_name)}` : "";
+        return `<div class="list-item">${escapeHtml(r.coach_name)} — ${r.session_count}堂課${japanNote}</div>`;
       }).join("")
     : `<div class="list-item note">(無)</div>`;
   html += `<div class="list-item" style="margin-top:8px;"><b>請假/出差(${off.length}位)</b></div>`;
   html += off.length
-    ? off.map(r => `<div class="list-item">${r.coach_name} — <span class="status-tag ${r.status === "business_trip" ? "ok" : "warn"}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>${r.reason ? `(${r.reason.replace(/</g,"&lt;")})` : ""}</div>`).join("")
+    ? off.map(r => `<div class="list-item">${escapeHtml(r.coach_name)} — <span class="status-tag ${r.status === "business_trip" ? "ok" : "warn"}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>${r.reason ? `(${escapeHtml(r.reason)})` : ""}</div>`).join("")
     : `<div class="list-item note">(無)</div>`;
   const unassignedIndoor = data.unassigned_indoor || [];
   const unassignedJapan = data.unassigned_japan || [];
   if (unassignedIndoor.length || unassignedJapan.length) {
     html += `<div class="list-item" style="margin-top:8px;"><b>未指派教練</b></div>`;
     html += unassignedIndoor.map(u => `<div class="list-item">高雄・${u.category_label} — ${u.count}堂</div>`).join("");
-    html += unassignedJapan.map(u => `<div class="list-item">日本・${u.resort_name || ""} — ${u.count}組</div>`).join("");
+    html += unassignedJapan.map(u => `<div class="list-item">日本・${escapeHtml(u.resort_name || "")} — ${u.count}組</div>`).join("");
   }
   wrap.innerHTML = html;
 }
@@ -5227,9 +5253,9 @@ async function loadCoachScheduleList() {
   listWrap.innerHTML = entries.length
     ? entries.map(r => `
         <div class="list-item">
-          ${r.work_date} — ${r.coach_name} — <span class="status-tag ${r.status === 'business_trip' ? 'ok' : 'warn'}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>
-          ${r.reason ? `(${r.reason.replace(/</g,"&lt;")})` : ""}
-          <button class="small secondary" style="margin-left:6px;" onclick="clearCoachScheduleEntry(${r.coach_id}, '${r.work_date}', '${(r.coach_name||"").replace(/'/g,"")}')">設回上班</button>
+          ${r.work_date} — ${escapeHtml(r.coach_name)} — <span class="status-tag ${r.status === 'business_trip' ? 'ok' : 'warn'}">${SCHEDULE_STATUS_LABEL[r.status] || r.status}</span>
+          ${r.reason ? `(${escapeHtml(r.reason)})` : ""}
+          <button class="small secondary" style="margin-left:6px;" onclick="clearCoachScheduleEntry(${r.coach_id}, '${r.work_date}', '${jsAttrArg(r.coach_name||"")}')">設回上班</button>
         </div>`).join("")
     : `<div class="list-item note">這個月沒有請假/出差紀錄</div>`;
 }
@@ -5282,10 +5308,10 @@ async function renderCoachManageTools() {
     <div class="person-card">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div style="cursor:pointer; flex:1;" onclick="toggleCoachEdit(${c.id})">
-          <b>${c.name}</b>
+          <b>${escapeHtml(c.name)}</b>
           <span id="coachToggleArrow-${c.id}">▾ 點擊編輯</span>
         </div>
-        <button class="small secondary" onclick="deleteCoachAdmin(${c.id}, '${(c.name||"").replace(/'/g,"")}')">刪除教練</button>
+        <button class="small secondary" onclick="deleteCoachAdmin(${c.id}, '${jsAttrArg(c.name||"")}')">刪除教練</button>
       </div>
       <div id="coachEditWrap-${c.id}" style="display:none; margin-top:10px;"></div>
     </div>
@@ -5316,8 +5342,8 @@ async function renderCoachManageTools() {
         <p class="note">「刪除教練」實際上是停用帳號(保留歷史紀錄),不是真的刪掉資料——這裡可以把停用的教練重新啟用。</p>
         ${inactiveCoaches.map(c => `
           <div class="list-item">
-            ${c.name}(工號${c.work_id}${c.branch ? "・" + c.branch : ""})<span class="status-tag warn" style="margin-left:6px;">已停用</span>
-            <button class="small" style="margin-left:8px;" onclick="reactivateCoachAdmin(${c.id}, '${(c.name||"").replace(/'/g,"")}')">重新啟用</button>
+            ${escapeHtml(c.name)}(工號${escapeHtml(c.work_id)}${c.branch ? "・" + escapeHtml(c.branch) : ""})<span class="status-tag warn" style="margin-left:6px;">已停用</span>
+            <button class="small" style="margin-left:8px;" onclick="reactivateCoachAdmin(${c.id}, '${jsAttrArg(c.name||"")}')">重新啟用</button>
           </div>
         `).join("")}
       </div>
@@ -5417,7 +5443,7 @@ async function toggleCoachEdit(coachId) {
     <div class="row" style="flex-wrap:wrap;" id="coachCapWrap-${coachId}">
       ${capabilityOptions.map(cap => `
         <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
-          <input type="checkbox" class="coachCap-${coachId}" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${cap.name}
+          <input type="checkbox" class="coachCap-${coachId}" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${escapeHtml(cap.name)}
         </label>`).join("")}
     </div>
     <div class="row">
@@ -5459,7 +5485,7 @@ async function toggleCoachEdit(coachId) {
     <div class="row" style="flex-wrap:wrap;" id="coachLocWrap-${coachId}">
       ${locationOptions.map(loc => `
         <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
-          <input type="checkbox" class="coachLoc-${coachId}" value="${loc.id}" ${details.location_option_ids.includes(loc.id)?"checked":""}> ${loc.name}${loc.is_indoor_branch ? '<span class="status-tag ok" style="margin-left:2px;">室內分店</span>' : ""}
+          <input type="checkbox" class="coachLoc-${coachId}" value="${loc.id}" ${details.location_option_ids.includes(loc.id)?"checked":""}> ${escapeHtml(loc.name)}${loc.is_indoor_branch ? '<span class="status-tag ok" style="margin-left:2px;">室內分店</span>' : ""}
         </label>`).join("")}
     </div>
     <div class="row">
@@ -5740,10 +5766,10 @@ function renderCsiaCourseList(courses) {
       <b>${levelLabel[level] || level}</b>
       ${byLevel[level].map(c => `
         <div class="list-item">
-          <div><b>${c.batch_label}</b>・${c.course_name}${c.format_note ? `(${c.format_note})` : ""}</div>
-          <div class="note">日期:${c.date_label}・語言:${c.language === "chinese" ? "中文翻譯班" : "英文班"}・地點:${c.venue}</div>
+          <div><b>${escapeHtml(c.batch_label)}</b>・${escapeHtml(c.course_name)}${c.format_note ? `(${escapeHtml(c.format_note)})` : ""}</div>
+          <div class="note">日期:${escapeHtml(c.date_label)}・語言:${c.language === "chinese" ? "中文翻譯班" : "英文班"}・地點:${escapeHtml(c.venue)}</div>
           <div class="note">費用:${_csiaPriceLabel(c)}・名額:${c.registered_count}/${c.max_headcount}(最少開班${c.min_headcount}人)・狀態:${_csiaStatusLabel(c.status)}${c.is_full ? "・已額滿" : ""}</div>
-          ${c.notes ? `<div class="note">${c.notes}</div>` : ""}
+          ${c.notes ? `<div class="note">${escapeHtml(c.notes)}</div>` : ""}
         </div>`).join("")}
     </div>`).join("");
 }
@@ -5766,7 +5792,7 @@ function renderCsiaCourseSelect(courses) {
     return;
   }
   sel.innerHTML = openCourses.map(c =>
-    `<option value="${c.id}" ${c.is_full ? "disabled" : ""}>${c.level} ${c.batch_label} ${c.course_name}(${c.date_label})・${_csiaOptionPriceLabel(c)}${c.is_full ? " - 已額滿" : ""}</option>`
+    `<option value="${c.id}" ${c.is_full ? "disabled" : ""}>${c.level} ${escapeHtml(c.batch_label)} ${escapeHtml(c.course_name)}(${escapeHtml(c.date_label)})・${_csiaOptionPriceLabel(c)}${c.is_full ? " - 已額滿" : ""}</option>`
   ).join("");
   onCsiaCourseSelectChange();
 }
@@ -5903,10 +5929,10 @@ async function loadMyCsiaRegistrations() {
   const priceOptionLabel = { basic: "課程本身", with_stay: "含住宿+早餐+晚餐" };
   wrap.innerHTML = data.map(r => `
     <div class="list-item">
-      <div><b>${r.level} ${r.batch_label} ${r.course_name}</b>(${r.date_label})</div>
+      <div><b>${r.level} ${escapeHtml(r.batch_label)} ${escapeHtml(r.course_name)}</b>(${escapeHtml(r.date_label)})</div>
       <div class="note">價格方案:${priceOptionLabel[r.price_option] || r.price_option || "未選擇"}・金額:${_csiaJpyTwdLabel(r.amount, r.amount_twd)}</div>
       <div class="note">報名狀態:${statusLabel[r.status] || r.status}・付款狀態:${paymentLabel[r.payment_status] || r.payment_status}</div>
-      ${r.staff_note ? `<div class="note">客服備註:${r.staff_note}</div>` : ""}
+      ${r.staff_note ? `<div class="note">客服備註:${escapeHtml(r.staff_note)}</div>` : ""}
     </div>`).join("");
 }
 
@@ -6000,7 +6026,7 @@ function renderWizardPeople(key) {
   const n = wizardState[key].headcount;
   const wrap = document.getElementById(`wiz-${key}-people`);
   const companionOptions = (myCompanions || []).map(c =>
-    `<option value="${c.id}">${c.name || "(未命名)"}${c.age ? "・"+c.age+"歲" : ""}</option>`
+    `<option value="${c.id}">${escapeHtml(c.name || "(未命名)")}${c.age ? "・"+c.age+"歲" : ""}</option>`
   ).join("");
   let html = "";
   for (let i = 1; i <= n; i++) {
@@ -6152,17 +6178,27 @@ async function renderCalendar(key, pickerId, wrapId, onDayClick) {
   const firstDow = new Date(year, month - 1, 1).getDay();
   const daysInMonth = new Date(year, month, 0).getDate();
 
+  // 2026-09新增:室內滑雪機台公休日(目前為星期一)。跳台體驗(key==="jump")是獨立資源、
+  // 不受室內機台公休影響,所以只對trial/self/charter/group這四個共用機台的key套用。
+  // JS的Date.getDay()跟後端pricing.validate_indoor_not_closed_day()用的Python
+  // weekday()星期對應數字不同(JS:週日=0...週六=6;Python:週一=0...週日=6),
+  // 這裡先換算成跟後端一致的0~6(週一=0)再比對,避免兩邊「星期一」的數字對不起來。
+  const closedWeekdaysPy = (key !== "jump" && pricingData && pricingData.indoor_closed_weekdays) || [];
   let cells = "";
   for (let i = 0; i < firstDow; i++) cells += `<div class="cal-day empty"></div>`;
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const jsDow = new Date(year, month - 1, d).getDay();
+    const pyDow = (jsDow + 6) % 7;  // JS週日=0 → 換算成Python週一=0的對應數字
     const isPast = dateStr < todayStr;
+    const isClosed = !isPast && closedWeekdaysPy.includes(pyDow);
     const isToday = dateStr === todayStr;
     const isSelected = dateStr === selectedDate;
     const hasBooking = monthData[dateStr];
-    const cls = ["cal-day", isPast ? "past" : "", isToday ? "today" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
-    cells += `<div class="${cls}" ${isPast ? "" : `onclick="selectCalendarDay('${key}','${pickerId}','${wrapId}','${dateStr}')"`}>
-      ${d}${hasBooking ? `<span class="cal-dot"></span>` : ""}
+    const isDisabled = isPast || isClosed;
+    const cls = ["cal-day", isPast ? "past" : "", isClosed ? "closed" : "", isToday ? "today" : "", isSelected ? "selected" : ""].filter(Boolean).join(" ");
+    cells += `<div class="${cls}" ${isDisabled ? "" : `onclick="selectCalendarDay('${key}','${pickerId}','${wrapId}','${dateStr}')"`} ${isClosed ? `title="公休日"` : ""}>
+      ${d}${hasBooking ? `<span class="cal-dot"></span>` : ""}${isClosed ? `<span class="cal-closed-label">公休</span>` : ""}
     </div>`;
   }
 
@@ -6430,7 +6466,7 @@ async function loadCharterCoaches() {
   const { data } = await api("/indoor-coaches");
   const sel = document.getElementById("charterCoach");
   sel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
-    data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+    data.map(c => `<option value="${c.id}">${escapeHtml(c.name)} 教練</option>`).join("");
 }
 function updateCharterDesignateFeeNote() {
   if (!pricingData) return;
@@ -6749,7 +6785,7 @@ async function openJapanRegion(regionId) {
     if (currentJapanRegion.requires_resort_selection) {
       resortWrap.style.display = "block";
       resorts = currentJapanRegion.resorts;
-      document.getElementById("japanResort").innerHTML = resorts.map(r => `<option value="${r.id}">${r.name}</option>`).join("");
+      document.getElementById("japanResort").innerHTML = resorts.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join("");
       await onJapanResortChange();
     } else {
       resortWrap.style.display = "none";
@@ -6760,7 +6796,7 @@ async function openJapanRegion(regionId) {
       } else if (soleResortId) {
         const { data } = await api(`/resorts/${soleResortId}/coaches`);
         coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>' +
-          data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+          data.map(c => `<option value="${c.id}">${escapeHtml(c.name)} 教練</option>`).join("");
       }
     }
   }
@@ -6780,7 +6816,7 @@ async function onJapanResortChange() {
   if (!resortId) { coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派)</option>'; return; }
   const { data } = await api(`/resorts/${resortId}/coaches`);
   coachSel.innerHTML = '<option value="">不指定(由 ER SKI 分派,系統將自動確認該雪場當天教練容量)</option>' +
-    data.map(c => `<option value="${c.id}">${c.name} 教練</option>`).join("");
+    data.map(c => `<option value="${c.id}">${escapeHtml(c.name)} 教練</option>`).join("");
   updateJapanPrice();
 }
 function openResortManage() {
@@ -6932,7 +6968,7 @@ async function submitJapanOtherResortRequest() {
 async function loadFaqList() {
   const { data } = await api("/faq");
   const el = document.getElementById("faqListWrap");
-  el.innerHTML = data.map(f => `<div class="list-item"><b>${f.question}</b><br>${f.answer}</div>`).join("")
+  el.innerHTML = data.map(f => `<div class="list-item"><b>${escapeHtml(f.question)}</b><br>${escapeHtml(f.answer)}</div>`).join("")
     || `<p class="note">尚無常見問題資料</p>`;
 }
 async function submitFaqAsk() {
@@ -6941,8 +6977,8 @@ async function submitFaqAsk() {
   const { data } = await api("/faq/ask", { method: "POST", body: JSON.stringify({ question, member_id: currentMemberId }) });
   const el = document.getElementById("faqAskResult");
   el.innerHTML = data.matched
-    ? `<div class="list-item"><span class="status-tag ok">已找到答案</span><br><b>${data.question}</b><br>${data.answer}</div>`
-    : `<div class="list-item"><span class="status-tag warn">${data.message}</span></div>`;
+    ? `<div class="list-item"><span class="status-tag ok">已找到答案</span><br><b>${escapeHtml(data.question)}</b><br>${escapeHtml(data.answer)}</div>`
+    : `<div class="list-item"><span class="status-tag warn">${escapeHtml(data.message)}</span></div>`;
   document.getElementById("faqAskInput").value = "";
 }
 
@@ -6969,12 +7005,12 @@ async function loadMyFeedbackList() {
     ? data.map(f => `
       <div class="list-item" style="display:block;">
         <div style="display:flex; justify-content:space-between;">
-          <b>${f.category || "(未指定類型)"}</b>
+          <b>${escapeHtml(f.category || "(未指定類型)")}</b>
           <span class="status-tag ${f.status === 'pending' ? 'warn' : 'ok'}">${_feedbackStatusLabel[f.status] || f.status}</span>
         </div>
-        <p style="margin:4px 0;">${f.content.replace(/</g,"&lt;")}</p>
+        <p style="margin:4px 0;">${escapeHtml(f.content)}</p>
         <p class="note" style="margin:0;">送出時間:${f.created_at}</p>
-        ${f.staff_note ? `<p class="note" style="margin-top:4px;">ER Ski回覆:${f.staff_note.replace(/</g,"&lt;")}</p>` : ""}
+        ${f.staff_note ? `<p class="note" style="margin-top:4px;">ER Ski回覆:${escapeHtml(f.staff_note)}</p>` : ""}
       </div>`).join("")
     : `<p class="note">你還沒有送出過意見</p>`;
 }
@@ -6985,23 +7021,23 @@ async function loadCoachTeam() {
   const certTypeLabel = { ski: "Ski", snowboard: "Snowboard", other: "" };
   el.innerHTML = `<div class="coach-team-grid">` + data.map(c => `
     <div class="coach-card">
-      ${c.promo_photo ? `<img src="${c.promo_photo}" alt="${c.name}">` : `<div class="coach-avatar-placeholder">${(c.name || "").slice(0, 1)}</div>`}
+      ${c.promo_photo ? `<img src="${c.promo_photo}" alt="${escapeHtml(c.name)}">` : `<div class="coach-avatar-placeholder">${escapeHtml((c.name || "").slice(0, 1))}</div>`}
       <div class="coach-card-info">
-        <b>${c.name}</b>
-        ${c.rank ? `<p class="note">${c.rank}</p>` : ""}
+        <b>${escapeHtml(c.name)}</b>
+        ${c.rank ? `<p class="note">${escapeHtml(c.rank)}</p>` : ""}
         ${c.capabilities && c.capabilities.length ? `
           <div class="coach-cert-badges">
-            ${c.capabilities.map(cap => `<span class="coach-cert-badge">${cap}</span>`).join("")}
+            ${c.capabilities.map(cap => `<span class="coach-cert-badge">${escapeHtml(cap)}</span>`).join("")}
           </div>` : ""}
         ${c.certifications && c.certifications.length ? `
           <div class="coach-cert-badges">
-            ${c.certifications.map(cert => `<span class="coach-cert-badge">${cert.cert_name}${certTypeLabel[cert.cert_type] ? " "+certTypeLabel[cert.cert_type] : ""} ${cert.cert_level}</span>`).join("")}
+            ${c.certifications.map(cert => `<span class="coach-cert-badge">${escapeHtml(cert.cert_name)}${certTypeLabel[cert.cert_type] ? " "+certTypeLabel[cert.cert_type] : ""} ${escapeHtml(cert.cert_level)}</span>`).join("")}
           </div>` : ""}
-        ${c.resume ? `<p class="note"><b>資歷</b>:${c.resume}年</p>` : ""}
-        ${c.experience ? `<p class="note"><b>經歷</b>:${c.experience}</p>` : ""}
-        ${c.bio_intro ? `<p class="note"><b>自我介紹</b>:${c.bio_intro}</p>` : (c.self_intro ? `<p class="note"><b>自我介紹</b>:${c.self_intro}</p>` : "")}
-        ${c.message_to_students ? `<p class="note"><b>給學員的一句話</b>:${c.message_to_students}</p>` : ""}
-        ${c.coach_motto ? `<p class="note" style="font-style:italic;">「${c.coach_motto}」</p>` : ""}
+        ${c.resume ? `<p class="note"><b>資歷</b>:${escapeHtml(c.resume)}年</p>` : ""}
+        ${c.experience ? `<p class="note"><b>經歷</b>:${escapeHtml(c.experience)}</p>` : ""}
+        ${c.bio_intro ? `<p class="note"><b>自我介紹</b>:${escapeHtml(c.bio_intro)}</p>` : (c.self_intro ? `<p class="note"><b>自我介紹</b>:${escapeHtml(c.self_intro)}</p>` : "")}
+        ${c.message_to_students ? `<p class="note"><b>給學員的一句話</b>:${escapeHtml(c.message_to_students)}</p>` : ""}
+        ${c.coach_motto ? `<p class="note" style="font-style:italic;">「${escapeHtml(c.coach_motto)}」</p>` : ""}
         ${!c.resume && !c.experience && !c.bio_intro && !c.self_intro && !c.message_to_students && !c.coach_motto ? `<p class="note">尚未填寫自我介紹</p>` : ""}
       </div>
     </div>
@@ -7046,7 +7082,7 @@ function bookingActionsHtml(b) {
       <button class="small secondary" onclick="rescheduleBooking('jump', ${b.booking_ref_id})">修改</button>`;
   }
   if (b.category === "japan") {
-    return `<button class="small secondary" onclick="cancelJapanTripFromCenter('${b.group_key}')">取消整趟行程</button>`;
+    return `<button class="small secondary" onclick="cancelJapanTripFromCenter('${jsAttrArg(b.group_key)}')">取消整趟行程</button>`;
   }
   return "";
 }
@@ -7062,8 +7098,8 @@ async function cancelJapanTripFromCenter(groupKey) {
 }
 
 function bookingRowHtml(b) {
-  const coach = b.coach_name ? `・教練:${b.coach_name}` : "";
-  const resort = b.resort_name ? `${b.resort_name}・` : "";
+  const coach = b.coach_name ? `・教練:${escapeHtml(b.coach_name)}` : "";
+  const resort = b.resort_name ? `${escapeHtml(b.resort_name)}・` : "";
   const equip = b.equipment_type ? `・${b.equipment_type === "ski" ? "雙板" : "單板"}` : "";
   const accom = b.needs_accommodation ? "・需住宿" : "";
   const payTagClass = b.payment_status === "confirmed" ? "ok" : "warn";
@@ -7075,7 +7111,7 @@ function bookingRowHtml(b) {
   // 過去/已完成報到/未到的預約沒有東西可以取消或修改,不需要再顯示任何提示文字;
   // 日本教練課即使還能取消,因為沒有自助改期機制,額外提醒要改行程內容請洽客服。
   const noteText = actionsHtml && b.category === "japan" ? "如需變更行程日期/內容,請洽客服協助處理" : "";
-  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${b.lesson_notes}</span>` : ""}${memberAttendanceCodesHtml(b)}${noteText ? `<br><span class="note">${noteText}</span>` : ""}${actionsBlock}</div>`;
+  return `<div class="list-item">${b.date} ${b.time} — ${resort}${b.category_label}${b.headcount ? `(${b.headcount}人)` : ""}${equip}${coach}${accom} — NT$${b.price ?? 0} ${payTag} ${attendanceTag}${b.lesson_notes ? `<br><span class="note">教練備註:${escapeHtml(b.lesson_notes)}</span>` : ""}${memberAttendanceCodesHtml(b)}${noteText ? `<br><span class="note">${noteText}</span>` : ""}${actionsBlock}</div>`;
 }
 
 async function cancelBooking(kind, refId) {
@@ -7188,7 +7224,7 @@ async function loadAccountOverview() {
     const unpaid = data.japan_payment_status.filter(j => j.payment_label !== "結清");
     html += unpaid.length ? unpaid.map(j => {
       const urgent = j.payment_label.includes("逾期") || (j.payment_label.match(/剩(\d+)天/) && parseInt(j.payment_label.match(/剩(\d+)天/)[1]) <= 3);
-      return `<div class="list-item">${j.booking_date} ${j.resort_name || ""}(${j.day_type==="full"?"全日":"半日"}) — NT$${j.price}
+      return `<div class="list-item">${j.booking_date} ${escapeHtml(j.resort_name || "")}(${j.day_type==="full"?"全日":"半日"}) — NT$${j.price}
         <span class="status-tag ${urgent ? 'warn' : 'ok'}">${j.payment_label}</span></div>`;
     }).join("") : `<div class="list-item">目前沒有未付款的日本教練課項目</div>`;
   }
@@ -7233,7 +7269,7 @@ async function loadAccountOverview() {
   const refStatus = document.getElementById("referralCodeStatus");
   const refInputWrap = document.getElementById("referralCodeInputWrap");
   if (m.referral_code) {
-    refStatus.innerHTML = `<span class="status-tag ok">已填寫優惠碼:${m.referral_code}</span>`;
+    refStatus.innerHTML = `<span class="status-tag ok">已填寫優惠碼:${escapeHtml(m.referral_code)}</span>`;
     refInputWrap.style.display = "none";
   } else {
     refStatus.innerHTML = "";
@@ -7256,7 +7292,7 @@ async function loadNotificationList() {
     return;
   }
   el.innerHTML = data.map(n =>
-    `<div class="list-item">${n.content}<br><span class="note">${n.created_at}</span></div>`
+    `<div class="list-item">${escapeHtml(n.content)}<br><span class="note">${n.created_at}</span></div>`
   ).join("");
 }
 async function changeMyPassword() {
@@ -7300,7 +7336,7 @@ function renderCompanionListInCenter() {
   wrap.innerHTML = (myCompanions.length ? myCompanions.map(c => `
     <div class="list-item">
       <div>
-        <b>${c.name || "(未命名)"}</b>${c.gender ? `・${c.gender === "male" ? "男" : "女"}` : ""}${c.age ? `・${c.age}歲` : ""}
+        <b>${escapeHtml(c.name || "(未命名)")}</b>${c.gender ? `・${c.gender === "male" ? "男" : "女"}` : ""}${c.age ? `・${c.age}歲` : ""}
         ${c.equipment_type ? `・${c.equipment_type === "ski" ? "雙板" : "單板"}` : ""}
       </div>
       <div class="note">

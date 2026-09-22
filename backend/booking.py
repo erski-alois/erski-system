@@ -223,6 +223,7 @@ def _insert_participants(conn, ref_type, ref_id, participants):
 def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=None, participants=None, coach_id=None):
     _validate_hour(start_hour)
     _validate_not_past(booking_date, start_hour)
+    pricing.validate_indoor_not_closed_day(booking_date)
     price = pricing.compute_trial_price(headcount)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
@@ -374,6 +375,7 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
     """使用已購買的包機堂數包來預約一堂課(不再另外收費,扣抵堂數)。"""
     _validate_hour(start_hour)
     _validate_not_past(booking_date, start_hour)
+    pricing.validate_indoor_not_closed_day(booking_date)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
@@ -549,6 +551,7 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
                         equipment_type=None, participants=None, use_plan_quota=False):
     _validate_hour(start_hour)
     _validate_not_past(booking_date, start_hour)
+    pricing.validate_indoor_not_closed_day(booking_date)
     price = pricing.compute_self_practice_price(duration_minutes)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
@@ -642,6 +645,7 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
     """
     _validate_hour(start_hour)
     _validate_not_past(booking_date, start_hour)
+    pricing.validate_indoor_not_closed_day(booking_date)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
@@ -1567,6 +1571,14 @@ def reschedule_indoor_booking(member_ref_id, new_date, new_hour, is_staff=False)
 
     _check_edit_window(conn, row["booking_date"], INDOOR_SELF_EDIT_DAYS, is_staff)
     _validate_hour(new_hour)
+    if not is_staff:
+        # 公休日檢查跟_check_edit_window比照辦理:員工後台改期(例如客服協助處理特殊情況)
+        # 可以略過,一般會員自行改期則要擋,避免改到公休日去。
+        try:
+            pricing.validate_indoor_not_closed_day(new_date)
+        except ValueError:
+            conn.close()
+            raise
 
     conflict = _has_conflict(conn, new_date, new_hour, row["duration_minutes"], exclude_session_id=row["session_id"])
     if conflict:

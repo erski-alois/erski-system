@@ -151,6 +151,25 @@ def validate_booking_window(date_str):
         raise ValueError(f"僅開放未來 {window_days} 天內的日期預約")
 
 
+WEEKDAY_NAMES_ZH = ["一", "二", "三", "四", "五", "六", "日"]  # Python weekday(): 星期一=0 ... 星期日=6
+
+
+def validate_indoor_not_closed_day(date_str):
+    """室內滑雪(機台)公休日檢查。
+    2026-09-22:依你的指示「室內滑雪課程營業時間更改為13:00-21:00,星期一公休」新增。
+    公休的星期幾由 pricing_config 的 indoor_closed_weekdays 設定(一組 0~6 的整數,
+    對應 Python的 datetime.weekday():星期一=0、星期二=1...星期日=6),預設空陣列
+    (不公休),避免寫死在程式碼裡——之後如果公休日調整,後台改設定值即可,不需要
+    改程式碼重新部署。僅適用於室內機台四種預約(體驗/包機/自主練習/團課),跳台體驗
+    是獨立資源、預約規則沿用原本的(見 booking.py 開頭說明),這次公休範圍沒有要求
+    連跳台一起停,所以刻意沒有擋跳台。"""
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    closed_weekdays = get_config("indoor_closed_weekdays", [])
+    if dt.weekday() in closed_weekdays:
+        closed_names = "、".join(f"星期{WEEKDAY_NAMES_ZH[w]}" for w in sorted(closed_weekdays))
+        raise ValueError(f"{date_str} 為公休日({closed_names}),無法預約")
+
+
 def validate_japan_season(date_str):
     """日本教練課雪季開放預約範圍:每年12月14日至隔年4月30日。
     2026-09-21:依你的指示「日本課程可以開始控管,課程開始日期為12/14-4/30」正式恢復
