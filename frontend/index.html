@@ -2151,7 +2151,9 @@ async function renderStaffAssistTab() {
   const memberOptions = members.map(m => `<option value="${m.id}">${escapeHtml(m.name)}(${escapeHtml(m.phone || m.email || "")})</option>`).join("");
   document.getElementById("staffTab-assist").innerHTML = `
     <h3 style="font-size:14px;">代客訂課</h3>
-    <p class="note">選擇會員與課程種類後,直接幫客戶完成預約(不受客戶自行預約的介面限制,仍會檢查時段衝突/額度)。</p>
+    <p class="note">選擇會員與課程種類後,直接幫客戶完成預約(不受客戶自行預約的介面限制,仍會檢查時段衝突/額度)。
+      <b>2026-09-22新增:可以選過去的日期</b>,方便上線前把已經買課、已經上過課的客人資料補登進系統
+      (尤其是上課時間),不會像客戶自行預約那樣被擋下來。</p>
     <label>選擇會員</label>
     <select id="assistMember" onchange="renderAssistFields()">${memberOptions}</select>
     <label>課程種類</label>
@@ -2170,12 +2172,19 @@ async function renderStaffAssistTab() {
 }
 
 async function renderAssistFields() {
+  // 2026-09-22:代客訂課要開放補登過去日期的歷史課程,所以日期欄位不能再帶
+  // min="今天"(那樣瀏覽器原生日期選擇器會直接擋掉過去日期,選都選不到)。
+  // 時段欄位也改成跟pricingData.indoor_hours連動,不再寫死10~20——營業時間
+  // 已經改成13:00開始,寫死的話店員選10點送出一定會被後端擋下來。
+  await ensurePricing();
   const cat = document.getElementById("assistCategory").value;
   const wrap = document.getElementById("assistFieldsWrap");
   const today = new Date().toISOString().slice(0,10);
+  const hourStart = pricingData.indoor_hours.start;
+  const hourEnd = pricingData.indoor_hours.last_start;
   let html = `
-    <label>日期</label><input type="date" id="assistDate" value="${today}" min="${today}">
-    <label>時段(整點)</label><input type="number" id="assistHour" value="10" min="10" max="20">
+    <label>日期(可選過去日期,用於補登歷史課程)</label><input type="date" id="assistDate" value="${today}">
+    <label>時段(整點)</label><input type="number" id="assistHour" value="${hourStart}" min="${hourStart}" max="${hourEnd}">
   `;
   if (cat === "trial") {
     html += `<label>人數</label><select id="assistHeadcount"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>`;

@@ -487,6 +487,18 @@ def _require_member_id_from_token():
     return None, (jsonify({"error": "未登入或登入已過期,請重新登入"}), 401)
 
 
+def _is_staff_assisted_request():
+    """判斷這次請求是不是「代客訂課」(客服/主管/老闆用自己的員工身份幫會員下單),
+    而不是會員本人登入操作——判斷方式跟上面_require_member_id_from_token()裡認定
+    「代客訂課」的條件完全一致(沒有會員token、但有員工token)。給訂課(book_trial/
+    book_charter/book_self_practice/enroll_group_class/book_jump/book_japan)這幾支
+    路由用,只有代客訂課才傳is_staff=True給booking.py放行「補登過去日期的歷史課程」,
+    會員本人自己上網訂課完全不受影響,一律不能選過去的日期。
+    2026-09-22新增,起因:「因為上線,所以要將已經有買課的客人補登資料,尤其是上課
+    時間,所以後台代客訂課得開放訂過去歷史課」。"""
+    return _current_member_id() is None and _current_staff() is not None
+
+
 # ------------------------------------------------------------------
 # 會員登入 / 建立
 # ------------------------------------------------------------------
@@ -1411,7 +1423,7 @@ def book_trial():
             member_id=member_id, booking_date=d["booking_date"],
             start_hour=d["start_hour"], headcount=d["headcount"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
-            coach_id=d.get("coach_id"),
+            coach_id=d.get("coach_id"), is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1448,7 +1460,7 @@ def book_charter():
             member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             charter_pass_id=d["charter_pass_id"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
-            coach_id=d.get("coach_id"),
+            coach_id=d.get("coach_id"), is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1541,7 +1553,7 @@ def book_self_practice():
             member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             duration_minutes=d["duration_minutes"], headcount=d.get("headcount", 1),
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
-            use_plan_quota=d.get("use_plan_quota", False),
+            use_plan_quota=d.get("use_plan_quota", False), is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1561,6 +1573,7 @@ def enroll_group_class():
         result = booking.enroll_group_class(
             member_id=member_id, booking_date=d["booking_date"], start_hour=d["start_hour"],
             equipment_type=d.get("equipment_type"), participant=d.get("participant"),
+            is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1581,6 +1594,7 @@ def book_jump():
             member_id=member_id, booking_date=d["booking_date"],
             start_time=d["start_time"], duration_minutes=d["duration_minutes"],
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
+            is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:
@@ -1952,11 +1966,21 @@ def admin_list_group_classes():
 def admin_assign_group_class_coach(session_id):
     d = request.json
     conn = get_conn()
-    before = conn.execute("SELECT coach_id FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
+    before = conn.execute("SELECT coach_id, booking_date FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
     if not before:
         conn.close()
         return jsonify({"error": "找不到這個場次"}), 404
-    conn.execute("UPDATE indoor_sessions SET coach_id=? WHERE id=?", (d.get("coach_id"), session_id))
+    coach_id = d.get("coach_id")
+    # 2026-09-22新增:指派教練前確認當天沒有請假/出差,修正前這支API完全沒有任何檢查
+    # (甚至連教練帳號是否存在、是否還在職都沒查),回報的bug「教練請假不管日本滑雪及
+    # 室內滑雪都沒擋」有一部分就是這裡漏掉。
+    if coach_id is not None:
+        leave = booking.check_coach_on_leave(conn, coach_id, before["booking_date"])
+        if leave:
+            conn.close()
+            status_label = booking.COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+            return jsonify({"error": f"這位教練於 {before['booking_date']} 無法上班({status_label}),請確認後再指派"}), 400
+    conn.execute("UPDATE indoor_sessions SET coach_id=? WHERE id=?", (coach_id, session_id))
     conn.execute(
         """INSERT INTO audit_log (staff_id, action, target_type, target_id, before_value, after_value)
            VALUES (?, 'assign_group_coach', 'indoor_session', ?, ?, ?)""",
@@ -2007,7 +2031,7 @@ def admin_assign_japan_booking_coach(booking_id):
     coach_id = d.get("coach_id")
     conn = get_conn()
     row = conn.execute(
-        "SELECT id, coach_id, price, status, attendance_status FROM japan_bookings WHERE id=?",
+        "SELECT id, coach_id, price, status, attendance_status, booking_date FROM japan_bookings WHERE id=?",
         (booking_id,),
     ).fetchone()
     if not row:
@@ -2035,6 +2059,15 @@ def admin_assign_japan_booking_coach(booking_id):
         if not coach_row["is_active"]:
             conn.close()
             return jsonify({"error": "這位教練目前是非在職狀態,無法指派"}), 400
+        # 2026-09-22新增:確認這位教練在行程當天沒有請假/出差——修正前這支API只查了
+        # 教練帳號是否存在/在職,完全沒查當天出勤狀態,回報的bug「教練請假不管日本
+        # 滑雪及室內滑雪都沒擋」有一部分就是這裡漏掉(會員自己下單指定教練那條路徑
+        # book_japan_multi_day原本就有查,只有這支後台「教練指派管理」用的API漏掉)。
+        leave = booking.check_coach_on_leave(conn, coach_id, row["booking_date"])
+        if leave:
+            conn.close()
+            status_label = booking.COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+            return jsonify({"error": f"這位教練於 {row['booking_date']} 無法上班({status_label}),請確認後再指派"}), 400
         profile = conn.execute(
             "SELECT japan_commission_rate FROM coach_profiles WHERE coach_id=?", (coach_id,)
         ).fetchone()
@@ -2303,6 +2336,14 @@ def admin_assign_session_coach(session_id):
         if not coach_row["is_active"]:
             conn.close()
             return jsonify({"error": "這位教練目前是非在職狀態,無法指派"}), 400
+        # 2026-09-22新增:確認這位教練在課程當天沒有請假/出差,修正前這支API只查了
+        # 教練帳號是否存在/在職,完全沒查當天出勤狀態,回報的bug「教練請假不管日本
+        # 滑雪及室內滑雪都沒擋」有一部分就是這裡漏掉。
+        leave = booking.check_coach_on_leave(conn, coach_id, session_row["booking_date"])
+        if leave:
+            conn.close()
+            status_label = booking.COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+            return jsonify({"error": f"這位教練於 {session_row['booking_date']} 無法上班({status_label}),請確認後再指派"}), 400
 
     before_coach_id = session_row["coach_id"]
     conn.execute("UPDATE indoor_sessions SET coach_id=? WHERE id=?", (coach_id, session_id))
@@ -2410,7 +2451,7 @@ def book_japan():
             equipment_type=d.get("equipment_type"), participants=d.get("participants"),
             needs_accommodation=d.get("needs_accommodation", False),
             payment_plan=d.get("payment_plan", "full"),
-            group_key=d.get("group_key"),
+            group_key=d.get("group_key"), is_staff=_is_staff_assisted_request(),
         )
         return jsonify(result), 201
     except ValueError as e:

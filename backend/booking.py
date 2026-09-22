@@ -15,6 +15,13 @@ import pricing
 
 TW_TZ = timezone(timedelta(hours=8))  # 台灣時區(UTC+8),伺服器主機時間可能是UTC,需明確換算
 
+# 教練請假/出差狀態的中文顯示,跟前端 SCHEDULE_STATUS_LABEL 保持一致,給下面
+# 教練請假擋單的錯誤訊息使用(不直接把英文status塞進錯誤訊息給客人/員工看)。
+COACH_SCHEDULE_STATUS_LABEL = {
+    "working": "上班", "personal_leave": "事假", "sick_leave": "病假",
+    "annual_leave": "特休", "business_trip": "出差",
+}
+
 
 def _now_tw():
     """回傳目前的台灣時間(naive datetime,方便跟資料庫存的日期字串比較)。"""
@@ -183,8 +190,15 @@ def _check_equipment_available(conn, equipment_type, booking_date):
         raise ValueError(f"{booking_date} 設備維修/停用中,無法預約({row['reason'] or '請洽客服確認'})")
 
 
-def _validate_not_past(booking_date, start_hour=None):
-    """禁止預約過去的日期;同一天則必須至少提前 MIN_ADVANCE_BOOKING_HOURS 小時預約(以台灣時間判斷)。"""
+def _validate_not_past(booking_date, start_hour=None, is_staff=False):
+    """禁止預約過去的日期;同一天則必須至少提前 MIN_ADVANCE_BOOKING_HOURS 小時預約(以台灣時間判斷)。
+
+    2026-09-22新增is_staff:「因為上線,所以要將已經有買課的客人補登資料,尤其是上課
+    時間,所以後台代客訂課得開放訂過去歷史課」——後台代客訂課(客服/主管/老闆用員工
+    身份幫會員補登上線前已經買過、已經上過的歷史課程)這個情境下,is_staff=True會
+    直接放行,不檢查日期是否已過去、也不檢查「至少提前X小時」這條本來就是給一般會員
+    自助上網訂課用的規則。會員自己登入訂課(is_staff維持預設值False)完全不受影響,
+    規則不變,一樣不能訂過去的日期。"""
     now = _now_tw()
     today = now.date()
     # 2026-08:日期格式錯誤(例如用"/"而非"-",或根本不是日期)時,不要把Python底層
@@ -194,6 +208,8 @@ def _validate_not_past(booking_date, start_hour=None):
         b_date = datetime.strptime(booking_date, "%Y-%m-%d").date()
     except (ValueError, TypeError):
         raise ValueError("日期格式錯誤,請使用「西元年-月-日」格式,例如 2026-08-30")
+    if is_staff:
+        return
     if b_date < today:
         raise ValueError("不能預約過去的日期")
     if b_date == today and start_hour is not None:
@@ -220,14 +236,28 @@ def _insert_participants(conn, ref_type, ref_id, participants):
 # ------------------------------------------------------------------
 # 體驗課
 # ------------------------------------------------------------------
-def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=None, participants=None, coach_id=None):
+def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=None, participants=None,
+                coach_id=None, is_staff=False):
     _validate_hour(start_hour)
-    _validate_not_past(booking_date, start_hour)
-    pricing.validate_indoor_not_closed_day(booking_date)
+    _validate_not_past(booking_date, start_hour, is_staff=is_staff)
+    if not is_staff:
+        # 後台代客訂課(is_staff=True)補登歷史資料時不擋公休日——歷史日期當時
+        # 可能還沒有這條公休規則,不應該用現在的規則去擋補登舊資料。
+        pricing.validate_indoor_not_closed_day(booking_date)
     price = pricing.compute_trial_price(headcount)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
+
+    # 2026-09-22新增:指定教練時確認當天沒有請假/出差,比照日本教練課原本就有的做法——
+    # 修正前體驗課/包機課完全沒有這段檢查,指定一位當天請假的教練照樣能訂成功。
+    # is_staff補登歷史資料時不擋(舊資料的教練排班多半根本沒有留存紀錄)。
+    if coach_id and not is_staff:
+        leave = check_coach_on_leave(conn, coach_id, booking_date)
+        if leave:
+            conn.close()
+            status_label = COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+            raise ValueError(f"指定教練於 {booking_date} 無法上班({status_label}),請洽詢客服")
 
     if equipment_type:
         existing = conn.execute(
@@ -371,14 +401,24 @@ def finalize_charter_purchase(order_id, conn=None):
         conn.close()
 
 
-def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment_type=None, participants=None, coach_id=None):
+def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment_type=None, participants=None,
+                  coach_id=None, is_staff=False):
     """使用已購買的包機堂數包來預約一堂課(不再另外收費,扣抵堂數)。"""
     _validate_hour(start_hour)
-    _validate_not_past(booking_date, start_hour)
-    pricing.validate_indoor_not_closed_day(booking_date)
+    _validate_not_past(booking_date, start_hour, is_staff=is_staff)
+    if not is_staff:
+        pricing.validate_indoor_not_closed_day(booking_date)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
+
+    if coach_id and not is_staff:
+        leave = check_coach_on_leave(conn, coach_id, booking_date)
+        if leave:
+            conn.close()
+            status_label = COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+            raise ValueError(f"指定教練於 {booking_date} 無法上班({status_label}),請洽詢客服")
+
     cpass = conn.execute("SELECT * FROM charter_passes WHERE id=?", (charter_pass_id,)).fetchone()
     if not cpass or cpass["member_id"] != member_id:
         conn.close()
@@ -548,10 +588,11 @@ def resolve_charter_pass_request(request_id, action, staff_id, new_remaining=Non
 # 自主練習
 # ------------------------------------------------------------------
 def book_self_practice(member_id, booking_date, start_hour, duration_minutes, headcount=1,
-                        equipment_type=None, participants=None, use_plan_quota=False):
+                        equipment_type=None, participants=None, use_plan_quota=False, is_staff=False):
     _validate_hour(start_hour)
-    _validate_not_past(booking_date, start_hour)
-    pricing.validate_indoor_not_closed_day(booking_date)
+    _validate_not_past(booking_date, start_hour, is_staff=is_staff)
+    if not is_staff:
+        pricing.validate_indoor_not_closed_day(booking_date)
     price = pricing.compute_self_practice_price(duration_minutes)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
@@ -637,15 +678,16 @@ def _create_group_class_payment_order(conn, member_id, session_member_id):
     )
 
 
-def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None, participant=None):
+def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None, participant=None, is_staff=False):
     """
     團課:多位會員各自報名同一時段,滿2人開課、滿4人截止。
     不可指定教練(教練由後台/排班另行安排,不在報名時選擇)。
     僅限已持有有效 A/B 方案會員資格的會員報名(方案本身需付費訂閱,見 subscribe_plan)。
     """
     _validate_hour(start_hour)
-    _validate_not_past(booking_date, start_hour)
-    pricing.validate_indoor_not_closed_day(booking_date)
+    _validate_not_past(booking_date, start_hour, is_staff=is_staff)
+    if not is_staff:
+        pricing.validate_indoor_not_closed_day(booking_date)
     conn = get_conn()
     conn.execute("BEGIN IMMEDIATE")  # 立即取得寫入鎖,避免同時間多筆請求繞過衝突檢查
     _check_equipment_available(conn, "machine", booking_date)
@@ -739,8 +781,9 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
 # ------------------------------------------------------------------
 # 跳台體驗(獨立資源,不受機台時段互斥限制)
 # ------------------------------------------------------------------
-def book_jump(member_id, booking_date, start_time, duration_minutes, equipment_type=None, participants=None):
-    _validate_not_past(booking_date, int(start_time.split(":")[0]))
+def book_jump(member_id, booking_date, start_time, duration_minutes, equipment_type=None, participants=None,
+              is_staff=False):
+    _validate_not_past(booking_date, int(start_time.split(":")[0]), is_staff=is_staff)
     price = pricing.compute_jump_price(duration_minutes)
     conn = get_conn()
     _check_equipment_available(conn, "jump_platform", booking_date)
@@ -1077,25 +1120,31 @@ def get_member_japan_payment_status(member_id):
     return result
 
 
+def check_coach_on_leave(conn, coach_id, date_str):
+    """查詢指定教練在指定日期是否為「非上班」狀態(請假/出差等)。回傳coach_schedule那筆
+    紀錄(dict,含status/reason)或None——None代表當天沒有例外紀錄,依系統慣例預設視為
+    正常上班。給各個訂課/教練指派入口共用,取代原本各自寫一份幾乎一樣的SQL、卻沒有
+    每個入口都真的有寫這段檢查的狀況(2026-09-22修正:「教練請假不管日本滑雪及室內
+    滑雪都沒擋」,原本只有book_japan_multi_day這個入口有做這段檢查,體驗課/包機課
+    訂課,以及後台好幾個「指派教練」的介面都漏掉了)。"""
+    row = conn.execute(
+        """SELECT status, reason FROM coach_schedule WHERE coach_id=? AND work_date=?
+           AND status != 'working'""",
+        (coach_id, date_str),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _resort_available_coaches(conn, resort_id, date_str):
     """回傳該雪場在該日期「有上班」的教練 id 清單(依後台指派的雪場教練名單扣除請假/出差)。"""
     roster = conn.execute(
         "SELECT coach_id FROM resort_coaches WHERE resort_id=?", (resort_id,)
     ).fetchall()
-    available = []
-    for r in roster:
-        leave = conn.execute(
-            """SELECT 1 FROM coach_schedule WHERE coach_id=? AND work_date=?
-               AND status != 'working'""",
-            (r["coach_id"], date_str),
-        ).fetchone()
-        if not leave:
-            available.append(r["coach_id"])
-    return available
+    return [r["coach_id"] for r in roster if not check_coach_on_leave(conn, r["coach_id"], date_str)]
 
 
 def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=None,
-                          needs_accommodation=False, payment_plan="full", group_key=None):
+                          needs_accommodation=False, payment_plan="full", group_key=None, is_staff=False):
     """
     bookings: [{'resort_id':1,'date':'2026-12-20','day_type':'full'|'half',
                 'half_day_slot':'morning'|'afternoon'|None,'headcount':2,
@@ -1104,6 +1153,9 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
     payment_plan: 'full'(全額繳清) 或 'deposit'(先繳訂金,尾款需於開課前3日內繳清,訂金/尾款各半)
     group_key: 群組名稱,後台代客建單時可自訂可讀格式(例如"1214藏王SKI1:2_ERski");
                客戶自己上網訂課不需提供,系統會自動產生一組不重複的識別碼
+    is_staff: 後台代客訂課補登歷史資料時傳True——不擋過去日期、不擋雪季範圍(舊資料的
+              實際上課日期是既成事實,不該被現在的規則擋住)、也不擋教練請假(舊資料
+              多半根本沒有留存教練排班紀錄)。會員自己上網訂課維持預設值False,規則不變。
     """
     if payment_plan not in ("full", "deposit"):
         raise ValueError("付款方式僅接受 full 或 deposit")
@@ -1122,8 +1174,9 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
 
     for b in bookings:
         try:
-            pricing.validate_japan_season(b["date"])
-            _validate_not_past(b["date"])
+            if not is_staff:
+                pricing.validate_japan_season(b["date"])
+            _validate_not_past(b["date"], is_staff=is_staff)
         except ValueError as e:
             conn.close()
             raise e
@@ -1143,15 +1196,13 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
             )
 
         if b.get("coach_id"):
-            # 指定教練:確認當天有上班
-            leave = conn.execute(
-                """SELECT * FROM coach_schedule WHERE coach_id=? AND work_date=?
-                   AND status != 'working'""",
-                (b["coach_id"], b["date"]),
-            ).fetchone()
-            if leave:
-                conn.close()
-                raise ValueError(f"指定教練於 {b['date']} 無法上班({leave['status']}),請洽詢客服")
+            # 指定教練:確認當天有上班(後台補登歷史資料時略過,理由同上)
+            if not is_staff:
+                leave = check_coach_on_leave(conn, b["coach_id"], b["date"])
+                if leave:
+                    conn.close()
+                    status_label = COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+                    raise ValueError(f"指定教練於 {b['date']} 無法上班({status_label}),請洽詢客服")
             # 指定教練:確認當天(不分雪場)還沒被其他人訂走,一位教練同一天僅能帶一組
             taken = conn.execute(
                 f"""SELECT * FROM japan_bookings
@@ -1560,7 +1611,8 @@ def cancel_indoor_booking(member_ref_id, is_staff=False):
 def reschedule_indoor_booking(member_ref_id, new_date, new_hour, is_staff=False):
     conn = get_conn()
     row = conn.execute(
-        """SELECT sm.*, s.booking_date, s.start_hour, s.duration_minutes, s.category, s.id AS session_id
+        """SELECT sm.*, s.booking_date, s.start_hour, s.duration_minutes, s.category, s.id AS session_id,
+                  s.coach_id
            FROM indoor_session_members sm JOIN indoor_sessions s ON sm.session_id = s.id
            WHERE sm.id=?""",
         (member_ref_id,),
@@ -1579,6 +1631,15 @@ def reschedule_indoor_booking(member_ref_id, new_date, new_hour, is_staff=False)
         except ValueError:
             conn.close()
             raise
+        # 2026-09-22新增:如果這堂課已經指定教練,改期時要重新確認新日期教練沒有請假,
+        # 避免改到教練請假那天(原本改期完全沒有檢查這一段)。員工後台改期一樣略過,
+        # 理由同上(可能是客服已經另外確認過人力調度)。
+        if row["coach_id"]:
+            leave = check_coach_on_leave(conn, row["coach_id"], new_date)
+            if leave:
+                conn.close()
+                status_label = COACH_SCHEDULE_STATUS_LABEL.get(leave["status"], leave["status"])
+                raise ValueError(f"指定教練於 {new_date} 無法上班({status_label}),請洽詢客服")
 
     conflict = _has_conflict(conn, new_date, new_hour, row["duration_minutes"], exclude_session_id=row["session_id"])
     if conflict:
