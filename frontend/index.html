@@ -7552,18 +7552,29 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
     return;
   }
   if (data.is_new) {
-    // LINE不提供Email(詳見auth.line_oauth_login的說明),所以這裡只預先帶入姓名
-    // (LINE的顯示名稱),Email欄位留空且保持可編輯,讓使用者自己輸入——這是跟
-    // handleGoogleOauthRedirect()裡Email欄位「已驗證所以鎖定」最主要的差異。
-    document.getElementById("mName").value = data.prefill_name || "";
-    document.getElementById("mPhone").value = "";
-    document.getElementById("mEmail").value = "";
-    document.getElementById("mEmail").readOnly = false;
-    document.getElementById("memberCreateStatus").textContent = "";
-    document.getElementById("mPasswordFieldsWrap").style.display = "none";
-    showMemberCreateForm();
-    window._pendingProvider = "line";
-    window._pendingExternalId = data.prefill_line_user_id;
+    // 2026-09-22改成不再跳出補資料表單:LINE本來就不會提供手機/Email(詳見
+    // auth.line_oauth_login的說明),先前的做法是照Google那組沿用「建立會員資料」
+    // 表單,逼客人自己手動補手機+Email兩項才能完成登入,體驗上多一道關卡、容易讓
+    // 客人覺得「LINE登入」名不符實。後端create_member()已經放寬:auth_provider
+    // ='line'時phone/email都是選填,這裡直接拿LINE給的顯示名稱建立會員、立刻登入
+    // 進會員中心,不再顯示表單。會員中心本來就有「資料未填完」的提示banner
+    // (updateProfileGateBanner)會在登入時快閃提醒一次,客人之後自己有空再補
+    // 手機/Email/生日/地址等資料即可。
+    const { ok: createOk, data: createData } = await api("/auth/create-member", {
+      method: "POST",
+      body: JSON.stringify({
+        name: data.prefill_name || "",
+        auth_provider: "line",
+        line_user_id: data.prefill_line_user_id,
+      }),
+    });
+    if (!createOk) {
+      alert(createData.error || "LINE登入建立會員資料失敗,請稍後再試一次;如持續發生請聯絡客服。");
+      return;
+    }
+    currentMemberId = createData.id;
+    currentMemberToken = createData.token;
+    await enterMainScreen(createData);
   } else {
     currentMemberId = data.member.id;
     currentMemberToken = data.token;

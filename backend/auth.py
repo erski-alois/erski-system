@@ -289,30 +289,56 @@ def create_member(data: dict) -> dict:
     2026-09新增:auth_provider='email'(用Email註冊/登入,目前唯一真正驗證密碼的
     登入方式)這種情況下,註冊時一併要求設定登入密碼(至少6碼),不再讓帳號一開始
     就是「沒有密碼」的狀態——這是配合「全部進入正式上線狀況,會員登入得以正式帳號
-    密碼登入」這個需求的一部分。line/google/apple這3種目前還是模擬OAuth按鈕
-    (還沒有串接真正的第三方OAuth,詳見mock_oauth_login的說明),沒有密碼欄位,
-    維持原本「OAuth完成=身分驗證完成」的邏輯不變,不受這次改動影響。"""
+    密碼登入」這個需求的一部分。
+
+    2026-09-22新增:LINE登入改成不強制填手機/Email就能完成註冊——起因是「LINE登入
+    可以了,但會跳到要讓客人填會員資料,這個有點煩,是不是直接登入,讓客人直接進
+    會員中心完成會員資料」這個回饋。LINE的個人資料API本來就不會提供手機/Email
+    (見line_oauth_login()說明,只有userId/displayName),先前的寫法卻要求LINE
+    註冊也要手動補這兩項才能過關,等於逼客人多打兩個欄位才能完成「本來應該是一鍵
+    登入」的LINE登入,這裡放寬:auth_provider='line'時phone/email都改成選填
+    (有填的話還是照樣驗證格式,避免亂填的髒資料;沒填就先放行),會員之後可以
+    自己有空再到會員中心補上——會員中心本來就有「資料未填完」的提示banner
+    (updateProfileGateBanner,依REQUIRED_PROFILE_FIELDS/is_profile_complete()
+    判斷)會在每次登入時快閃提醒一次,不需要在註冊當下就逼客人填完。Google維持
+    原本規則不變(email已經是Google驗證過的真實資料、手機仍要求填寫),Email註冊
+    (唯一需要密碼的方式)也維持兩項都必填。"""
     name = (data.get("name") or "").strip()
-    phone = re.sub(r"[\s-]", "", data.get("phone") or "")
-    email = (data.get("email") or "").strip()
+    phone = re.sub(r"[\s-]", "", data.get("phone") or "") or None
+    email = (data.get("email") or "").strip() or None
     auth_provider = data.get("auth_provider")
     password = data.get("password")
 
     if not name:
-        raise ValueError("請輸入姓名")
-    if not is_valid_tw_phone(phone):
-        raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
-    if not is_valid_email(email):
-        raise ValueError("Email格式不正確,請重新輸入")
+        if auth_provider == "line":
+            # LINE顯示名稱理論上一定有(LINE帳號本身就要求設定暱稱),這裡只是防呆,
+            # 避免萬一LINE那次沒回傳displayName時,自動註冊整個卡住失敗。
+            name = "LINE會員"
+        else:
+            raise ValueError("請輸入姓名")
+
+    require_contact_fields = auth_provider != "line"
+    if require_contact_fields:
+        if not is_valid_tw_phone(phone or ""):
+            raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
+        if not is_valid_email(email or ""):
+            raise ValueError("Email格式不正確,請重新輸入")
+    else:
+        if phone and not is_valid_tw_phone(phone):
+            raise ValueError("手機號碼格式不正確,請輸入台灣手機號碼(例如:0912345678)")
+        if email and not is_valid_email(email):
+            raise ValueError("Email格式不正確,請重新輸入")
+
     if auth_provider == "email":
         if not password or len(password) < 6:
             raise ValueError("請設定登入密碼(至少6碼)")
 
     conn = get_conn()
-    existing = conn.execute("SELECT id FROM members WHERE email=?", (email,)).fetchone()
-    if existing:
-        conn.close()
-        raise ValueError("此Email已經註冊過會員,請直接使用登入方式登入,或改用其他Email註冊")
+    if email:
+        existing = conn.execute("SELECT id FROM members WHERE email=?", (email,)).fetchone()
+        if existing:
+            conn.close()
+            raise ValueError("此Email已經註冊過會員,請直接使用登入方式登入,或改用其他Email註冊")
 
     password_hash = new_password_hash(password) if (auth_provider == "email" and password) else None
     cur = conn.execute(
