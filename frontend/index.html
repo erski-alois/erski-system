@@ -550,6 +550,7 @@
   <header style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
     <h1 style="margin:0;">ERSKI 滑雪急診室 <span class="sub" id="memberBanner"></span></h1>
     <span style="display:flex; gap:14px; align-items:center;">
+      <a onclick="memberLogout()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">登出</a>
       <a onclick="openCoachLogin()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">🎿 教練登入</a>
       <a onclick="openStaffLogin()" style="cursor:pointer; color:#9fb3c8; font-size:13px; white-space:nowrap;">🔒 後台管理</a>
     </span>
@@ -1260,6 +1261,25 @@ let currentStaffId = null;
 let currentMemberToken = null;
 let currentStaffToken = null;
 let pricingData = null;
+
+// 2026-09-22新增:會員登入狀態原本完全只存在記憶體裡的JS變數,一重新整理頁面
+// 就整組歸零,一定會跳回登入畫面(回報的bug:「按重新整理頁面都會跑到登入頁」)。
+// 改成登入成功時順便把token存進localStorage(見下面enterMainScreen()),頁面
+// 載入時嘗試從localStorage還原、拿去跟後端驗證還有沒有效(見底下
+// restoreMemberSession()),站方後台的員工/教練登入維持原樣不受影響——員工8小時
+// 就會過期,重新整理要再登入一次是預期中的設計(工作用裝置退出後不留在登入狀態),
+// 這次只處理會員(客人)這邊。
+// 這裡先同步做一件事:如果本機有存過的會員token,先把登入頁藏起來,避免畫面
+// 先閃一下登入頁才又跳回會員畫面——真正驗證token是否還有效是非同步的,交給
+// restoreMemberSession()處理,驗證失敗會再把登入頁顯示回來。
+try {
+  if (localStorage.getItem("erski_member_token") && window.location.pathname.replace(/\/$/, "") !== "/coach") {
+    const el = document.getElementById("loginScreen");
+    if (el) el.style.display = "none";
+  }
+} catch (e) {
+  // 瀏覽器擋掉localStorage(例如無痕模式/隱私設定)時,忽略即可,退回原本每次都要登入的行為
+}
 let resorts = [];
 let japanRegions = [];
 let currentJapanRegion = null;
@@ -1622,6 +1642,16 @@ function populateBirthDateSelects(yearId="pBirthYear", monthId="pBirthMonth", da
 }
 async function enterMainScreen(member) {
   _profileBannerShownOnce = false;  // 新的登入階段,資料未補齊的話允許再快閃提醒一次
+  // 2026-09-22新增:每個會員登入成功的路徑(Email/模擬OAuth/正式Google/正式LINE/
+  // 註冊完成/還原舊session)最後都會呼叫這支函式,所以集中在這裡存localStorage,
+  // 不用在每個登入入口各自補一次、容易漏掉。會員token效期30天(見authtoken.py的
+  // MEMBER_TOKEN_MAX_AGE),存起來讓「重新整理頁面」不會又跳回登入頁。
+  try {
+    localStorage.setItem("erski_member_token", currentMemberToken);
+    localStorage.setItem("erski_member_id", String(currentMemberId));
+  } catch (e) {
+    // 瀏覽器擋掉localStorage時忽略即可,不影響這次登入本身,只是下次重新整理要再登入一次
+  }
   populateBirthDateSelects();
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("mainScreen").style.display = "block";
@@ -1658,6 +1688,21 @@ async function enterMainScreen(member) {
   loadAccountOverview();
   loadCoachTeam();
   loadFaqList();
+}
+
+// 2026-09-22新增:會員(客人)登出。之前系統完全沒有會員登出功能(只有教練/員工後台
+// 有登出),因為登入狀態原本只存在記憶體裡,重新整理頁面就等於自動登出了。現在改成
+// 登入狀態存進localStorage、重新整理不會再登出,所以需要補上一個真正的登出按鈕,
+// 不然客人在公用電腦/別人的裝置上登入後會沒有辦法自己登出、只能關瀏覽器。
+function memberLogout() {
+  currentMemberId = null;
+  currentMemberToken = null;
+  try {
+    localStorage.removeItem("erski_member_token");
+    localStorage.removeItem("erski_member_id");
+  } catch (e) {}
+  document.getElementById("mainScreen").style.display = "none";
+  document.getElementById("loginScreen").style.display = "block";
 }
 
 function openStaffLogin() {
@@ -7589,6 +7634,47 @@ if (window.location.pathname.replace(/\/$/, "") === "/coach") {
     currentMemberToken = data.token;
     await enterMainScreen(data.member);
   }
+})();
+
+// 2026-09-22新增:還原會員登入狀態(修正回報的bug:「按重新整理頁面都會跑到登入
+// 頁」)——上面存進localStorage的token,頁面重新載入時在這裡拿去問後端還有沒有效,
+// 有效就直接進會員中心,不用重新輸入帳號密碼/重新走一次LINE或Google登入。
+// 跟上面handleGoogleOauthRedirect()/handleLineOauthRedirect()一樣是頁面一載入就
+// 執行的IIFE,但彼此不會搶——網址列有OAuth redirect參數時,代表使用者剛完成一次
+// Google/LINE登入導轉回來,交給那兩支各自處理,這裡直接跳過;/coach這個網址是教練
+// 專屬入口,跟會員登入無關,也跳過。
+(async function restoreMemberSession() {
+  if (window.location.pathname.replace(/\/$/, "") === "/coach") return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("exchange_code") || params.get("oauth_error")) return;
+  if (currentMemberId) return;  // 已經被其他登入流程處理完成
+
+  let savedToken, savedId;
+  try {
+    savedToken = localStorage.getItem("erski_member_token");
+    savedId = localStorage.getItem("erski_member_id");
+  } catch (e) {
+    return;  // 瀏覽器擋掉localStorage,退回原本「重新整理要再登入一次」的行為
+  }
+  if (!savedToken || !savedId) return;
+
+  currentMemberId = parseInt(savedId);
+  currentMemberToken = savedToken;
+  const { ok, data } = await api(`/members/${currentMemberId}`);
+  if (!ok) {
+    // token過期(30天效期)或已經被撤銷(例如客服後台清除密碼後又重設),
+    // 清掉本機殘留的token,把畫面帶回登入頁,不要卡在一個空白的會員畫面。
+    currentMemberId = null;
+    currentMemberToken = null;
+    try {
+      localStorage.removeItem("erski_member_token");
+      localStorage.removeItem("erski_member_id");
+    } catch (e) {}
+    const el = document.getElementById("loginScreen");
+    if (el) el.style.display = "block";
+    return;
+  }
+  await enterMainScreen(data.member);
 })();
 
 // 2026-09新增:登入畫面下方那行小字提示,依實際串接狀況動態調整文字,避免Google
