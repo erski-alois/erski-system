@@ -100,6 +100,33 @@ R2_BACKUP_CONFIGURED = bool(R2_CONFIGURED and R2_BACKUP_BUCKET_NAME)
 SENTRY_DSN = os.environ.get("SENTRY_DSN")
 SENTRY_CONFIGURED = bool(SENTRY_DSN)
 
+# ------------------------------------------------------------------
+# Email寄送(Resend, https://resend.com)，目前只用在會員「忘記密碼」的重設密碼信
+# (見mailer.py/auth.request_password_reset_email)。選用Resend是因為免費額度
+# 長期可用(每月3,000封、每天100封上限，不像部分同業近年改成只給60天試用)，
+# 這個規模的用量(密碼重設信，之後可能加上訂單通知)綽綽有餘。
+#
+# 尚未申請/設定RESEND_API_KEY前，MAIL_CONFIGURED會是False，忘記密碼功能會回傳
+# 明確錯誤訊息告知尚未開通(客服後台原本就能直接清除會員密碼，不受影響)。
+#
+# 設定步驟:
+#   1. 到 https://resend.com 註冊帳號(不需要信用卡)
+#   2. 「Domains」新增你們的網域(例如 erskischool.com 或 mail.erskischool.com)，
+#      依畫面指示把幾筆DNS記錄(TXT/MX/CNAME)加到你們網域的DNS設定，等驗證通過
+#      (通常幾分鐘到數小時，視DNS服務商而定)
+#   3. 「API Keys」建立一組新的API Key
+#   4. 在Render環境變數設定 RESEND_API_KEY(上一步的Key)、
+#      MAIL_FROM(例如 "ERSKI 滑雪急診室 <noreply@erskischool.com>"，
+#      @後面網域必須是上面第2步驗證過的網域)
+# ------------------------------------------------------------------
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+MAIL_FROM = os.environ.get("MAIL_FROM", "ERSKI 滑雪急診室 <noreply@erskischool.com>")
+MAIL_CONFIGURED = bool(RESEND_API_KEY)
+
+# 重設密碼信裡的連結網址前綴，預設跟GOOGLE_OAUTH_REDIRECT_URI/LINE_OAUTH_REDIRECT_URI
+# 一樣指向正式站網址；本機開發或有獨立網址的環境可用環境變數覆蓋。
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://app.erskischool.com").rstrip("/")
+
 
 def validate_for_production():
     """正式環境啟動時可以呼叫這個函式，及早發現「忘記設定環境變數」的問題，
@@ -131,6 +158,10 @@ def validate_for_production():
         problems.append("R2_BACKUP_BUCKET_NAME未設定，每日自動備份到Cloudflare R2的排程工具"
                          "(backend/scripts/backup_to_r2.py)會執行失敗，目前只能依賴Render本身"
                          "3天的PITR還原窗口，建議盡快在Cloudflare另外建立一個不公開的bucket並設定")
+    if not MAIL_CONFIGURED:
+        problems.append("RESEND_API_KEY未設定，會員「忘記密碼」自助重設功能會顯示尚未開通，"
+                         "客服後台仍可直接幫會員清除密碼(等同原本的處理方式)，不受影響，"
+                         "建議盡快到resend.com申請免費帳號並設定，步驟見上面說明")
     return problems
 
 

@@ -10,9 +10,12 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
+from html import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 
+import authtoken
 import config
+import mailer
 from db import get_conn
 
 # 註冊資料格式驗證(2026-09:依需求「註冊手機得防止客人輸入無效號碼及無效Email」新增)。
@@ -442,6 +445,63 @@ def set_member_password(member_id: int, new_password: str, current_password: str
     )
     conn.commit()
     conn.close()
+
+
+def request_password_reset_email(email: str) -> bool:
+    """2026-09-22新增:會員「忘記密碼」自助重設——依Email查會員,寄一封重設密碼連結信
+    (30分鐘內有效,見authtoken.issue_password_reset_token)。
+
+    回傳True代表真的寄出去了,回傳False代表沒有寄(查無此Email、或這個Email欄位是
+    空的)。**呼叫端(app.py)不應該依這個回傳值改變回覆給前端的文字**——一律回覆同一句
+    「如果這個Email有註冊,重設密碼信已經寄出」,不能讓這支API被用來反查「這個Email
+    到底有沒有註冊過」(標準的防帳號列舉做法,回傳值只給後端自己記log用)。
+
+    這裡故意不區分auth_provider(不管是email/google/line哪種方式註冊,只要有留Email
+    就會寄):LINE/Google會員雖然平常不是用密碼登入,但系統本來就允許他們額外設定一組
+    密碼備用(見set_member_password),讓他們也能申請重設是合理的。"""
+    conn = get_conn()
+    row = conn.execute("SELECT id, name, email FROM members WHERE email=?", ((email or "").strip(),)).fetchone()
+    conn.close()
+    if not row or not row["email"]:
+        return False
+
+    member = dict(row)
+    token = authtoken.issue_password_reset_token(member["id"])
+    reset_url = f"{config.APP_BASE_URL}/?reset_token={token}"
+    display_name = escape(member["name"] or "會員")
+    html_body = f"""
+      <p>{display_name} 您好,</p>
+      <p>我們收到您在「ERSKI 滑雪急診室」重設登入密碼的請求。請點擊下方連結設定新密碼
+      (連結<b>30分鐘內</b>有效,逾時請重新申請一次):</p>
+      <p><a href="{reset_url}">{reset_url}</a></p>
+      <p>如果這不是您本人提出的請求,請直接忽略這封信,您的帳號密碼不會被更動。</p>
+      <p style="color:#888; font-size:12px;">ERSKI 滑雪急診室</p>
+    """
+    mailer.send_email(member["email"], "ERSKI 滑雪急診室 - 重設登入密碼", html_body)
+    return True
+
+
+def reset_member_password_with_token(member_id: int, new_password: str) -> dict:
+    """2026-09-22新增:「忘記密碼」重設連結驗證通過後(呼叫端已經先用
+    authtoken.verify_password_reset_token()驗證過token有效、還沒過期、拿到裡面的
+    member_id),直接設定一組新密碼——不需要、也不可能驗證舊密碼,因為重設連結本身
+    (寄到本人註冊時留的Email信箱)就是身分證明,這點是跟set_member_password()
+    (會員在「會員中心」自己改密碼,一定要先驗證目前密碼)最大的差異。
+    回傳更新後的會員資料(dict),給呼叫端(app.py)取email等欄位用於前端提示。"""
+    if not new_password or len(new_password) < 6:
+        raise ValueError("請設定至少6碼的新密碼")
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("找不到此會員,重設連結可能已經失效,請重新申請")
+    conn.execute(
+        "UPDATE members SET password_hash=? WHERE id=?", (new_password_hash(new_password), member_id)
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
+    conn.close()
+    return dict(updated)
 
 
 def admin_reset_member_password(member_id: int):

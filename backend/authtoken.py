@@ -133,3 +133,28 @@ def verify_oauth_exchange_code(code):
         return _OAUTH_EXCHANGE_SERIALIZER.loads(code, max_age=OAUTH_EXCHANGE_MAX_AGE)
     except (BadSignature, SignatureExpired):
         return None
+
+
+# ------------------------------------------------------------------
+# 2026-09-22新增:會員「忘記密碼」用的重設密碼連結token。一樣是無狀態簽章token,
+# 跟上面幾組做法相同(伺服器不用另外開資料表記錄「這組連結有沒有被用過」),
+# 效期刻意設定得比OAuth exchange_code長(使用者要先離開網站去收信,不會在幾十秒內
+# 完成),但也不能太長,避免信箱萬一外洩時的風險視窗拖太久,30分鐘是常見的折衷值。
+# ------------------------------------------------------------------
+_PASSWORD_RESET_SERIALIZER = URLSafeTimedSerializer(_SECRET_KEY, salt="erski-password-reset")
+PASSWORD_RESET_MAX_AGE = 30 * 60  # 重設密碼連結:30分鐘內有效,逾時需要重新申請
+
+
+def issue_password_reset_token(member_id: int) -> str:
+    return _PASSWORD_RESET_SERIALIZER.dumps({"member_id": member_id})
+
+
+def verify_password_reset_token(token):
+    """回傳token內的member_id(int);token是None/被竄改/過期時回傳None。"""
+    if not token:
+        return None
+    try:
+        data = _PASSWORD_RESET_SERIALIZER.loads(token, max_age=PASSWORD_RESET_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    return data.get("member_id")

@@ -716,6 +716,53 @@ def create_member():
     return jsonify(member), 201
 
 
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def forgot_password():
+    """2026-09-22新增:會員「忘記密碼」自助重設密碼信,取代原本唯一的解法(打電話/傳
+    LINE找客服,客服到後台幫忙清除密碼)。這支API不管Email有沒有註冊過、寄信成不成功,
+    一律回覆同一句話——避免被拿來反查「這個Email到底有沒有在系統裡註冊過會員」
+    (標準的防帳號列舉做法),真正寄信與否的細節只寫進伺服器log。"""
+    d = request.json or {}
+    email = (d.get("email") or "").strip()
+    if not email:
+        return jsonify({"error": "請輸入Email"}), 400
+    if not config.MAIL_CONFIGURED:
+        # 尚未申請/設定Resend時,誠實告知尚未開通(這是系統整體的部署狀態,不是針對
+        # 某個特定Email,不會有帳號列舉的疑慮),客服後台原本就能直接清除密碼,不受影響。
+        return jsonify({"error": "Email重設密碼功能尚未開通,請洽客服協助處理"}), 503
+    try:
+        sent = auth.request_password_reset_email(email)
+        app.logger.info(f"忘記密碼:{email} -> {'已寄出' if sent else '查無此Email或未留Email,未寄出'}")
+    except RuntimeError as e:
+        # 寄信本身失敗(Resend連線問題/網域未驗證等) —— 記錄詳細原因方便排查,
+        # 但同樣不把細節透露給前端,以免被用來反查帳號是否存在。
+        app.logger.error(f"忘記密碼寄信失敗:{email} -> {e}")
+    return jsonify({"ok": True, "message": "如果這個Email有註冊,重設密碼信已經寄出,請至信箱收信(記得檢查垃圾郵件夾)"})
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def reset_password():
+    """2026-09-22新增:會員點擊Email裡的重設密碼連結後,在前端輸入新密碼送出到這裡。
+    reset_token驗證見authtoken.verify_password_reset_token(30分鐘內有效)。"""
+    d = request.json or {}
+    member_id = authtoken.verify_password_reset_token(d.get("reset_token"))
+    if not member_id:
+        return jsonify({"error": "重設密碼連結已經失效或過期,請重新申請一次"}), 400
+    try:
+        member = auth.reset_member_password_with_token(member_id, d.get("new_password"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO notifications (member_id, channel, notify_type, content, status)
+           VALUES (?, 'system', 'password_reset', '您已透過Email重設連結完成密碼重設', 'simulated')""",
+        (member_id,),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "email": member.get("email")})
+
+
 import random
 import string
 
