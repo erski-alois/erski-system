@@ -23,6 +23,8 @@ services:
         sync: false   # 請在Render後台手動貼上PostgreSQL的連線字串，不要寫在這份檔案裡
       - key: FLASK_SECRET_KEY
         sync: false   # 用來簽發會員/員工登入token,務必設定,可用 python3 -c "import secrets; print(secrets.token_hex(32))" 產生一組
+      - key: TP_WRITEBACK_SHARED_SECRET
+        sync: false   # TP -> Render 營運回寫專用金鑰；與唯讀同步金鑰分離，不能提交 Git
       - key: TP_SYNC_SHARED_SECRET
         sync: false   # Render/PostgreSQL -> TP 唯讀鏡像專用金鑰；只放 Render 與 TP 本機設定，不能提交 Git
       - key: ECPAY_MERCHANT_ID

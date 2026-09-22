@@ -927,3 +927,20 @@ INSERT INTO insurance_brackets
  (40101, 42000, 42000, 1050, 3675, 651, 2032, 2520),
  (42001, 43900, 43900, 1098, 3841, 681, 2124, 2634),
  (43901, 999999999, 45800, 1145, 4008, 710, 2216, 2748);
+
+-- TP 營運回寫：每筆 TP 操作皆保留唯一識別碼，避免網路重送造成重複入帳。
+CREATE TABLE IF NOT EXISTS tp_writeback_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL UNIQUE,
+    action_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_source_id TEXT NOT NULL,
+    actor_staff_source_id INTEGER NOT NULL REFERENCES staff(id),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('received', 'applied', 'rejected')),
+    result_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tp_writeback_actions_status_created
+ON tp_writeback_actions(status, created_at);

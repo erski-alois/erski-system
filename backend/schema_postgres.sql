@@ -939,3 +939,20 @@ INSERT INTO insurance_brackets
 ALTER TABLE members ADD CONSTRAINT fk_members_referral_partner_id FOREIGN KEY (referral_partner_id) REFERENCES partner_organizations(id);
 ALTER TABLE japan_bookings ADD CONSTRAINT fk_japan_bookings_rebate_partner_id FOREIGN KEY (rebate_partner_id) REFERENCES partner_organizations(id);
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_order_id FOREIGN KEY (order_id) REFERENCES orders(id);
+
+-- TP 營運回寫：每筆 TP 操作皆保留唯一識別碼，避免網路重送造成重複入帳。
+CREATE TABLE IF NOT EXISTS tp_writeback_actions (
+    id SERIAL PRIMARY KEY,
+    action_id TEXT NOT NULL UNIQUE,
+    action_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_source_id TEXT NOT NULL,
+    actor_staff_source_id INTEGER NOT NULL REFERENCES staff(id),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('received', 'applied', 'rejected')),
+    result_json TEXT,
+    created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tp_writeback_actions_status_created
+ON tp_writeback_actions(status, created_at);

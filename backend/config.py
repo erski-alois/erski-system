@@ -135,6 +135,9 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://app.erskischool.com").rst
 # 前端程式碼或任何 TP 頁面。未設定時同步 API 會完全停用。
 TP_SYNC_SHARED_SECRET = os.environ.get("TP_SYNC_SHARED_SECRET", "").strip()
 TP_SYNC_CONFIGURED = bool(TP_SYNC_SHARED_SECRET)
+# TP 營運回寫採用不同於唯讀同步的獨立金鑰；未設定即完全停用。
+TP_WRITEBACK_SHARED_SECRET = os.environ.get("TP_WRITEBACK_SHARED_SECRET", "").strip()
+TP_WRITEBACK_CONFIGURED = bool(TP_WRITEBACK_SHARED_SECRET)
 try:
     TP_SYNC_MAX_PAGE_SIZE = max(1, min(int(os.environ.get("TP_SYNC_MAX_PAGE_SIZE", "200")), 500))
 except ValueError:

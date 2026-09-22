@@ -22,6 +22,8 @@ import payroll
 import config
 import csia
 import storage_r2
+import tp_sync
+import tp_writeback
 
 # ------------------------------------------------------------------
 # Sentry錯誤監控:必須在Flask app建立「之前」呼叫sentry_sdk.init()，
@@ -272,7 +274,7 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     # 2026-08:X-Staff-Id(未簽章、可偽造的純工號)全面改成X-Staff-Token/X-Member-Token
     # (見authtoken.py),詳見README_部署交接指南.md第二節「會員身分沒有真的驗證」。
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token, X-ERSKI-TP-Sync-Key, X-ERSKI-TP-Writeback-Key"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
@@ -280,6 +282,193 @@ def add_cors_headers(response):
 @app.route("/api/<path:_any>", methods=["OPTIONS"])
 def cors_preflight(_any):
     return "", 204
+
+
+# ------------------------------------------------------------------
+# Render/PostgreSQL -> TurboPlus 的唯讀營運鏡像 API
+# ------------------------------------------------------------------
+# TP 是同步營運後台，不是主資料庫。這兩支介面只輸出 tp_sync.py 明確列出的
+# 最小必要欄位，不含密碼、password hash、身分證、地址、健康資料、ATM 虛擬帳號或
+# 任何第三方服務金鑰。TP 端需以 X-ERSKI-TP-Sync-Key 帶入獨立同步金鑰。
+def _require_tp_sync_key():
+    if not config.TP_SYNC_CONFIGURED:
+        return jsonify({"error": "TP 同步尚未啟用"}), 503
+    supplied = request.headers.get("X-ERSKI-TP-Sync-Key", "")
+    if not tp_sync.constant_time_authorized(supplied, config.TP_SYNC_SHARED_SECRET):
+        # 不記錄 header、金鑰、會員資料或請求參數，避免同步憑證意外出現在 log。
+        return jsonify({"error": "未授權的同步請求"}), 401
+    return None
+
+
+@app.route("/api/integrations/tp/v1/manifest", methods=["GET"])
+def tp_sync_manifest():
+    denied = _require_tp_sync_key()
+    if denied:
+        return denied
+    return jsonify(tp_sync.get_manifest())
+
+
+@app.route("/api/integrations/tp/v1/snapshot/<entity>", methods=["GET"])
+def tp_sync_snapshot(entity):
+    denied = _require_tp_sync_key()
+    if denied:
+        return denied
+    try:
+        after_id, limit = tp_sync.parse_page_arguments(
+            request.args.get("after_id"), request.args.get("limit"), config.TP_SYNC_MAX_PAGE_SIZE
+        )
+        return jsonify(tp_sync.get_snapshot(entity, after_id, limit))
+    except KeyError:
+        return jsonify({"error": "不支援的同步資料類型"}), 404
+    except ValueError:
+        return jsonify({"error": "同步分頁參數不正確"}), 400
+
+
+# ------------------------------------------------------------------
+# TurboPlus -> Render 的受控營運回寫 API
+# ------------------------------------------------------------------
+# 回寫使用另一組專用金鑰，絕不共用唯讀同步金鑰。所有可變更的動作均由
+# tp_writeback.py 的白名單處理，且和 tp_writeback_actions、audit_log 在
+# 同一筆資料庫交易中提交；重送同一 action_id 只會回傳原結果。
+_TP_WRITEBACK_TARGETS = {
+    "confirm_pending_payment": "transaction",
+    "assign_indoor_coach": "indoor_session",
+    "assign_japan_coach": "japan_booking",
+    "request_refund": "order",
+    "approve_refund": "order",
+    "reject_refund": "order",
+}
+
+
+def _require_tp_writeback_key():
+    if not config.TP_WRITEBACK_CONFIGURED:
+        return jsonify({"error": "TP 營運回寫尚未啟用"}), 503
+    supplied = request.headers.get("X-ERSKI-TP-Writeback-Key", "")
+    if not tp_sync.constant_time_authorized(supplied, config.TP_WRITEBACK_SHARED_SECRET):
+        return jsonify({"error": "未授權的營運回寫請求"}), 401
+    return None
+
+
+def _tp_writeback_action_id_is_valid(value):
+    if not isinstance(value, str) or not 8 <= len(value) <= 120:
+        return False
+    return all(char.isalnum() or char in "._:-" for char in value)
+
+
+@app.route("/api/integrations/tp/v1/writeback/health", methods=["GET"])
+def tp_writeback_health():
+    denied = _require_tp_writeback_key()
+    if denied:
+        return denied
+    return jsonify({
+        "api_version": "v1",
+        "mode": "controlled_operation_writeback",
+        "supported_actions": sorted(tp_writeback.SUPPORTED_ACTIONS),
+    })
+
+
+@app.route("/api/integrations/tp/v1/writeback/actions", methods=["POST"])
+def tp_writeback_action():
+    denied = _require_tp_writeback_key()
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    action_id = data.get("action_id")
+    action_type = str(data.get("action_type") or "").strip()
+    target_source_id = data.get("target_source_id")
+    actor_staff_source_id = data.get("actor_staff_source_id")
+    payload = data.get("payload") or {}
+    target_type = _TP_WRITEBACK_TARGETS.get(action_type)
+
+    if not _tp_writeback_action_id_is_valid(action_id):
+        return jsonify({"error": "操作識別碼格式不正確"}), 400
+    if not target_type:
+        return jsonify({"error": "不支援的營運操作類型"}), 400
+    if target_source_id in (None, "") or actor_staff_source_id in (None, ""):
+        return jsonify({"error": "缺少目標或執行人員來源 ID"}), 400
+    try:
+        actor_staff_source_id = int(actor_staff_source_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "執行人員來源 ID 格式不正確"}), 400
+    if not isinstance(payload, dict):
+        return jsonify({"error": "操作資料格式不正確"}), 400
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(payload_json) > 2000:
+        return jsonify({"error": "操作資料過長"}), 400
+
+    conn = get_conn()
+    try:
+        prior = conn.execute(
+            """SELECT action_id, action_type, status, result_json
+               FROM tp_writeback_actions WHERE action_id=?""",
+            (action_id,),
+        ).fetchone()
+        if prior:
+            result = json.loads(prior["result_json"]) if prior["result_json"] else {}
+            result.update({
+                "action_id": prior["action_id"],
+                "action_type": prior["action_type"],
+                "status": prior["status"],
+                "replayed": True,
+            })
+            return jsonify(result), 200
+
+        # 寫入佇列紀錄與業務動作同一交易：若規則不通過，兩者都不會留下半筆成功資料。
+        conn.execute(
+            """INSERT INTO tp_writeback_actions
+               (action_id, action_type, target_type, target_source_id, actor_staff_source_id,
+                payload_json, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'received')""",
+            (action_id, action_type, target_type, str(target_source_id),
+             int(actor_staff_source_id), payload_json),
+        )
+        result = tp_writeback.apply_action(
+            conn, action_type, target_source_id, actor_staff_source_id, payload
+        )
+        result.update({
+            "action_id": action_id,
+            "action_type": action_type,
+            "status": "applied",
+            "replayed": False,
+        })
+        result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        conn.execute(
+            f"""UPDATE tp_writeback_actions
+               SET status='applied', result_json=?, completed_at={NOW_SQL}
+               WHERE action_id=?""",
+            (result_json, action_id),
+        )
+        conn.commit()
+        return jsonify(result), 200
+    except tp_writeback.WritebackError as exc:
+        conn.rollback()
+        rejection = {
+            "action_id": action_id,
+            "action_type": action_type,
+            "status": "rejected",
+            "message": str(exc),
+            "replayed": False,
+        }
+        try:
+            conn.execute(
+                f"""INSERT INTO tp_writeback_actions
+                   (action_id, action_type, target_type, target_source_id, actor_staff_source_id,
+                    payload_json, status, result_json, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'rejected', ?, {NOW_SQL})""",
+                (action_id, action_type, target_type, str(target_source_id),
+                 int(actor_staff_source_id), payload_json,
+                 json.dumps(rejection, ensure_ascii=False, separators=(",", ":"))),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return jsonify(rejection), 400
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 ROLE_RANK = {"coach": 1, "cs": 2, "manager": 3, "boss": 4}
