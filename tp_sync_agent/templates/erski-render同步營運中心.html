@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="big5">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ERSKI Render 同步營運中心</title>
+<style>
+body{margin:0;background:#f4f8fb;color:#09243a;font-family:"Microsoft JhengHei",Arial,sans-serif}.bar{background:#09243a;color:#fff;padding:18px 6%;display:flex;justify-content:space-between;align-items:center}.brand{font-size:21px;font-weight:700}.brand small{display:block;color:#99dcff;font-size:11px;letter-spacing:1px;margin-top:3px}.back{color:#fff;border:1px solid #9bd7ed;border-radius:7px;padding:8px 14px;text-decoration:none}.wrap{max-width:1000px;margin:34px auto;padding:0 22px}.hero{padding:27px 32px;border-radius:18px;background:linear-gradient(130deg,#0b405e,#147f90);color:#fff}.hero h1{margin:0 0 9px;font-size:29px}.hero p{margin:0;line-height:1.7}.notice{margin:22px 0;padding:16px 18px;background:#e9f4f8;border-left:4px solid #1788aa;border-radius:8px;line-height:1.7}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.card{background:#fff;border:1px solid #cfe0e9;border-radius:13px;padding:21px;box-shadow:0 7px 21px rgba(5,49,72,.06)}.card h2{font-size:20px;margin:0 0 10px}.card p{line-height:1.7;color:#4a6576;min-height:52px}.btn{display:inline-block;background:#146ac8;color:#fff;text-decoration:none;border-radius:7px;padding:10px 16px;font-weight:bold}.muted{font-size:13px;color:#67808e;margin-top:28px;line-height:1.7}@media(max-width:560px){.hero{padding:24px}.wrap{margin-top:20px}.bar{padding:15px 5%}}
+</style>
+</head>
+<body>
+<header class="bar"><div class="brand">ER Ski<small>RENDER → TP OPERATIONS</small></div><a class="back" href="/m">回後台</a></header>
+<main class="wrap">
+<section class="hero"><h1>Render 同步營運中心</h1><p>Render PostgreSQL 是主資料來源。此處僅顯示同步鏡像，所有來源資料以 Render source_id 對照，不會由 TP 回寫正式網站。</p></section>
+<div class="notice">同步包含會員營運摘要、教練與班表、雪場、訂單、付款狀態、堂數、方案、室內／日本排課。密碼、身分證、地址、健康同行資料與金流敏感資料不會進入 TP 鏡像。</div>
+<section class="grid">
+<article class="card"><h2>營運鏡像資料</h2><p>依同步實體、來源 ID、狀態、日期與金額查閱 Render 的最新營運摘要。</p><a class="btn" target="_blank" href="/m?p=efmr&n=Render同步營運鏡像">開啟營運鏡像</a></article>
+<article class="card"><h2>同步執行紀錄</h2><p>查看每次完整快照的資料筆數、新增／更新數與來源未出現項目。</p><a class="btn" target="_blank" href="/m?p=efmr&n=Render同步執行紀錄">開啟同步紀錄</a></article>
+</section>
+<p class="muted">若同步資料與正式網站不同，以 Render 正式網站資料為準；請先查看「同步執行紀錄」，再由管理者處理來源資料。</p>
+</main>
+</body>
+</html>

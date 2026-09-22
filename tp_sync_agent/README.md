@@ -40,3 +40,19 @@ python pull_snapshot.py --config D:\turboplus\127.0.0.1\exeFile\erski_tp_sync\sy
 每一次都是「完整快照」，以 `source_id` 作為 Render 原始資料的穩定鍵；不是以 ID 游標
 做不完整的增量更新。日後 TP 寫入器必須把 `(entity, source_id)` 當唯一對照，才能安全
 地重跑同步而不重複建檔。
+## TP 鏡像匯入器
+
+`import_to_tp.py` 已實作第二階段的 TP 原生鏡像匯入。它只會建立並維護兩張**新增的** TP 表單：
+
+- `40 Render同步營運鏡像`：以 `同步實體 + Render來源ID` 對照會員摘要、教練與班表、雪場、訂單、付款、堂數、方案、室內／日本預約。
+- `41 Render同步執行紀錄`：保留每次同步筆數、新增／更新數與來源未出現筆數。
+
+它不會讀寫既有 TP 的會員、訂單、付款、排課或扣堂表單；來源在新的完整快照中消失時只會標示「待人工確認」，不會刪除 TP 的鏡像紀錄。
+
+先驗證：
+
+```text
+python import_to_tp.py --tp-root D:\turboplus\127.0.0.1 --out D:\turboplus\127.0.0.1\exeFile\erski_tp_sync\outbox --dry-run
+```
+
+正式匯入時移除 `--dry-run`。匯入器會先備份表單清單與自己的表單設定到 `exeFile\erski_tp_sync\backups`，遇到欄位不一致、重複來源鍵或不完整快照會停止，不會覆蓋既有 TP 表單。
