@@ -22,6 +22,7 @@ import payroll
 import config
 import csia
 import storage_r2
+import tp_sync
 
 # ------------------------------------------------------------------
 # Sentry錯誤監控:必須在Flask app建立「之前」呼叫sentry_sdk.init()，
@@ -272,7 +273,7 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     # 2026-08:X-Staff-Id(未簽章、可偽造的純工號)全面改成X-Staff-Token/X-Member-Token
     # (見authtoken.py),詳見README_部署交接指南.md第二節「會員身分沒有真的驗證」。
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Staff-Token, X-Member-Token, X-ERSKI-TP-Sync-Key"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
@@ -281,6 +282,45 @@ def add_cors_headers(response):
 def cors_preflight(_any):
     return "", 204
 
+
+# ------------------------------------------------------------------
+# Render/PostgreSQL -> TurboPlus 的唯讀營運鏡像 API
+# ------------------------------------------------------------------
+# TP 是同步營運後台，不是主資料庫。這兩支介面只輸出 tp_sync.py 明確列出的
+# 最小必要欄位，不含密碼、password hash、身分證、地址、健康資料、ATM 虛擬帳號或
+# 任何第三方服務金鑰。TP 端需以 X-ERSKI-TP-Sync-Key 帶入獨立同步金鑰。
+def _require_tp_sync_key():
+    if not config.TP_SYNC_CONFIGURED:
+        return jsonify({"error": "TP 同步尚未啟用"}), 503
+    supplied = request.headers.get("X-ERSKI-TP-Sync-Key", "")
+    if not tp_sync.constant_time_authorized(supplied, config.TP_SYNC_SHARED_SECRET):
+        # 不記錄 header、金鑰、會員資料或請求參數，避免同步憑證意外出現在 log。
+        return jsonify({"error": "未授權的同步請求"}), 401
+    return None
+
+
+@app.route("/api/integrations/tp/v1/manifest", methods=["GET"])
+def tp_sync_manifest():
+    denied = _require_tp_sync_key()
+    if denied:
+        return denied
+    return jsonify(tp_sync.get_manifest())
+
+
+@app.route("/api/integrations/tp/v1/snapshot/<entity>", methods=["GET"])
+def tp_sync_snapshot(entity):
+    denied = _require_tp_sync_key()
+    if denied:
+        return denied
+    try:
+        after_id, limit = tp_sync.parse_page_arguments(
+            request.args.get("after_id"), request.args.get("limit"), config.TP_SYNC_MAX_PAGE_SIZE
+        )
+        return jsonify(tp_sync.get_snapshot(entity, after_id, limit))
+    except KeyError:
+        return jsonify({"error": "不支援的同步資料類型"}), 404
+    except ValueError:
+        return jsonify({"error": "同步分頁參數不正確"}), 400
 
 ROLE_RANK = {"coach": 1, "cs": 2, "manager": 3, "boss": 4}
 # 2026-09:資料庫欄位(staff.role的CHECK約束)、教練自助頁面等「純粹判斷是不是有登入

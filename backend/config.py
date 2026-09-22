@@ -126,6 +126,19 @@ MAIL_CONFIGURED = bool(RESEND_API_KEY)
 # 重設密碼信裡的連結網址前綴，預設跟GOOGLE_OAUTH_REDIRECT_URI/LINE_OAUTH_REDIRECT_URI
 # 一樣指向正式站網址；本機開發或有獨立網址的環境可用環境變數覆蓋。
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://app.erskischool.com").rstrip("/")
+# ------------------------------------------------------------------
+# TurboPlus 營運鏡像同步
+# ------------------------------------------------------------------
+# Render/PostgreSQL 是唯一的主資料來源。TP 端只會以這組獨立金鑰「主動拉取」
+# 已過濾的營運鏡像資料，絕不透過此介面回寫會員、訂單、付款或堂數。
+# 金鑰只能放在 Render 的環境變數與 TP 本機同步程式的設定檔，不能寫進 Git、
+# 前端程式碼或任何 TP 頁面。未設定時同步 API 會完全停用。
+TP_SYNC_SHARED_SECRET = os.environ.get("TP_SYNC_SHARED_SECRET", "").strip()
+TP_SYNC_CONFIGURED = bool(TP_SYNC_SHARED_SECRET)
+try:
+    TP_SYNC_MAX_PAGE_SIZE = max(1, min(int(os.environ.get("TP_SYNC_MAX_PAGE_SIZE", "200")), 500))
+except ValueError:
+    TP_SYNC_MAX_PAGE_SIZE = 200
 
 
 def validate_for_production():
