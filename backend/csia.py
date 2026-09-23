@@ -94,6 +94,15 @@ def _with_price_display(course_dict):
     return course_dict
 
 
+def _with_stay_label(course_dict):
+    """2026-09第七次改版:依你提供的各場次住宿晚數,補上「含X晚住宿+早餐+晚餐」這種
+    文字給前端直接顯示用(nights_of_stay沒填時,維持原本「含住宿+早餐+晚餐」的講法,
+    不強制每個場次都要填晚數)。"""
+    nights = course_dict.get("nights_of_stay")
+    course_dict["with_stay_label"] = f"含{nights}晚住宿+早餐+晚餐" if nights else "含住宿+早餐+晚餐"
+    return course_dict
+
+
 def _course_registered_count(conn, course_id):
     """這個課程場次目前有效(未取消)的報名人數。"""
     return conn.execute(
@@ -114,7 +123,7 @@ def list_courses_for_members():
         d = dict(r)
         d["registered_count"] = _course_registered_count(conn, r["id"])
         d["is_full"] = d["registered_count"] >= r["max_headcount"]
-        result.append(_with_price_display(d))
+        result.append(_with_stay_label(_with_price_display(d)))
     conn.close()
     return result
 
@@ -260,7 +269,7 @@ def admin_list_courses():
     for r in rows:
         d = dict(r)
         d["registered_count"] = _course_registered_count(conn, r["id"])
-        result.append(_with_price_display(d))
+        result.append(_with_stay_label(_with_price_display(d)))
     conn.close()
     return result
 
@@ -268,7 +277,7 @@ def admin_list_courses():
 _COURSE_EDITABLE_FIELDS = (
     "level", "batch_label", "language", "course_name", "format_note",
     "date_label", "date_sort_key", "venue", "price_jpy_basic", "price_jpy_with_stay",
-    "min_headcount", "max_headcount", "status", "notes",
+    "nights_of_stay", "min_headcount", "max_headcount", "status", "notes",
 )
 
 
@@ -288,13 +297,14 @@ def admin_create_course(data):
     cur = conn.execute(
         """INSERT INTO csia_courses
            (level, batch_label, language, course_name, format_note, date_label, date_sort_key,
-            venue, price_jpy_basic, price_jpy_with_stay, min_headcount, max_headcount, status, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            venue, price_jpy_basic, price_jpy_with_stay, nights_of_stay, min_headcount, max_headcount,
+            status, notes)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get("level"), data.get("batch_label"), data.get("language"), data.get("course_name"),
             data.get("format_note"), data.get("date_label"), data.get("date_sort_key"),
             data.get("venue") or "宮城鬼首滑雪場 Onikoube, Miyagi",
-            data.get("price_jpy_basic"), data.get("price_jpy_with_stay"),
+            data.get("price_jpy_basic"), data.get("price_jpy_with_stay"), data.get("nights_of_stay"),
             data.get("min_headcount") or 5, data.get("max_headcount") or 8,
             data.get("status") or "open", data.get("notes"),
         ),

@@ -3681,8 +3681,9 @@ async function renderCsiaManageTab() {
       <div class="field-grid" style="margin-top:8px;">
         <div><label>價格-課程本身(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceBasic-${c.id}" type="number" value="${c.price_jpy_basic === null || c.price_jpy_basic === undefined ? "" : c.price_jpy_basic}"></div>
         <div><label>價格-含住宿+早餐+晚餐(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceWithStay-${c.id}" type="number" value="${c.price_jpy_with_stay === null || c.price_jpy_with_stay === undefined ? "" : c.price_jpy_with_stay}"></div>
+        <div><label>住宿晚數(選填,留空則畫面上不顯示晚數)</label><input id="csiaCourseNights-${c.id}" type="number" min="0" value="${c.nights_of_stay === null || c.nights_of_stay === undefined ? "" : c.nights_of_stay}"></div>
       </div>
-      <p class="note" style="margin-top:2px;">新台幣參考金額(1:5匯率):課程本身約NT$${c.price_twd_basic === null || c.price_twd_basic === undefined ? "-" : c.price_twd_basic.toLocaleString()}・含住宿+早餐+晚餐約NT$${c.price_twd_with_stay === null || c.price_twd_with_stay === undefined ? "-" : c.price_twd_with_stay.toLocaleString()}</p>
+      <p class="note" style="margin-top:2px;">新台幣參考金額(1:5匯率):課程本身約NT$${c.price_twd_basic === null || c.price_twd_basic === undefined ? "-" : c.price_twd_basic.toLocaleString()}・${escapeHtml(c.with_stay_label || "含住宿+早餐+晚餐")}約NT$${c.price_twd_with_stay === null || c.price_twd_with_stay === undefined ? "-" : c.price_twd_with_stay.toLocaleString()}</p>
       <div class="field-grid" style="margin-top:8px;">
         <div><label>最少開班人數</label><input id="csiaCourseMin-${c.id}" type="number" value="${c.min_headcount}"></div>
         <div><label>上限人數</label><input id="csiaCourseMax-${c.id}" type="number" value="${c.max_headcount}"></div>
@@ -3718,6 +3719,7 @@ async function renderCsiaManageTab() {
       <div class="field-grid" style="margin-top:8px;">
         <div><label>價格-課程本身(JPY,選填)</label><input id="newCsiaPriceBasic" type="number"></div>
         <div><label>價格-含住宿+早餐+晚餐(JPY,選填)</label><input id="newCsiaPriceWithStay" type="number"></div>
+        <div><label>住宿晚數(選填)</label><input id="newCsiaNights" type="number" min="0"></div>
         <div><label>最少開班人數</label><input id="newCsiaMin" type="number" value="5"></div>
         <div><label>上限人數</label><input id="newCsiaMax" type="number" value="8"></div>
       </div>
@@ -3894,9 +3896,11 @@ function filterCsiaRegistrations() {
 async function saveCsiaCourse(courseId) {
   const priceBasicRaw = document.getElementById(`csiaCoursePriceBasic-${courseId}`).value;
   const priceWithStayRaw = document.getElementById(`csiaCoursePriceWithStay-${courseId}`).value;
+  const nightsRaw = document.getElementById(`csiaCourseNights-${courseId}`).value;
   const payload = {
     price_jpy_basic: priceBasicRaw === "" ? null : parseInt(priceBasicRaw),
     price_jpy_with_stay: priceWithStayRaw === "" ? null : parseInt(priceWithStayRaw),
+    nights_of_stay: nightsRaw === "" ? null : parseInt(nightsRaw),
     min_headcount: parseInt(document.getElementById(`csiaCourseMin-${courseId}`).value) || 5,
     max_headcount: parseInt(document.getElementById(`csiaCourseMax-${courseId}`).value) || 8,
     status: document.getElementById(`csiaCourseStatus-${courseId}`).value,
@@ -3919,6 +3923,7 @@ async function createCsiaCourse() {
   }
   const priceBasicRaw = document.getElementById("newCsiaPriceBasic").value;
   const priceWithStayRaw = document.getElementById("newCsiaPriceWithStay").value;
+  const nightsRaw = document.getElementById("newCsiaNights").value;
   const payload = {
     level: document.getElementById("newCsiaLevel").value,
     language: document.getElementById("newCsiaLanguage").value,
@@ -3928,6 +3933,7 @@ async function createCsiaCourse() {
     venue: document.getElementById("newCsiaVenue").value || undefined,
     price_jpy_basic: priceBasicRaw === "" ? null : parseInt(priceBasicRaw),
     price_jpy_with_stay: priceWithStayRaw === "" ? null : parseInt(priceWithStayRaw),
+    nights_of_stay: nightsRaw === "" ? null : parseInt(nightsRaw),
     min_headcount: parseInt(document.getElementById("newCsiaMin").value) || 5,
     max_headcount: parseInt(document.getElementById("newCsiaMax").value) || 8,
   };
@@ -6006,9 +6012,11 @@ function _csiaJpyTwdLabel(jpy, twd) {
   return `JPY ${jpy.toLocaleString()}${twdText}`;
 }
 function _csiaPriceLabel(course) {
-  // 課程列表用:同時列出「課程本身」與「含住宿+早餐+晚餐」兩種方案的日圓/新台幣參考金額
+  // 課程列表用:同時列出「課程本身」與「含住宿+早餐+晚餐」兩種方案的日圓/新台幣參考金額。
+  // with_stay_label是後端依nights_of_stay算好的文字(例如「含4晚住宿+早餐+晚餐」),
+  // 場次沒填住宿晚數時後端會回傳原本「含住宿+早餐+晚餐」的講法,這裡不用再自己判斷。
   return `課程本身 ${_csiaJpyTwdLabel(course.price_jpy_basic, course.price_twd_basic)}・`
-       + `含住宿+早餐+晚餐 ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}`;
+       + `${course.with_stay_label || "含住宿+早餐+晚餐"} ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}`;
 }
 function _csiaStatusLabel(status) {
   return { open: "開放報名", confirmed: "已確定開班", cancelled: "已取消", closed: "已截止報名" }[status] || status;
@@ -6100,7 +6108,7 @@ function onCsiaCourseSelectChange() {
   }
   optSel.innerHTML = `
     <option value="basic">課程本身 - ${_csiaJpyTwdLabel(course.price_jpy_basic, course.price_twd_basic)}</option>
-    <option value="with_stay">含住宿+早餐+晚餐 - ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}</option>`;
+    <option value="with_stay">${escapeHtml(course.with_stay_label || "含住宿+早餐+晚餐")} - ${_csiaJpyTwdLabel(course.price_jpy_with_stay, course.price_twd_with_stay)}</option>`;
   onCsiaPriceOptionChange();
 }
 function onCsiaPriceOptionChange() {

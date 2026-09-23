@@ -744,6 +744,8 @@ CREATE TABLE IF NOT EXISTS csia_courses (
     -- 讓會員從下拉選單挑選其中一種方案,並依匯率1:5(1新台幣=5日圓)同時換算顯示NT$。
     price_jpy_basic INTEGER,          -- 方案一:課程本身費用(不含住宿餐食),日圓
     price_jpy_with_stay INTEGER,      -- 方案二:含住宿+早餐+晚餐,日圓(尚未填寫前顯示「金額洽詢」)
+    nights_of_stay INTEGER,           -- 2026-09第七次改版:「含住宿+早餐+晚餐」方案實際包含的住宿晚數(選填,
+                                       -- 沒填時畫面上維持原本「含住宿+早餐+晚餐」的講法,不強制顯示晚數)
     min_headcount INTEGER NOT NULL DEFAULT 5,   -- 開班門檻(未達此人數,主辦單位保留取消課程/考試之權利)
     max_headcount INTEGER NOT NULL DEFAULT 8,   -- 最大名額(額滿後不開放報名)
     status TEXT CHECK(status IN ('open','confirmed','cancelled','closed')) NOT NULL DEFAULT 'open',
@@ -886,14 +888,15 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
 -- 2026-09第四次改版:依你最新提供的價格整批更新7個場次的price_jpy_basic/
 -- price_jpy_with_stay(第7筆Jan 21-26你這次直接給的金額是330000,確認了上一版
 -- 「疑似JPY33000筆誤、先當作330000處理」的判斷是對的)。
-INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay) VALUES
- ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000),
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000),
- ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000),
- ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000),
- ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000),
- ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000);
+-- 2026-09第七次改版:同一批補上你提供的各場次住宿晚數(nights_of_stay)。
+INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay, nights_of_stay) VALUES
+ ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000, 4),
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000, 3),
+ ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000, 3),
+ ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000, 4),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000, 3),
+ ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000, 7),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000, 4);
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES
