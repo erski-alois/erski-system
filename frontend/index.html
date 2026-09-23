@@ -4205,6 +4205,29 @@ let _lastCoachStaff = null;
 let _lastCoachBodyElId = "staffPanelBody";
 let _lastCoachBookings = [];
 
+// 2026-09:教練頁原本是所有功能疊在同一長頁,改成比照員工後台(.admin-sidebar/
+// switchStaffTab)的左側分頁列表做法,依功能分組。教練頁有兩種進入方式(獨立的
+// /coach頁面 用coachSidebarNav/coachPanelBody,或舊有的員工後台登入 用
+// adminSidebarNav/staffPanelBody),左側導覽列的id前面統一加"coachnavbtn-"、
+// 分頁內容div統一加"coach-tab"class/"coachTab-"id前綴,避免跟員工後台自己的
+// navbtn-*/staffTab-*互相打架(尤其是兩者剛好都有的"帳號安全"分頁)。
+const COACH_TAB_GROUPS = [
+  { title: "課程", items: [["schedule", "我的課表與簽到"]] },
+  { title: "班表", items: [["leave", "請假/出差申請"]] },
+  { title: "教練資料", items: [["profile", "基本資料"], ["intro", "對外教練介紹"], ["certs", "證照檔案上傳"]] },
+  { title: "薪資", items: [["payroll", "我的薪資"]] },
+];
+let _lastCoachActiveTab = "schedule";
+function switchCoachTab(tabName) {
+  _lastCoachActiveTab = tabName;
+  document.querySelectorAll(".coach-tab").forEach(el => el.style.display = "none");
+  const pane = document.getElementById("coachTab-" + tabName);
+  if (pane) pane.style.display = "block";
+  document.querySelectorAll("[id^='coachnavbtn-']").forEach(btn => btn.classList.remove("active"));
+  const navBtn = document.getElementById("coachnavbtn-" + tabName);
+  if (navBtn) navBtn.classList.add("active");
+}
+
 // 教練點選「我的課表」裡的某一堂課,進入簽到頁面:呈現當天課程資訊,
 // 並讓教練輸入學員提供的上課碼/下課碼(日本教練課才有此機制,見booking.py說明)。
 function coachBookingDetailHtml(b) {
@@ -4324,148 +4347,189 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
   const upcomingLeave = mySchedule.filter(s => s.status !== "working");
   const locNames = details.location_option_ids.map(id => (locationOptions.find(l => l.id === id) || {}).name).filter(Boolean);
 
+  // 2026-09:教練頁左側導覽列跟"帳號安全"依bodyElId決定要寫進哪個sidebar
+  // (獨立/coach頁面用coachSidebarNav,舊有的員工後台登入用adminSidebarNav),
+  // 這裡整段sidebar.innerHTML都由這支函式自己負責(含品牌區塊),每次重繪
+  // 都會整個重畫一次,做法跟renderStaffPanel既有的admin側邊欄一致。
+  const sidebarElId = bodyElId === "coachPanelBody" ? "coachSidebarNav" : "adminSidebarNav";
+  const sidebarEl = document.getElementById(sidebarElId);
+  const brandSub = bodyElId === "coachPanelBody" ? "教練專屬頁面" : "教練專屬後台";
+  if (sidebarEl) {
+    sidebarEl.innerHTML = `
+      <div class="admin-sidebar-brand">
+        <div class="admin-sidebar-brand-logo">ER</div>
+        <div>
+          <div class="admin-sidebar-brand-name">ERSKI</div>
+          <div class="admin-sidebar-brand-sub">${brandSub}</div>
+        </div>
+      </div>
+      ${COACH_TAB_GROUPS.map(g => `
+        <div class="admin-sidebar-section">${g.title}</div>
+        ${g.items.map(([key, label]) => `
+          <button class="admin-sidebar-btn" id="coachnavbtn-${key}" onclick="switchCoachTab('${key}')">${label}</button>
+        `).join("")}
+      `).join("")}
+      <div class="admin-sidebar-section">帳號</div>
+      <button class="admin-sidebar-btn" id="coachnavbtn-account" onclick="switchCoachTab('account')">帳號安全(變更密碼)</button>
+    `;
+  }
+
   body.innerHTML = `
-    <h3 style="font-size:14px;">我的課表(未來)</h3>
-    ${myBookings.length
-      ? myBookings.map(b => `<div class="list-item" style="cursor:pointer;" onclick="openCoachAttendanceCheckin(${b.booking_ref_id})">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""} <span class="note">(點選查看/簽到)</span></div>`).join("")
-      : `<div class="list-item">目前沒有已排定的課程</div>`}
+    <div id="coachTab-schedule" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">我的課表(未來)</h3>
+      ${myBookings.length
+        ? myBookings.map(b => `<div class="list-item" style="cursor:pointer;" onclick="openCoachAttendanceCheckin(${b.booking_ref_id})">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""} <span class="note">(點選查看/簽到)</span></div>`).join("")
+        : `<div class="list-item">目前沒有已排定的課程</div>`}
 
-    <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
-    ${myHistory.length
-      ? myHistory.map(b => `<div class="list-item">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""}${b.status === "cancelled" ? "<span class=\"note\">(已取消)</span>" : ""}</div>`).join("")
-      : `<div class="list-item">目前沒有上課歷史紀錄</div>`}
-
-    <h3 style="margin-top:14px; font-size:14px;">我的請假紀錄</h3>
-    ${upcomingLeave.length
-      ? upcomingLeave.map(s => `<div class="list-item">${s.work_date} — ${statusLabel[s.status] || s.status}${s.reason ? "("+escapeHtml(s.reason)+")" : ""}</div>`).join("")
-      : `<div class="list-item">目前沒有請假紀錄</div>`}
-
-    <h3 style="margin-top:14px; font-size:14px;">申請請假/出差</h3>
-    <label>日期</label>
-    <input type="date" id="coachLeaveDate">
-    <label>類型</label>
-    <select id="coachLeaveStatus">
-      <option value="personal_leave">事假</option>
-      <option value="sick_leave">病假</option>
-      <option value="annual_leave">特休</option>
-      <option value="business_trip">出差</option>
-      <option value="working">恢復上班(取消請假)</option>
-    </select>
-    <label>備註</label>
-    <input id="coachLeaveReason">
-    <button class="small" onclick="submitCoachLeave(${staff.id})">送出</button>
-    <div id="coachLeaveStatusMsg" style="margin-top:6px;"></div>
-
-    <h3 style="margin-top:14px; font-size:14px;">我的基本資料</h3>
-    <label>姓名</label><input id="coachSelfName" value="${(basicInfo.name || "").replace(/"/g,'&quot;')}">
-    <label>暱稱</label><input id="coachSelfNickname" value="${(basicInfo.nickname || "").replace(/"/g,'&quot;')}">
-    <label>身分證字號</label><input id="coachSelfIdNumber" value="${(basicInfo.id_number || "").replace(/"/g,'&quot;')}">
-    <label>出生年月日</label>
-    <div class="row">
-      <select id="coachSelfBirthYear"><option value="">年</option></select>
-      <select id="coachSelfBirthMonth"><option value="">月</option></select>
-      <select id="coachSelfBirthDay"><option value="">日</option></select>
-    </div>
-    <label>地址</label><input id="coachSelfAddress" value="${(basicInfo.address || "").replace(/"/g,'&quot;')}">
-    <label>電話</label><input id="coachSelfPhone" value="${(basicInfo.phone || "").replace(/"/g,'&quot;')}">
-    <label>Email</label><input id="coachSelfEmail" value="${(basicInfo.email || "").replace(/"/g,'&quot;')}">
-    <label>LINE</label><input id="coachSelfLine" value="${(basicInfo.line_id || "").replace(/"/g,'&quot;')}">
-    <label>Instagram</label><input id="coachSelfIG" value="${(basicInfo.instagram || "").replace(/"/g,'&quot;')}">
-    <label>Facebook</label><input id="coachSelfFB" value="${(basicInfo.facebook || "").replace(/"/g,'&quot;')}">
-    <p class="note" style="margin-top:6px;">年資:${details.years_of_service != null ? details.years_of_service+"年" : "尚未設定"}・合約年:${details.contract_year || "尚未設定"}(以上兩項由主管設定,此處唯讀)</p>
-    <button class="small" onclick="saveCoachOwnBasicInfo(${staff.id})">儲存基本資料</button>
-    <div id="coachSelfBasicStatus" style="margin-top:6px;"></div>
-
-    <h3 style="margin-top:14px; font-size:14px;">帳號安全(變更密碼)</h3>
-    <label>目前密碼</label><input type="password" id="coachSelfCurrentPw">
-    <label>新密碼(至少6碼)</label><input type="password" id="coachSelfNewPw">
-    <label>再輸入一次新密碼</label><input type="password" id="coachSelfNewPwConfirm">
-    <button class="small" onclick="changeCoachOwnPassword(${staff.id})">變更密碼</button>
-    <div id="coachSelfPwStatus" style="margin-top:6px;"></div>
-
-    <h3 style="margin-top:14px; font-size:14px;">我的教練介紹(對外顯示於教練團隊頁面)</h3>
-    <label>職稱</label>
-    <select id="coachSelfRank">
-      <option value="">未選擇</option>
-      <option value="主管" ${details.rank==="主管"?"selected":""}>主管</option>
-      <option value="訓練官" ${details.rank==="訓練官"?"selected":""}>訓練官</option>
-      <option value="教練" ${details.rank==="教練"?"selected":""}>教練</option>
-    </select>
-
-    <label style="margin-top:8px;">教練能力(可複選,可新增選項)</label>
-    <div class="row" style="flex-wrap:wrap;" id="coachSelfCapWrap">
-      ${capabilityOptions.map(cap => `
-        <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
-          <input type="checkbox" class="coachSelfCap" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${escapeHtml(cap.name)}
-        </label>`).join("")}
-    </div>
-    <div class="row">
-      <input id="coachSelfNewCapability" placeholder="新增能力選項名稱">
-      <button class="small secondary" onclick="addCapabilityOptionSelf(${staff.id})">新增選項</button>
+      <h3 style="margin-top:14px; font-size:14px;">我的上課歷史(過去)</h3>
+      ${myHistory.length
+        ? myHistory.map(b => `<div class="list-item">${b.date} ${b.time} — ${escapeHtml(b.member_name)} — ${b.category_label}${b.resort_name ? "・"+escapeHtml(b.resort_name) : ""}${b.status === "cancelled" ? "<span class=\"note\">(已取消)</span>" : ""}</div>`).join("")
+        : `<div class="list-item">目前沒有上課歷史紀錄</div>`}
     </div>
 
-    <label style="margin-top:8px;">滑行項目</label>
-    <select id="coachSelfDiscipline">
-      <option value="">未選擇</option>
-      <option value="ski" ${details.discipline==="ski"?"selected":""}>Ski(雙板)</option>
-      <option value="snowboard" ${details.discipline==="snowboard"?"selected":""}>Snowboard(單板)</option>
-      <option value="both" ${details.discipline==="both"?"selected":""}>雙板+單板</option>
-    </select>
+    <div id="coachTab-leave" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">我的請假紀錄</h3>
+      ${upcomingLeave.length
+        ? upcomingLeave.map(s => `<div class="list-item">${s.work_date} — ${statusLabel[s.status] || s.status}${s.reason ? "("+escapeHtml(s.reason)+")" : ""}</div>`).join("")
+        : `<div class="list-item">目前沒有請假紀錄</div>`}
 
-    <label style="margin-top:8px;">滑行專長</label>
-    <input id="coachSelfSpecialty" value="${(details.specialty || "").replace(/"/g, '&quot;')}" placeholder="例如:Freestyle、Carving、地形公園">
-
-    <label style="margin-top:8px;">雪齡</label>
-    <div class="row">
-      <input type="number" min="0" id="coachSelfSnowYears" style="max-width:120px;" value="${details.snow_years != null ? details.snow_years : ""}">
-      <span style="align-self:center;">年</span>
-    </div>
-
-    <label style="margin-top:8px;">教學年資(資歷)</label>
-    <div class="row">
-      <select id="coachSelfResumeYears" style="max-width:120px;">
-        <option value="">選擇年數</option>
-        ${Array.from({length:99}, (_, i) => i+1).map(n => `<option value="${n}" ${String(details.resume)===String(n)?"selected":""}>${n}</option>`).join("")}
+      <h3 style="margin-top:14px; font-size:14px;">申請請假/出差</h3>
+      <label>日期</label>
+      <input type="date" id="coachLeaveDate">
+      <label>類型</label>
+      <select id="coachLeaveStatus">
+        <option value="personal_leave">事假</option>
+        <option value="sick_leave">病假</option>
+        <option value="annual_leave">特休</option>
+        <option value="business_trip">出差</option>
+        <option value="working">恢復上班(取消請假)</option>
       </select>
-      <span style="align-self:center;">年</span>
+      <label>備註</label>
+      <input id="coachLeaveReason">
+      <button class="small" onclick="submitCoachLeave(${staff.id})">送出</button>
+      <div id="coachLeaveStatusMsg" style="margin-top:6px;"></div>
     </div>
 
-    <label style="margin-top:8px;">教學經歷</label>
-    <input id="coachSelfExperience" value="${(details.experience || "").replace(/"/g, '&quot;')}" placeholder="曾任職雪場/單位等敘述">
-
-    <label style="margin-top:8px;">其他相關經歷</label>
-    <input id="coachSelfOtherExperience" value="${(details.other_experience || "").replace(/"/g, '&quot;')}" placeholder="例如:相關運動背景、比賽經歷等">
-
-    <label style="margin-top:8px;">自我介紹(30字以內)</label>
-    <input id="coachSelfBioIntro" maxlength="30" value="${(details.bio_intro || "").replace(/"/g, '&quot;')}">
-
-    <label style="margin-top:8px;">給學員一句話(30字以內)</label>
-    <input id="coachSelfMessageToStudents" maxlength="30" value="${(details.message_to_students || "").replace(/"/g, '&quot;')}">
-
-    <label style="margin-top:8px;">代表教練一句話(30字以內)</label>
-    <input id="coachSelfMotto" maxlength="30" value="${(details.coach_motto || "").replace(/"/g, '&quot;')}">
-    ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${escapeHtml(details.self_intro)}</p>` : ""}
-
-    ${coachPhotoGallerySectionHtml(staff.id, "promo_photo", "宣傳照上傳(可多張,對外顯示於教練團隊頁面,最早上傳的一張會當封面照)", certFiles)}
-
-    <p class="note" style="margin-top:8px;">駐在地(教練分配):${locNames.join("、") || "尚未指派"}・合約類型:${CONTRACT_TYPE_LABEL[details.contract_type] || "尚未設定"}(以上由主管設定,此處唯讀)</p>
-
-    <label style="margin-top:8px;">證照(證照別 / 證照名稱 / 證照等級,可新增多筆)</label>
-    <div id="coachSelfCertList">
-      ${details.certifications.map(cert => coachCertRowHtmlSelf(cert.cert_type, cert.cert_name, cert.cert_level)).join("")}
+    <div id="coachTab-profile" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">我的基本資料</h3>
+      <label>姓名</label><input id="coachSelfName" value="${(basicInfo.name || "").replace(/"/g,'&quot;')}">
+      <label>暱稱</label><input id="coachSelfNickname" value="${(basicInfo.nickname || "").replace(/"/g,'&quot;')}">
+      <label>身分證字號</label><input id="coachSelfIdNumber" value="${(basicInfo.id_number || "").replace(/"/g,'&quot;')}">
+      <label>出生年月日</label>
+      <div class="row">
+        <select id="coachSelfBirthYear"><option value="">年</option></select>
+        <select id="coachSelfBirthMonth"><option value="">月</option></select>
+        <select id="coachSelfBirthDay"><option value="">日</option></select>
+      </div>
+      <label>地址</label><input id="coachSelfAddress" value="${(basicInfo.address || "").replace(/"/g,'&quot;')}">
+      <label>電話</label><input id="coachSelfPhone" value="${(basicInfo.phone || "").replace(/"/g,'&quot;')}">
+      <label>Email</label><input id="coachSelfEmail" value="${(basicInfo.email || "").replace(/"/g,'&quot;')}">
+      <label>LINE</label><input id="coachSelfLine" value="${(basicInfo.line_id || "").replace(/"/g,'&quot;')}">
+      <label>Instagram</label><input id="coachSelfIG" value="${(basicInfo.instagram || "").replace(/"/g,'&quot;')}">
+      <label>Facebook</label><input id="coachSelfFB" value="${(basicInfo.facebook || "").replace(/"/g,'&quot;')}">
+      <p class="note" style="margin-top:6px;">年資:${details.years_of_service != null ? details.years_of_service+"年" : "尚未設定"}・合約年:${details.contract_year || "尚未設定"}(以上兩項由主管設定,此處唯讀)</p>
+      <button class="small" onclick="saveCoachOwnBasicInfo(${staff.id})">儲存基本資料</button>
+      <div id="coachSelfBasicStatus" style="margin-top:6px;"></div>
     </div>
-    <button class="small secondary" onclick="addCoachCertRowSelf()">+ 新增證照</button>
 
-    <button style="margin-top:10px;" onclick="saveCoachOwnIntroSection(${staff.id})">儲存我的教練介紹</button>
-    <div id="coachSelfDetailsStatus" style="margin-top:6px;"></div>
+    <div id="coachTab-account" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">帳號安全(變更密碼)</h3>
+      <label>目前密碼</label><input type="password" id="coachSelfCurrentPw">
+      <label>新密碼(至少6碼)</label><input type="password" id="coachSelfNewPw">
+      <label>再輸入一次新密碼</label><input type="password" id="coachSelfNewPwConfirm">
+      <button class="small" onclick="changeCoachOwnPassword(${staff.id})">變更密碼</button>
+      <div id="coachSelfPwStatus" style="margin-top:6px;"></div>
+    </div>
 
-    <h3 style="margin-top:14px; font-size:14px;">證照檔案上傳(可上傳多張圖片或PDF)</h3>
-    ${coachCertFileSectionHtml(staff.id, "ski_license", "滑雪證照上傳", certFiles)}
-    ${coachCertFileSectionHtml(staff.id, "related_license", "相關證照上傳", certFiles)}
-    ${coachCertFileSectionHtml(staff.id, "other_license", "其他證照上傳", certFiles)}
+    <div id="coachTab-intro" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">我的教練介紹(對外顯示於教練團隊頁面)</h3>
+      <label>職稱</label>
+      <select id="coachSelfRank">
+        <option value="">未選擇</option>
+        <option value="主管" ${details.rank==="主管"?"selected":""}>主管</option>
+        <option value="訓練官" ${details.rank==="訓練官"?"selected":""}>訓練官</option>
+        <option value="教練" ${details.rank==="教練"?"selected":""}>教練</option>
+      </select>
 
-    <h3 style="margin-top:14px; font-size:14px;">我的薪資</h3>
-    ${renderCoachPayrollSectionHtml(myPayroll)}
+      <label style="margin-top:8px;">教練能力(可複選,可新增選項)</label>
+      <div class="row" style="flex-wrap:wrap;" id="coachSelfCapWrap">
+        ${capabilityOptions.map(cap => `
+          <label style="display:flex; align-items:center; gap:4px; width:auto; margin:4px 10px 4px 0;">
+            <input type="checkbox" class="coachSelfCap" value="${cap.id}" ${details.capability_option_ids.includes(cap.id)?"checked":""}> ${escapeHtml(cap.name)}
+          </label>`).join("")}
+      </div>
+      <div class="row">
+        <input id="coachSelfNewCapability" placeholder="新增能力選項名稱">
+        <button class="small secondary" onclick="addCapabilityOptionSelf(${staff.id})">新增選項</button>
+      </div>
+
+      <label style="margin-top:8px;">滑行項目</label>
+      <select id="coachSelfDiscipline">
+        <option value="">未選擇</option>
+        <option value="ski" ${details.discipline==="ski"?"selected":""}>Ski(雙板)</option>
+        <option value="snowboard" ${details.discipline==="snowboard"?"selected":""}>Snowboard(單板)</option>
+        <option value="both" ${details.discipline==="both"?"selected":""}>雙板+單板</option>
+      </select>
+
+      <label style="margin-top:8px;">滑行專長</label>
+      <input id="coachSelfSpecialty" value="${(details.specialty || "").replace(/"/g, '&quot;')}" placeholder="例如:Freestyle、Carving、地形公園">
+
+      <label style="margin-top:8px;">雪齡</label>
+      <div class="row">
+        <input type="number" min="0" id="coachSelfSnowYears" style="max-width:120px;" value="${details.snow_years != null ? details.snow_years : ""}">
+        <span style="align-self:center;">年</span>
+      </div>
+
+      <label style="margin-top:8px;">教學年資(資歷)</label>
+      <div class="row">
+        <select id="coachSelfResumeYears" style="max-width:120px;">
+          <option value="">選擇年數</option>
+          ${Array.from({length:99}, (_, i) => i+1).map(n => `<option value="${n}" ${String(details.resume)===String(n)?"selected":""}>${n}</option>`).join("")}
+        </select>
+        <span style="align-self:center;">年</span>
+      </div>
+
+      <label style="margin-top:8px;">教學經歷</label>
+      <input id="coachSelfExperience" value="${(details.experience || "").replace(/"/g, '&quot;')}" placeholder="曾任職雪場/單位等敘述">
+
+      <label style="margin-top:8px;">其他相關經歷</label>
+      <input id="coachSelfOtherExperience" value="${(details.other_experience || "").replace(/"/g, '&quot;')}" placeholder="例如:相關運動背景、比賽經歷等">
+
+      <label style="margin-top:8px;">自我介紹(30字以內)</label>
+      <input id="coachSelfBioIntro" maxlength="30" value="${(details.bio_intro || "").replace(/"/g, '&quot;')}">
+
+      <label style="margin-top:8px;">給學員一句話(30字以內)</label>
+      <input id="coachSelfMessageToStudents" maxlength="30" value="${(details.message_to_students || "").replace(/"/g, '&quot;')}">
+
+      <label style="margin-top:8px;">代表教練一句話(30字以內)</label>
+      <input id="coachSelfMotto" maxlength="30" value="${(details.coach_motto || "").replace(/"/g, '&quot;')}">
+      ${details.self_intro ? `<p class="note" style="margin-top:6px;">舊版「自我介紹/給學員的一句話」欄位(僅供參考,不再編輯):${escapeHtml(details.self_intro)}</p>` : ""}
+
+      ${coachPhotoGallerySectionHtml(staff.id, "promo_photo", "宣傳照上傳(可多張,對外顯示於教練團隊頁面,最早上傳的一張會當封面照)", certFiles)}
+
+      <p class="note" style="margin-top:8px;">駐在地(教練分配):${locNames.join("、") || "尚未指派"}・合約類型:${CONTRACT_TYPE_LABEL[details.contract_type] || "尚未設定"}(以上由主管設定,此處唯讀)</p>
+
+      <label style="margin-top:8px;">證照(證照別 / 證照名稱 / 證照等級,可新增多筆)</label>
+      <div id="coachSelfCertList">
+        ${details.certifications.map(cert => coachCertRowHtmlSelf(cert.cert_type, cert.cert_name, cert.cert_level)).join("")}
+      </div>
+      <button class="small secondary" onclick="addCoachCertRowSelf()">+ 新增證照</button>
+
+      <button style="margin-top:10px;" onclick="saveCoachOwnIntroSection(${staff.id})">儲存我的教練介紹</button>
+      <div id="coachSelfDetailsStatus" style="margin-top:6px;"></div>
+    </div>
+
+    <div id="coachTab-certs" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">證照檔案上傳(可上傳多張圖片或PDF)</h3>
+      ${coachCertFileSectionHtml(staff.id, "ski_license", "滑雪證照上傳", certFiles)}
+      ${coachCertFileSectionHtml(staff.id, "related_license", "相關證照上傳", certFiles)}
+      ${coachCertFileSectionHtml(staff.id, "other_license", "其他證照上傳", certFiles)}
+    </div>
+
+    <div id="coachTab-payroll" class="coach-tab" style="display:none;">
+      <h3 style="font-size:14px;">我的薪資</h3>
+      ${renderCoachPayrollSectionHtml(myPayroll)}
+    </div>
   `;
   populateBirthDateSelects("coachSelfBirthYear", "coachSelfBirthMonth", "coachSelfBirthDay");
   if (basicInfo.birthday) {
@@ -4474,6 +4538,9 @@ async function renderCoachOwnPanel(staff, bodyElId = "staffPanelBody") {
     document.getElementById("coachSelfBirthMonth").value = String(parseInt(bm));
     document.getElementById("coachSelfBirthDay").value = String(parseInt(bd));
   }
+  // 重新整理時(例如儲存完某個分頁的資料後refreshCoachPanel會整個重畫)記得原本
+  // 停在哪個分頁,不要每次都跳回「我的課表與簽到」,避免使用者儲存完又要重新點一次分頁。
+  switchCoachTab(_lastCoachActiveTab);
 }
 function coachCertRowHtmlSelf(certType, certName, certLevel) {
   return `
