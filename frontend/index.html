@@ -420,7 +420,8 @@
             <h3 style="font-size:14px;">建立會員資料</h3>
             <p class="note" style="margin-top:-4px;">請填寫姓名、手機、Email 完成註冊,其餘個人資料(出生年月日、地址、緊急聯絡人等)註冊完成後可以到「會員中心」隨時補上。</p>
             <label>姓名</label><input id="mName" placeholder="請輸入姓名">
-            <label>手機號碼</label><input id="mPhone" placeholder="例如:0912345678" inputmode="numeric">
+            <label>手機號碼</label><input id="mPhone" placeholder="例如:0912345678" inputmode="numeric" oninput="checkPhoneForLegacyMember()">
+            <div id="mPhoneLegacyMatchNote" class="note" style="display:none; margin-top:-8px; margin-bottom:8px; color:#2563eb;"></div>
             <label>Email</label><input id="mEmail" placeholder="you@example.com" type="email">
             <div id="mPasswordFieldsWrap">
               <label>設定登入密碼(至少6碼)</label><input id="mPassword" type="password">
@@ -1583,6 +1584,10 @@ function showMemberCreateForm() {
   const form = document.getElementById("memberCreateForm");
   form.style.display = "block";
   form.scrollIntoView({ behavior: "smooth", block: "start" });
+  // 2026-09新增:每次打開這個表單(不管是走哪個入口進來的)都重置「舊會員資料比對」
+  // 的狀態,避免上一次填的手機號碼比對結果殘留,誤帶到這一次的註冊送出。
+  _legacyMemberMatch = null;
+  document.getElementById("mPhoneLegacyMatchNote").style.display = "none";
 }
 function cancelMemberCreate() {
   document.getElementById("memberCreateForm").style.display = "none";
@@ -1683,6 +1688,41 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || "").trim());
 }
 
+// 2026-09新增:配合股東/老闆後台「資料匯入」功能匯入的舊會員名冊(見後台
+// 資料匯入頁的「會員帳號」匯入類型)。手機號碼填成完整台灣手機格式時,即時
+// 呼叫後端比對是否有相符的舊會員資料,有的話提醒使用者並自動帶入姓名——
+// 緊急聯絡人資料這個表單沒有對應欄位可顯示(註冊時本來就不收集這項,見上面
+// 「其餘個人資料...註冊完成後可以到會員中心隨時補上」的說明),但送出註冊時
+// 後端會直接沿用舊資料裡原本的緊急聯絡人值,不需要在這裡另外顯示/重填一次。
+// 只在手機號碼是完整格式時才打API,避免打字過程中每敲一碼就打一次無意義的請求。
+let _legacyMemberMatch = null; // {legacy_member_id, phone} 或 null
+async function checkPhoneForLegacyMember() {
+  const phone = document.getElementById("mPhone").value.replace(/[\s-]/g, "");
+  const noteEl = document.getElementById("mPhoneLegacyMatchNote");
+  if (!isValidTwPhone(phone)) {
+    _legacyMemberMatch = null;
+    noteEl.style.display = "none";
+    return;
+  }
+  const { ok, data } = await api("/auth/lookup-member-by-phone", {
+    method: "POST", body: JSON.stringify({ phone })
+  });
+  // 打這支API的過程中使用者可能又繼續改手機號碼,回來時要再確認一次還是同一組
+  // 號碼,不然比對結果可能會蓋到使用者這時候已經改過的欄位上。
+  if (document.getElementById("mPhone").value.replace(/[\s-]/g, "") !== phone) return;
+  if (!ok || !data.found) {
+    _legacyMemberMatch = null;
+    noteEl.style.display = "none";
+    return;
+  }
+  _legacyMemberMatch = { legacy_member_id: data.legacy_member_id, phone };
+  if (!document.getElementById("mName").value.trim()) {
+    document.getElementById("mName").value = data.name || "";
+  }
+  noteEl.style.display = "block";
+  noteEl.innerHTML = `找到這個手機號碼的舊會員資料${data.name ? `(${escapeHtml(data.name)})` : ""},已自動帶入姓名${data.emergency_contact_name ? ",緊急聯絡人資料("+escapeHtml(data.emergency_contact_name)+")也會一併沿用" : ""},送出後不會產生重複的會員紀錄。`;
+}
+
 async function createMember() {
   const name = document.getElementById("mName").value.trim();
   const phone = document.getElementById("mPhone").value.replace(/[\s-]/g, "");
@@ -1697,6 +1737,14 @@ async function createMember() {
   const body = { name, phone, email, auth_provider: window._pendingProvider };
   if (window._pendingProvider === "line") {
     body.line_user_id = window._pendingExternalId;
+  }
+  // 2026-09新增:手機號碼比對到舊會員資料的話(見checkPhoneForLegacyMember),
+  // 把legacy_member_id一併送出,後端會拿去「認領」那筆舊資料,不會另外新增一筆
+  // 重複的會員。這裡再次確認_legacyMemberMatch記住的手機號碼跟現在要送出的
+  // 手機號碼一致,避免使用者比對到A手機的舊資料後又把手機改成B卻沒有觸發
+  // 重新比對(理論上oninput已經涵蓋所有異動,這裡是多一層保險)。
+  if (_legacyMemberMatch && _legacyMemberMatch.phone === phone) {
+    body.legacy_member_id = _legacyMemberMatch.legacy_member_id;
   }
   // 2026-09新增:Email註冊(目前唯一真正驗證密碼的登入方式)需要一併設定登入密碼;
   // Google/LINE/Apple(模擬OAuth)沒有密碼欄位,不受影響。

@@ -343,20 +343,77 @@ def create_member(data: dict) -> dict:
             conn.close()
             raise ValueError("此Email已經註冊過會員,請直接使用登入方式登入,或改用其他Email註冊")
 
+    # 2026-09新增:「認領」已匯入的舊會員資料(見admin_import_members/
+    # find_claimable_legacy_member說明)。前端在填手機號碼時已經先呼叫
+    # /auth/lookup-member-by-phone比對過一次、把結果的legacy_member_id
+    # 一併帶進這支API,但這裡不能只信任前端傳來的id——一定要用同一套
+    # find_claimable_legacy_member()的條件(phone相符+auth_provider='email'+
+    # password_hash為NULL+line_user_id為NULL)在後端重新驗證一次,確認這筆
+    # 資料現在仍然是「尚未有人認領」的狀態,避免被拿id亂猜去頂替別人已經在用的帳號。
+    # 驗證通過就直接UPDATE這筆既有列(沿用同一個會員id,姓名/Email/登入方式換成
+    # 這次註冊填的新資料,但故意不去動emergency_contact_name/emergency_contact_phone
+    # 這兩欄——這正是「自動帶入緊急聯絡人資料」的做法,維持舊資料裡本來就有的值不變,
+    # 不需要額外UPDATE),不會另外INSERT一筆造成同一個人有兩筆會員紀錄。
+    claim_target = None
+    legacy_member_id = data.get("legacy_member_id")
+    if legacy_member_id and phone:
+        claim_target = find_claimable_legacy_member(phone, member_id=legacy_member_id)
+
     password_hash = new_password_hash(password) if (auth_provider == "email" and password) else None
-    cur = conn.execute(
-        """INSERT INTO members (name, phone, line_user_id, email, auth_provider, password_hash)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (
-            name, phone,
-            data.get("line_user_id"), email, auth_provider, password_hash,
-        ),
-    )
+
+    if claim_target:
+        conn.execute(
+            """UPDATE members SET name=?, phone=?, line_user_id=?, email=?, auth_provider=?, password_hash=?
+               WHERE id=?""",
+            (name, phone, data.get("line_user_id"), email, auth_provider, password_hash, claim_target["id"]),
+        )
+        member_id = claim_target["id"]
+    else:
+        cur = conn.execute(
+            """INSERT INTO members (name, phone, line_user_id, email, auth_provider, password_hash)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                name, phone,
+                data.get("line_user_id"), email, auth_provider, password_hash,
+            ),
+        )
+        member_id = cur.lastrowid
     conn.commit()
-    member_id = cur.lastrowid
     row = conn.execute("SELECT * FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
     return dict(row)
+
+
+def find_claimable_legacy_member(phone: str, member_id: int = None) -> dict | None:
+    """2026-09新增:依電話比對是否有「已匯入但尚未有人認領」的舊會員資料(見
+    app.py::admin_import_members,股東/老闆後台的「資料匯入」功能匯入既有會員
+    名冊用)。判斷條件故意訂得很嚴格——phone相符 + auth_provider='email' +
+    password_hash為NULL + line_user_id為NULL:這個組合只有匯入舊資料這條路徑
+    會產生(正常Email註冊流程的create_member()一定會同時設定密碼,Google/LINE
+    走的auth_provider也不會是'email'),確保不會誤把別人正在使用中的真實帳號
+    當成「可認領」,被拿電話號碼亂猜就頂替掉。
+
+    member_id有帶的話,額外檢查id是否吻合(create_member()認領時用,前端傳來的
+    legacy_member_id要在後端重新驗證,不能只信任前端);沒帶的話單純依電話查詢
+    (lookup_member_by_phone這支公開API用,讓註冊表單即時提示+帶入姓名/緊急聯絡人)。"""
+    phone = re.sub(r"[\s-]", "", phone or "")
+    if not phone:
+        return None
+    conn = get_conn()
+    if member_id:
+        row = conn.execute(
+            """SELECT id, name, emergency_contact_name, emergency_contact_phone FROM members
+               WHERE id=? AND phone=? AND auth_provider='email' AND password_hash IS NULL AND line_user_id IS NULL""",
+            (member_id, phone),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT id, name, emergency_contact_name, emergency_contact_phone FROM members
+               WHERE phone=? AND auth_provider='email' AND password_hash IS NULL AND line_user_id IS NULL""",
+            (phone,),
+        ).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 REQUIRED_PROFILE_FIELDS = [

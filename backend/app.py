@@ -886,6 +886,31 @@ def member_login():
     return jsonify(result)
 
 
+@app.route("/api/auth/lookup-member-by-phone", methods=["POST"])
+def lookup_member_by_phone():
+    """2026-09新增:配合股東/老闆後台「資料匯入」功能匯入的舊會員名冊(見
+    admin_import_members),會員在「建立會員資料」表單填手機號碼時,前端會即時
+    呼叫這支API比對是否有相符的舊資料,有的話回傳姓名/緊急聯絡人資訊給前端提醒
+    +自動帶入姓名,並回傳legacy_member_id讓正式送出註冊(/auth/create-member)時
+    可以「認領」這筆舊資料,不會產生重複會員。這支API本身不需要登入(註冊流程
+    本來就是未登入狀態),只回傳姓名/緊急聯絡人這種提醒用的基本資訊,不回傳
+    Email/生日/地址等其他個資欄位,避免被拿來亂槍打鳥反查會員個資。"""
+    d = request.json or {}
+    phone = d.get("phone") or ""
+    if not auth.is_valid_tw_phone(phone):
+        return jsonify({"found": False})
+    match = auth.find_claimable_legacy_member(phone)
+    if not match:
+        return jsonify({"found": False})
+    return jsonify({
+        "found": True,
+        "legacy_member_id": match["id"],
+        "name": match["name"],
+        "emergency_contact_name": match["emergency_contact_name"],
+        "emergency_contact_phone": match["emergency_contact_phone"],
+    })
+
+
 @app.route("/api/auth/create-member", methods=["POST"])
 def create_member():
     try:
