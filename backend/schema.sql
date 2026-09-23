@@ -891,7 +891,7 @@ INSERT INTO csia_courses (level, batch_label, language, course_name, format_note
  ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000),
  ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000),
  ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 262000),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000),
  ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000),
  ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000);
 
@@ -927,20 +927,3 @@ INSERT INTO insurance_brackets
  (40101, 42000, 42000, 1050, 3675, 651, 2032, 2520),
  (42001, 43900, 43900, 1098, 3841, 681, 2124, 2634),
  (43901, 999999999, 45800, 1145, 4008, 710, 2216, 2748);
-
--- TP 營運回寫：每筆 TP 操作皆保留唯一識別碼，避免網路重送造成重複入帳。
-CREATE TABLE IF NOT EXISTS tp_writeback_actions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    action_id TEXT NOT NULL UNIQUE,
-    action_type TEXT NOT NULL,
-    target_type TEXT NOT NULL,
-    target_source_id TEXT NOT NULL,
-    actor_staff_source_id INTEGER NOT NULL REFERENCES staff(id),
-    payload_json TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('received', 'applied', 'rejected')),
-    result_json TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_tp_writeback_actions_status_created
-ON tp_writeback_actions(status, created_at);
