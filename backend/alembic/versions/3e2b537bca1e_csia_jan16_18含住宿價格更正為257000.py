@@ -14,7 +14,7 @@ Jan16-18場次的價格會跟同樣是「3 Days course」的Jan9-11(第一梯)�
 延續既有設計)。
 
 Revision ID: 3e2b537bca1e
-Revises: 84f5beee3f57
+Revises: b0e1c2d3f4a5
 Create Date: 2026-09-23 00:00:00.000000
 
 """
@@ -25,7 +25,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '3e2b537bca1e'
-down_revision: Union[str, Sequence[str], None] = '84f5beee3f57'
+down_revision: Union[str, Sequence[str], None] = 'b0e1c2d3f4a5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
