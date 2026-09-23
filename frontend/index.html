@@ -167,6 +167,19 @@
   .status-tag.ok { background:#e7f6ec; color:#1a7d3a; }
   .status-tag.warn { background:#fdf1dc; color:#a6650a; }
 
+  /* 「送出報名前,請先完成以下3件事」編號檢查清單,用來取代原本容易被忽略的
+     一小段note文字——跟表單本身「①②③...」的編號風格呼應,方案二(2026-09)。 */
+  .checklist-notice { background:#f7f9fb; border:1px solid #e2e6ea; border-radius:10px;
+              padding:14px; margin:0 0 14px; }
+  .checklist-notice .checklist-notice-title { font-size:13.5px; font-weight:700; color:#1a2433; margin-bottom:10px; }
+  .checklist-notice .checklist-notice-item { display:flex; align-items:flex-start; gap:8px; font-size:12.5px;
+                     color:#3a4452; line-height:1.6; margin-bottom:8px; }
+  .checklist-notice .checklist-notice-item:last-child { margin-bottom:0; }
+  .checklist-notice .checklist-notice-num { flex-shrink:0; width:20px; height:20px; border-radius:50%; background:#000;
+                    color:#fff; font-size:11px; font-weight:700; display:flex; align-items:center;
+                    justify-content:center; margin-top:1px; }
+  .checklist-notice .checklist-notice-item b { color:#000; }
+
   a.back { color: #2563eb; cursor: pointer; font-size: 13px; display:inline-block; margin-bottom:8px; }
   pre { background: #0d1b2a; color: #7ee787; padding: 10px; border-radius: 8px;
         overflow-x: auto; font-size: 11px; max-height: 160px; }
@@ -803,10 +816,12 @@
 
         <div class="card">
           <h3>線上報名</h3>
-          <p class="note">
-            報名前請先完成CSIA官方Waiver線上填寫、CSIA會員加入(Level 1)或會員更新(Level 2),
-            並準備好2026/27雪季CSIA會員卡圖檔,填妥下方資料後一併送出。
-          </p>
+          <div class="checklist-notice">
+            <div class="checklist-notice-title">送出報名前,請先完成以下3件事</div>
+            <div class="checklist-notice-item"><div class="checklist-notice-num">1</div><div><b>CSIA官方Waiver</b>線上填寫</div></div>
+            <div class="checklist-notice-item"><div class="checklist-notice-num">2</div><div><b>CSIA會員加入</b>(Level 1)或<b>會員更新</b>(Level 2)</div></div>
+            <div class="checklist-notice-item"><div class="checklist-notice-num">3</div><div>準備好<b>2026/27雪季CSIA會員卡圖檔</b></div></div>
+          </div>
 
           <label>① 選擇報名場次</label>
           <select id="csiaCourseSelect" onchange="onCsiaCourseSelectChange()"></select>
