@@ -889,6 +889,7 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
 -- price_jpy_with_stay(第7筆Jan 21-26你這次直接給的金額是330000,確認了上一版
 -- 「疑似JPY33000筆誤、先當作330000處理」的判斷是對的)。
 -- 2026-09第七次改版:同一批補上你提供的各場次住宿晚數(nights_of_stay)。
+-- 2026-09第八次改版:更正Jan 21-26這筆的住宿晚數,原本誤填4晚,應為6晚。
 INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay, nights_of_stay) VALUES
  ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000, 4),
  ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000, 3),
@@ -896,7 +897,7 @@ INSERT INTO csia_courses (level, batch_label, language, course_name, format_note
  ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000, 4),
  ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000, 3),
  ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000, 7),
- ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000, 4);
+ ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000, 6);
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES
