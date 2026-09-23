@@ -2017,8 +2017,8 @@ async function renderStaffPanel(staff) {
     const SECTION_ROLES = {
       coachschedule: ["cs","manager"], dashboard: ["cs","manager"], pending: ["cs","manager"],
       equipment: ["cs","manager"], faq: ["cs","manager"], assist: ["cs","manager"], overview: ["cs","manager"],
-      orders: ["cs"], japanbookings: ["cs"], coaches: ["cs"], resorts: ["cs"], partners: ["cs"],
-      japanattendance: ["cs"], checkin: ["cs"], groupassign: ["cs"], csia: ["cs"],
+      orders: ["cs"], japanbookings: ["cs"], coaches: ["cs"], resorts: ["cs"], partners: ["cs","manager"],
+      japanattendance: ["cs"], checkin: ["cs"], groupassign: ["cs","manager"], csia: ["cs"],
       finance: [], system: [],
     };
     const canSee = (sectionKey) => staff.role === "boss" || (SECTION_ROLES[sectionKey] || []).includes(staff.role);

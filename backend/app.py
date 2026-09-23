@@ -566,10 +566,10 @@ SECTION_ROLES = {
     "japanbookings":   {"cs"},              # 日本訂單管理(主管不開放)
     "coaches":         {"cs"},              # 教練管理(含教練駐在地/合約/時薪等人事資料,主管不開放)
     "resorts":         {"cs"},              # 雪場管理(主管不再開放)
-    "partners":        {"cs"},              # 合作單位(原本掛finance/僅老闆,這次獨立出來開放股東)
+    "partners":        {"cs", "manager"},   # 合作單位(原本掛finance/僅老闆,後開放股東,這次再開放主管)
     "japanattendance": {"cs"},              # 日本教練出勤管理(原教練出勤管理,改唯讀,主管不開放)
     "checkin":         {"cs"},              # 學員報到管理(原報到管理,主管不再開放)
-    "groupassign":     {"cs"},              # 教練指派管理(原團課教練指派,主管不再開放;新增可指派日本滑雪雪場)
+    "groupassign":     {"cs", "manager"},   # 教練指派管理(原團課教練指派;新增可指派日本滑雪雪場;主管這次重新開放)
     "finance":         set(),               # 管理報表/薪資管理/月結損益:僅老闆
     "system":          set(),               # 價格設定/資料匯入/清除測試資料:僅老闆
     "csia":            {"cs"},              # CSIA報名管理(新增,金流/報名資料相關,主管不開放,比照orders/japanbookings)
