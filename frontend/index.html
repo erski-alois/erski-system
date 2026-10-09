@@ -180,6 +180,12 @@
                     justify-content:center; margin-top:1px; }
   .checklist-notice .checklist-notice-item b { color:#000; }
 
+  /* CSIA考照專區:提醒資料會提供給CSIA總部(2026-10) */
+  .csia-data-notice { display:flex; align-items:flex-start; gap:8px; background:#fdf1dc;
+              border:1px solid #f0d9a8; border-radius:8px; padding:10px 12px; margin:0 0 14px;
+              font-size:12.5px; color:#8a5c1a; line-height:1.6; }
+  .csia-data-notice b { color:#a6650a; }
+
   /* 上課碼/下課碼QR顯示(會員端)+相機掃描(教練端),2026-09新增。 */
   .attendance-qr-toggle { font-size:12px; color:#2563eb; cursor:pointer; display:inline-block; margin:2px 0; }
   .attendance-qr-box { display:inline-block; width:104px; padding:6px; background:#fff; border:1px solid #e2e6ea;
@@ -804,6 +810,7 @@
       <div id="page-csia" class="page">
         <div class="card">
           <h3>CSIA滑雪教練考照專區</h3>
+          <div class="csia-data-notice"><div>⚠️</div><div>以下填寫的<b>相關資訊將會提供給CSIA總部</b>,請確實填寫。</div></div>
           <p class="note" style="margin:0 0 6px;"><b>場地</b>:宮城鬼首滑雪場(Onikoube, Miyagi)。</p>
           <p class="note" style="margin:0 0 6px;">
             <b>考試資格</b>:<br>
