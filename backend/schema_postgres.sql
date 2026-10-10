@@ -754,6 +754,11 @@ CREATE TABLE IF NOT EXISTS csia_courses (
                                        -- 沒填時畫面上維持原本「含住宿+早餐+晚餐」的講法,不強制顯示晚數)
     min_headcount INTEGER NOT NULL DEFAULT 5,   -- 開班門檻(未達此人數,主辦單位保留取消課程/考試之權利)
     max_headcount INTEGER NOT NULL DEFAULT 8,   -- 最大名額(額滿後不開放報名)
+    capacity_group_key TEXT,          -- 2026-10新增:「名額合併計算」用的代號(選填)。部分場次其實是
+                                       -- 同一批學員分階段上課的同一個班(例如「第一梯含預備課程」跟
+                                       -- 「第一梯」),名額不能各自獨立算到上限——同一個
+                                       -- capacity_group_key的場次,報名人數會合併計算,共用同一個
+                                       -- max_headcount額度。沒填(NULL)的場次維持原本各自獨立計算。
     status TEXT CHECK(status IN ('open','confirmed','cancelled','closed')) NOT NULL DEFAULT 'open',
     notes TEXT,                       -- 後台備註(不對外顯示)
     created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
@@ -896,14 +901,14 @@ INSERT INTO pricing_config (config_key, config_value, label) VALUES
 -- 「疑似JPY33000筆誤、先當作330000處理」的判斷是對的)。
 -- 2026-09第七次改版:同一批補上你提供的各場次住宿晚數(nights_of_stay)。
 -- 2026-09第八次改版:更正Jan 21-26這筆的住宿晚數,原本誤填4晚,應為6晚。
-INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay, nights_of_stay) VALUES
- ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000, 4),
- ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000, 3),
- ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000, 3),
- ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000, 4),
- ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000, 3),
- ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000, 7),
- ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000, 6);
+INSERT INTO csia_courses (level, batch_label, language, course_name, format_note, date_label, date_sort_key, price_jpy_basic, price_jpy_with_stay, nights_of_stay, capacity_group_key) VALUES
+ ('L1', '第一梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 8-11', '2027-01-08', 225000, 301000, 4, 'l1_batch1'),
+ ('L1', '第一梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 9-11', '2027-01-09', 200000, 257000, 3, 'l1_batch1'),
+ ('L1', '第二梯(英文班)', 'english', 'Level 1', '3 Days course', 'Jan 12-14', '2027-01-12', 200000, 257000, 3, NULL),
+ ('L1', '第三梯(中文翻譯班含預備課程)', 'chinese', 'Level 1', '1 Day Pre course + 3 Days course', 'Jan 15-18', '2027-01-15', 225000, 301000, 4, 'l1_batch3'),
+ ('L1', '第三梯(中文翻譯班)', 'chinese', 'Level 1', '3 Days course', 'Jan 16-18', '2027-01-16', 200000, 257000, 3, 'l1_batch3'),
+ ('L2', '第一梯(英文班含預備課程)', 'english', 'Level 2', '7 Days・1 Day Pre course + 6 Days course', 'Jan 20-26', '2027-01-20', 370000, 496000, 7, 'l2_batch1'),
+ ('L2', '第一梯(英文班)', 'english', 'Level 2', '6 Days course', 'Jan 21-26', '2027-01-21', 330000, 438000, 6, 'l2_batch1');
 
 -- FAQ示範資料
 INSERT INTO faq_entries (question, answer, keywords, category) VALUES

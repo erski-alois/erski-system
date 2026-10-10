@@ -111,6 +111,30 @@ def _course_registered_count(conn, course_id):
     ).fetchone()["c"]
 
 
+def _capacity_group_course_ids(conn, course):
+    """2026-10改版:依你的指示,部分場次其實是同一批學員分階段上課的同一個班
+    (例如「第一梯含預備課程」跟「第一梯」是同一批人先上預備課再接著上正式課,
+    不是兩批獨立的學員),名額不能各自獨立算到上限,要合併計算。
+
+    用capacity_group_key這個欄位標記:同一個group_key的場次共用同一個名額額度。
+    沒有設定group_key(NULL/空字串)的場次,維持原本只算自己這一筆的行為。"""
+    group_key = course["capacity_group_key"]
+    if not group_key:
+        return [course["id"]]
+    rows = conn.execute(
+        "SELECT id FROM csia_courses WHERE capacity_group_key=?", (group_key,)
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def _group_registered_count(conn, course):
+    """合併計算後的目前有效報名人數,見_capacity_group_course_ids說明。"""
+    return sum(
+        _course_registered_count(conn, cid)
+        for cid in _capacity_group_course_ids(conn, course)
+    )
+
+
 def list_courses_for_members():
     """會員瀏覽用:只回傳還沒取消的課程場次,附上目前有效報名人數/是否已額滿,
     讓前端可以直接顯示「尚可報名X人」或「名額已滿」,不用會員自己送出才知道滿了沒。"""
@@ -121,7 +145,7 @@ def list_courses_for_members():
     result = []
     for r in rows:
         d = dict(r)
-        d["registered_count"] = _course_registered_count(conn, r["id"])
+        d["registered_count"] = _group_registered_count(conn, r)
         d["is_full"] = d["registered_count"] >= r["max_headcount"]
         result.append(_with_stay_label(_with_price_display(d)))
     conn.close()
@@ -207,7 +231,7 @@ def create_registration(member_id, data):
         conn.close()
         raise ValueError("請選擇報名費的價格方案(課程本身 / 含住宿+早餐+晚餐)")
 
-    if _course_registered_count(conn, course["id"]) >= course["max_headcount"]:
+    if _group_registered_count(conn, course) >= course["max_headcount"]:
         conn.close()
         raise ValueError(f"這個課程場次名額已滿(上限{course['max_headcount']}人),請選擇其他場次或洽詢客服")
 
@@ -268,7 +292,7 @@ def admin_list_courses():
     result = []
     for r in rows:
         d = dict(r)
-        d["registered_count"] = _course_registered_count(conn, r["id"])
+        d["registered_count"] = _group_registered_count(conn, r)
         result.append(_with_stay_label(_with_price_display(d)))
     conn.close()
     return result
@@ -278,6 +302,7 @@ _COURSE_EDITABLE_FIELDS = (
     "level", "batch_label", "language", "course_name", "format_note",
     "date_label", "date_sort_key", "venue", "price_jpy_basic", "price_jpy_with_stay",
     "nights_of_stay", "min_headcount", "max_headcount", "status", "notes",
+    "capacity_group_key",
 )
 
 
@@ -298,15 +323,15 @@ def admin_create_course(data):
         """INSERT INTO csia_courses
            (level, batch_label, language, course_name, format_note, date_label, date_sort_key,
             venue, price_jpy_basic, price_jpy_with_stay, nights_of_stay, min_headcount, max_headcount,
-            status, notes)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            status, notes, capacity_group_key)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             data.get("level"), data.get("batch_label"), data.get("language"), data.get("course_name"),
             data.get("format_note"), data.get("date_label"), data.get("date_sort_key"),
             data.get("venue") or "宮城鬼首滑雪場 Onikoube, Miyagi",
             data.get("price_jpy_basic"), data.get("price_jpy_with_stay"), data.get("nights_of_stay"),
             data.get("min_headcount") or 5, data.get("max_headcount") or 8,
-            data.get("status") or "open", data.get("notes"),
+            data.get("status") or "open", data.get("notes"), data.get("capacity_group_key") or None,
         ),
     )
     new_id = cur.lastrowid

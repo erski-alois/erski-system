@@ -3736,7 +3736,7 @@ async function renderCsiaManageTab() {
       <b>${levelLabel[c.level] || c.level} ${escapeHtml(c.batch_label)} ${escapeHtml(c.course_name)}</b>
       <span class="status-tag ${c.status === "cancelled" ? "warn" : "ok"}">${statusLabel[c.status] || c.status}</span>
       <div class="list-item">${escapeHtml(c.date_label)}・${c.language === "chinese" ? "中文翻譯班" : "英文班"}${c.format_note ? `・${escapeHtml(c.format_note)}` : ""}</div>
-      <div class="list-item">目前報名人數:${c.registered_count}人</div>
+      <div class="list-item">目前報名人數:${c.registered_count}人${c.capacity_group_key ? `(與同代號「${escapeHtml(c.capacity_group_key)}」場次合併計算)` : ""}</div>
       <div class="field-grid" style="margin-top:8px;">
         <div><label>價格-課程本身(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceBasic-${c.id}" type="number" value="${c.price_jpy_basic === null || c.price_jpy_basic === undefined ? "" : c.price_jpy_basic}"></div>
         <div><label>價格-含住宿+早餐+晚餐(JPY,留空=金額洽詢)</label><input id="csiaCoursePriceWithStay-${c.id}" type="number" value="${c.price_jpy_with_stay === null || c.price_jpy_with_stay === undefined ? "" : c.price_jpy_with_stay}"></div>
@@ -3754,6 +3754,7 @@ async function renderCsiaManageTab() {
             <option value="cancelled" ${c.status==="cancelled"?"selected":""}>已取消</option>
           </select>
         </div>
+        <div><label>合併計算名額代號(選填,同代號的場次名額合併計算)</label><input id="csiaCourseGroupKey-${c.id}" value="${c.capacity_group_key || ""}" placeholder="例:l1_batch1"></div>
       </div>
       <label style="margin-top:8px;">備註(選填,會顯示給會員看)</label>
       <input id="csiaCourseNotes-${c.id}" value="${(c.notes || "").replace(/"/g,'&quot;')}">
@@ -3781,6 +3782,7 @@ async function renderCsiaManageTab() {
         <div><label>住宿晚數(選填)</label><input id="newCsiaNights" type="number" min="0"></div>
         <div><label>最少開班人數</label><input id="newCsiaMin" type="number" value="5"></div>
         <div><label>上限人數</label><input id="newCsiaMax" type="number" value="8"></div>
+        <div><label>合併計算名額代號(選填)</label><input id="newCsiaGroupKey" placeholder="例:l1_batch1"></div>
       </div>
       <button class="small" style="margin-top:8px;" onclick="createCsiaCourse()">新增場次</button>
       <div id="newCsiaCourseStatus" style="margin-top:6px;"></div>
@@ -3956,6 +3958,7 @@ async function saveCsiaCourse(courseId) {
   const priceBasicRaw = document.getElementById(`csiaCoursePriceBasic-${courseId}`).value;
   const priceWithStayRaw = document.getElementById(`csiaCoursePriceWithStay-${courseId}`).value;
   const nightsRaw = document.getElementById(`csiaCourseNights-${courseId}`).value;
+  const groupKeyRaw = document.getElementById(`csiaCourseGroupKey-${courseId}`).value.trim();
   const payload = {
     price_jpy_basic: priceBasicRaw === "" ? null : parseInt(priceBasicRaw),
     price_jpy_with_stay: priceWithStayRaw === "" ? null : parseInt(priceWithStayRaw),
@@ -3964,6 +3967,7 @@ async function saveCsiaCourse(courseId) {
     max_headcount: parseInt(document.getElementById(`csiaCourseMax-${courseId}`).value) || 8,
     status: document.getElementById(`csiaCourseStatus-${courseId}`).value,
     notes: document.getElementById(`csiaCourseNotes-${courseId}`).value || null,
+    capacity_group_key: groupKeyRaw === "" ? null : groupKeyRaw,
   };
   const { ok, data } = await api(`/admin/csia/courses/${courseId}`, { method: "PUT", body: JSON.stringify(payload) });
   const statusEl = document.getElementById(`csiaCourseStatus2-${courseId}`);
@@ -3995,6 +3999,7 @@ async function createCsiaCourse() {
     nights_of_stay: nightsRaw === "" ? null : parseInt(nightsRaw),
     min_headcount: parseInt(document.getElementById("newCsiaMin").value) || 5,
     max_headcount: parseInt(document.getElementById("newCsiaMax").value) || 8,
+    capacity_group_key: document.getElementById("newCsiaGroupKey").value.trim() || null,
   };
   const { ok, data } = await api("/admin/csia/courses", { method: "POST", body: JSON.stringify(payload) });
   statusEl.innerHTML = ok ? `<span class="status-tag ok">新增成功</span>` : `<span class="status-tag warn">${data.error}</span>`;
