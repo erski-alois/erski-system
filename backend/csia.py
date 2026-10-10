@@ -219,9 +219,12 @@ def create_registration(member_id, data):
     if not data.get("waiver_confirmed"):
         conn.close()
         raise ValueError("請先完成CSIA Waiver線上填寫,並勾選確認")
-    if not data.get("membership_action_confirmed"):
+    # 2026-10改版:依你的指示,會員卡上傳+這個確認勾選只有Level 2才需要(Level 1
+    # 不用上傳2026/27雪季會員卡),所以這裡改成只在報名場次是L2時才檢查,L1完全
+    # 不要求這個欄位(前端對應:L1會隱藏整個上傳欄位跟這個勾選項目)。
+    if course["level"] == "L2" and not data.get("membership_action_confirmed"):
         conn.close()
-        raise ValueError("請先完成CSIA會員加入(Level 1)或更新(Level 2),並勾選確認")
+        raise ValueError("請先完成CSIA會員資格更新,並上傳當年度會員卡及勾選確認")
     if not data.get("eligibility_confirmed"):
         conn.close()
         raise ValueError("請確認你的年齡、滑行程度、教學經驗及證照已符合這個等級的報名資格")
@@ -245,6 +248,9 @@ def create_registration(member_id, data):
     # 改價影響已經報名者原本看到、同意的金額。
     amount = course[_PRICE_OPTION_COLUMN[price_option]]
 
+    # Level 1不需要會員卡,membership_action_confirmed這欄存0(前端L1不顯示這個
+    # 勾選項目,上面的檢查也只在L2才要求,這裡存的值要跟著一致,不能都寫死1)。
+    membership_action_value = 1 if course["level"] == "L2" else 0
     cur = conn.execute(
         """INSERT INTO csia_registrations (
             member_id, course_id, waiver_confirmed, membership_action_confirmed,
@@ -257,7 +263,7 @@ def create_registration(member_id, data):
             eligibility_confirmed, price_option, amount
         ) VALUES (?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?)""",
         (
-            member_id, course["id"], 1, 1,
+            member_id, course["id"], 1, membership_action_value,
             data.get("membership_card_file_name"), data.get("membership_card_mime_type"), data.get("membership_card_image"),
             data.get("waiver_file_name"), data.get("waiver_mime_type"), data.get("waiver_image"),
             data.get("designation"), data.get("chinese_name").strip(), data.get("kanji_or_other_name"), data.get("examiner_call_name"),

@@ -914,9 +914,11 @@
             <input id="csiaReasonOther">
           </div>
 
-          <label style="margin-top:16px;">⑦ 上傳2026/27雪季CSIA會員卡</label>
-          <input type="file" accept="image/*,application/pdf" id="csiaMembershipCardFile" onchange="onCsiaMembershipCardFileChange()">
-          <div id="csiaMembershipCardPreview" class="note"></div>
+          <div id="csiaMembershipCardWrap">
+            <label style="margin-top:16px;">⑦ 上傳2026/27雪季CSIA會員卡</label>
+            <input type="file" accept="image/*,application/pdf" id="csiaMembershipCardFile" onchange="onCsiaMembershipCardFileChange()">
+            <div id="csiaMembershipCardPreview" class="note"></div>
+          </div>
 
           <label style="margin-top:16px;">⑦-2 CSIA Waiver線上填寫+上傳</label>
           <p class="note" style="margin:0 0 6px;">
@@ -932,10 +934,12 @@
             <input type="checkbox" id="csiaWaiverConfirmed" style="width:auto;">
             我已完成CSIA Waiver線上填寫,並已上傳完成證明
           </label>
+          <div id="csiaMembershipActionWrap">
           <label style="display:flex; align-items:center; gap:8px;">
             <input type="checkbox" id="csiaMembershipActionConfirmed" style="width:auto;">
-            我已完成CSIA會員加入(Level 1)或會員更新(Level 2)
+            我已更新會員資格並上傳當年度會員卡
           </label>
+          </div>
           <label style="display:flex; align-items:center; gap:8px;">
             <input type="checkbox" id="csiaEligibilityConfirmed" style="width:auto;">
             我確認自己的年齡、滑行程度、教學經驗及證照已符合這個等級的報名資格
@@ -6236,6 +6240,20 @@ function onCsiaCourseSelectChange() {
   document.getElementById("csiaCourseSelectHint").textContent = course
     ? `費用:${_csiaPriceLabel(course)}・尚可報名:${Math.max(0, course.max_headcount - course.registered_count)}人`
     : "";
+
+  // 2026-10改版:依你的指示,上傳2026/27雪季CSIA會員卡+「已更新會員資格」這個
+  // 勾選項目只有Level 2才需要,Level 1報名完全不顯示這兩個區塊(不是只是選填)。
+  const isLevel2 = !!(course && course.level === "L2");
+  document.getElementById("csiaMembershipCardWrap").style.display = isLevel2 ? "" : "none";
+  document.getElementById("csiaMembershipActionWrap").style.display = isLevel2 ? "" : "none";
+  if (!isLevel2) {
+    // 切回Level 1(或還沒選場次)時,順便清空已選的會員卡檔案跟勾選狀態,避免
+    // 使用者先選L2上傳了檔案、又改選L1,結果這些資料還留著跟著送出。
+    document.getElementById("csiaMembershipCardFile").value = "";
+    document.getElementById("csiaMembershipCardPreview").textContent = "";
+    document.getElementById("csiaMembershipActionConfirmed").checked = false;
+    _csiaMembershipCardData = null;
+  }
 
   const optSel = document.getElementById("csiaPriceOption");
   if (!course) {
