@@ -123,6 +123,12 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 MAIL_FROM = os.environ.get("MAIL_FROM", "ERSKI 滑雪急診室 <noreply@erskischool.com>")
 MAIL_CONFIGURED = bool(RESEND_API_KEY)
 
+# 2026-10新增:依你的指示「只要有人報名就自動通知」,各類課程報名/預約成立時會寄一封
+# 通知信到這個信箱(見booking.py的notify_staff_new_booking()/csia.py的呼叫處)。
+# 同樣依賴上面的RESEND_API_KEY/MAIL_CONFIGURED,尚未設定時這個通知會悄悄跳過
+# (不影響會員報名本身),可用環境變數STAFF_NOTIFY_EMAIL覆蓋預設信箱。
+STAFF_NOTIFY_EMAIL = os.environ.get("STAFF_NOTIFY_EMAIL", "erskischool@gmail.com")
+
 # 重設密碼信裡的連結網址前綴，預設跟GOOGLE_OAUTH_REDIRECT_URI/LINE_OAUTH_REDIRECT_URI
 # 一樣指向正式站網址；本機開發或有獨立網址的環境可用環境變數覆蓋。
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://app.erskischool.com").rstrip("/")

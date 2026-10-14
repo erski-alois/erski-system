@@ -11,6 +11,8 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from db import get_conn, rows_to_dicts, NOW_SQL
+import config
+import mailer
 import pricing
 
 TW_TZ = timezone(timedelta(hours=8))  # 台灣時區(UTC+8),伺服器主機時間可能是UTC,需明確換算
@@ -125,6 +127,31 @@ def log_notification(conn, member_id, notify_type, content, channel="system"):
            VALUES (?, ?, ?, ?, 'simulated')""",
         (member_id, channel, notify_type, content),
     )
+
+
+def notify_staff_new_booking(summary):
+    """2026-10新增:依你的指示「只要有人報名就自動通知」,各類課程報名/預約(體驗課、
+    包機、自主練習、團課、跳台、日本教練課、CSIA考照)成立時,寄一封通知信給客服信箱
+    (config.STAFF_NOTIFY_EMAIL),讓客服能即時知道有新單進來,不用一直手動刷後台看。
+
+    故意用try/except整個包起來:寄信失敗(例如RESEND_API_KEY還沒設定、Resend暫時
+    連不上)絕對不應該讓使用者的報名/預約失敗,只是這次客服沒收到通知信,後台的
+    報名/預約紀錄本身完全不受影響。LINE官方帳號通知目前先不做(你給的連結只是
+    「加好友」連結,無法直接拿來自動推播訊息,需要申請LINE Messaging API的頻道
+    存取權杖才能接,之後要補的話再說)。
+
+    呼叫端請在conn.commit()之後才呼叫這個函式——通知的應該是「已經確定成立」的
+    報名,交易還可能rollback時不要先通知,避免寄出「假報名」的通知信。"""
+    if not config.MAIL_CONFIGURED:
+        return
+    try:
+        mailer.send_email(
+            config.STAFF_NOTIFY_EMAIL,
+            f"[ER Ski新報名通知] {summary}",
+            f"<p>{summary}</p>",
+        )
+    except Exception:
+        pass
 
 
 def check_and_auto_cancel_group_classes():
@@ -301,7 +328,9 @@ def book_trial(member_id, booking_date, start_hour, headcount, equipment_type=No
     )
     conn.commit()
     row = conn.execute("SELECT * FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
+    notify_staff_new_booking(f"體驗課:{member_row['name'] if member_row else f'會員#{member_id}'} 預約 {booking_date} {start_hour}:00(人數{headcount})")
     return {**dict(row), "price": price}
 
 
@@ -475,7 +504,9 @@ def book_charter(member_id, booking_date, start_hour, charter_pass_id, equipment
     row = conn.execute("SELECT * FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
     remaining_after = cpass["remaining"] - 1
     lesson_number = cpass["package_size"] - remaining_after
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
+    notify_staff_new_booking(f"包機課:{member_row['name'] if member_row else f'會員#{member_id}'} 預約 {booking_date} {start_hour}:00(扣抵堂數包第{lesson_number}堂)")
     return {
         **dict(row),
         "lesson_number": lesson_number,
@@ -642,7 +673,9 @@ def book_self_practice(member_id, booking_date, start_hour, duration_minutes, he
         )
     conn.commit()
     row = conn.execute("SELECT * FROM indoor_sessions WHERE id=?", (session_id,)).fetchone()
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
+    notify_staff_new_booking(f"自主練習:{member_row['name'] if member_row else f'會員#{member_id}'} 預約 {booking_date} {start_hour}:00({duration_minutes}分鐘)")
     return {**dict(row), "price": price, "quota_consumed": quota_consumed}
 
 
@@ -765,8 +798,11 @@ def enroll_group_class(member_id, booking_date, start_hour, equipment_type=None,
         log_notification(conn, member_id, "group_class_waitlisted",
                            f"{booking_date} {start_hour}:00 團課已滿4人,已為你加入候補名單")
 
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.commit()
     conn.close()
+    member_name = member_row["name"] if member_row else f"會員#{member_id}"
+    notify_staff_new_booking(f"團課:{member_name} 報名 {booking_date} {start_hour}:00{'(候補)' if is_waitlist else ''}")
     return {
         "session_id": session_id,
         "enrollment_id": session_member_id,  # 付款時要用這個id當ref_id(見_create_group_class_payment_order說明),不是session_id
@@ -801,7 +837,9 @@ def book_jump(member_id, booking_date, start_time, duration_minutes, equipment_t
     )
     conn.commit()
     row = conn.execute("SELECT * FROM jump_bookings WHERE id=?", (booking_id,)).fetchone()
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.close()
+    notify_staff_new_booking(f"跳台體驗:{member_row['name'] if member_row else f'會員#{member_id}'} 預約 {booking_date} {start_time}({duration_minutes}分鐘)")
     return dict(row)
 
 
@@ -1280,8 +1318,11 @@ def book_japan_multi_day(member_id, bookings, equipment_type=None, participants=
            VALUES (?, 'japan_trip', ?, 'pending', 'japan_booking', ?)""",
         (member_id, order_amount, first_booking_id),
     )
+    member_row = conn.execute("SELECT name FROM members WHERE id=?", (member_id,)).fetchone()
     conn.commit()
     conn.close()
+    member_name = member_row["name"] if member_row else f"會員#{member_id}"
+    notify_staff_new_booking(f"日本教練課:{member_name} 預約,共{len(bookings)}天(行程代號{group_key})")
     return {"group_key": group_key, "booking_ids": created, "total_price": total_price, "first_pay_amount": order_amount}
 
 

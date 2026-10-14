@@ -285,6 +285,12 @@ def create_registration(member_id, data):
     conn.commit()
     row = conn.execute("SELECT * FROM csia_registrations WHERE id=?", (reg_id,)).fetchone()
     conn.close()
+    # 2026-10新增:依你的指示「只要有人報名就自動通知」,CSIA報名成立後也寄一封通知信
+    # 給客服信箱(見booking.py的notify_staff_new_booking()說明)。
+    booking_module.notify_staff_new_booking(
+        f"CSIA考照報名:{data.get('chinese_name', '').strip()}(Level {course['level']}) "
+        f"報名 {course['batch_label']} {course['course_name']}({course['date_label']})"
+    )
     return dict(row)
 
 
