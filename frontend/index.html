@@ -1300,6 +1300,7 @@
       <option value="onsite">現場付款</option>
       <option value="bank_transfer">匯款轉帳</option>
     </select>
+    <div id="japanBalanceReminder" style="display:none; margin-top:8px; padding:10px; background:#fff4e5; border-radius:8px; font-size:13px; line-height:1.6; color:#a6650a;"></div>
     <div id="bankTransferHint" style="display:none; margin-top:8px; padding:10px; background:#f6f7f9; border-radius:8px; font-size:13px; line-height:1.6;"></div>
     <button onclick="confirmPaymentModal()">確認付款</button>
     <button class="secondary" onclick="closePaymentModal()">稍後付款</button>
@@ -1414,14 +1415,16 @@ function jsAttrArg(value) {
   return String(value).replace(/['"\\]/g, "");
 }
 
-function requestPayment(amount, ref_type, ref_id, cardEligible) {
+function requestPayment(amount, ref_type, ref_id, cardEligible, paymentPlan) {
   if (!amount || amount <= 0) return; // 免付費項目(例如額度內預約、團課)不跳付款
   // 2026-09依你的要求新增:cardEligible代表「這筆訂單能不能直接用信用卡走綠界即時扣款」,
   // 目前只有「室內滑雪團課」(joinGroupClass呼叫時傳true)是true,其他呼叫端
   // (體驗/自主練習/包機/跳台/日本滑雪)都傳false——選信用卡會請客戶洽詢客服,
   // 不會真的導去綠界付款頁面。這裡只是前端UI判斷用,後端create_payment()一律會
   // 重新查資料庫確認一次,不會單純採信這裡傳的值。
-  _pendingPayment = { amount, ref_type, ref_id, cardEligible: !!cardEligible };
+  // paymentPlan:只有日本教練課呼叫端(submitJapanTrip)會傳這個,值是'full'或'deposit',
+  // 用來決定是否要顯示下面「尾款需於開課前3日內繳清」的提醒。
+  _pendingPayment = { amount, ref_type, ref_id, cardEligible: !!cardEligible, paymentPlan: paymentPlan || null };
   document.getElementById("paymentAmountDisplay").textContent = `NT$ ${amount}`;
   // 2026-09修正:線上刷卡/網路ATM如果校方還沒實際串接綠界(config.ECPAY_CONFIGURED為false),
   // 選這兩個選項後台只會直接假裝付款完成(沒有真的收到錢),之前完全沒有地方能讓客戶輸入
@@ -1430,13 +1433,31 @@ function requestPayment(amount, ref_type, ref_id, cardEligible) {
   // 顯示這兩個選項,只留「現場付款」「匯款轉帳」這兩個本來就是人工核對、不會出錯的方式。
   const select = document.getElementById("paymentMethod");
   const onlineCardAvailable = !!(pricingData && pricingData.online_card_available);
+  // 2026-10新增:依你的指示「日本滑雪不能現場付款」,日本教練課訂單要把「現場付款」
+  // 這個選項整個隱藏掉(後端create_payment()也會擋,這裡只是先在畫面上不讓客戶選到)。
+  const isJapanBooking = ref_type === "japan_booking";
   Array.from(select.options).forEach(opt => {
-    opt.hidden = (opt.value === "online_card" || opt.value === "webatm") && !onlineCardAvailable;
+    if (opt.value === "online_card" || opt.value === "webatm") {
+      opt.hidden = !onlineCardAvailable;
+    } else if (opt.value === "onsite") {
+      opt.hidden = isJapanBooking;
+    }
   });
   // 只有「有開放線上刷卡」且「這筆訂單本身也開放直接刷卡(目前只有室內滑雪團課)」
-  // 兩個條件都成立時,才預設選信用卡;其他情況一律預設現場付款,信用卡選項還是
-  // 留著讓客戶可以選,但選了會看到「請洽詢客服」的提示,不會直接導去綠界。
-  select.value = (onlineCardAvailable && cardEligible) ? "online_card" : "onsite";
+  // 兩個條件都成立時,才預設選信用卡;日本教練課不能選現場付款,預設改成匯款轉帳;
+  // 其他情況一律預設現場付款,信用卡選項還是留著讓客戶可以選,但選了會看到
+  // 「請洽詢客服」的提示,不會直接導去綠界。
+  select.value = (onlineCardAvailable && cardEligible) ? "online_card" : (isJapanBooking ? "bank_transfer" : "onsite");
+  // 2026-10新增:日本教練課選「先付訂金」時,在付款彈窗也明顯提醒一次尾款繳費期限
+  // (報名表單的下拉選項文字裡雖然也有寫,但容易被忽略過去,這裡在真正要付款的
+  // 這一刻再提醒一次)。
+  const balanceReminder = document.getElementById("japanBalanceReminder");
+  if (isJapanBooking && paymentPlan === "deposit") {
+    balanceReminder.style.display = "block";
+    balanceReminder.innerHTML = "<b>⚠️ 這筆是先付訂金(課程費用50%),尾款需於開課前3日內繳清,請留意繳費期限。</b>";
+  } else {
+    balanceReminder.style.display = "none";
+  }
   updatePaymentMethodHint();
   document.getElementById("paymentOverlay").style.display = "flex";
 }
@@ -1470,8 +1491,10 @@ function updatePaymentMethodHint() {
     // 2026-09依你的要求新增:目前只有室內滑雪團課開放直接刷卡,其他項目選信用卡
     // 一律提醒客戶洽詢客服,不會真的導去綠界付款頁面(送出後後端也會擋下來,
     // 這裡先在畫面上提早提醒,不用等客戶按下確認付款才知道)。
+    // 2026-10改版:日本教練課不能現場付款,這裡提示的替代方案不能再提到「現場付款」。
     hint.style.display = "block";
-    hint.innerHTML = `<p class="note" style="margin:0;"><b>此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選「現場付款」/「匯款轉帳」直接完成付款。</b></p>`;
+    const altMethods = _pendingPayment.ref_type === "japan_booking" ? "「匯款轉帳」" : "「現場付款」/「匯款轉帳」";
+    hint.innerHTML = `<p class="note" style="margin:0;"><b>此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選${altMethods}直接完成付款。</b></p>`;
   } else {
     hint.style.display = "none";
   }
@@ -1482,7 +1505,9 @@ async function confirmPaymentModal() {
   if (payment_method === "online_card" && !_pendingPayment.cardEligible) {
     // 提早擋下來,不用打API(後端create_payment()也會擋,這裡只是讓客戶不用多等一次
     // 網路來回就知道要洽詢客服)。不關閉付款彈窗,讓客戶可以直接改選其他付款方式。
-    alert("此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選「現場付款」/「匯款轉帳」完成付款。");
+    // 2026-10改版:日本教練課不能現場付款,這裡提示的替代方案不能再提到「現場付款」。
+    const altMethods = _pendingPayment.ref_type === "japan_booking" ? "「匯款轉帳」" : "「現場付款」/「匯款轉帳」";
+    alert(`此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或改選${altMethods}完成付款。`);
     return;
   }
   // 匯款轉帳:先把帳號資訊記下來,因為送出成功後_pendingPayment會被清空,
@@ -7377,7 +7402,7 @@ async function submitJapanTrip() {
     rangeCalendarState.start = null;
     rangeCalendarState.end = null;
     invalidateJapanCalendar();
-    requestPayment(data.first_pay_amount, "japan_booking", data.booking_ids[0], false);
+    requestPayment(data.first_pay_amount, "japan_booking", data.booking_ids[0], false, payment_plan);
     loadAccountOverview();
   } else {
     alert(data.error);

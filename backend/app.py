@@ -2965,9 +2965,16 @@ def create_payment():
         # 其他項目一律請客戶洽詢客服(見_online_card_eligible()說明)。
         # 前端已經會依booking種類把這個選項導向不同行為,這裡是最後一道
         # 防線,避免有人直接打API繞過前端限制。
+        # 2026-10新增:依你的指示「日本滑雪不能現場付款」,日本教練課不開放現場付款這個
+        # 選項(前端paymentOverlay已經會把這個選項整個隱藏掉,這裡是最後一道防線,
+        # 避免有人直接打API繞過前端限制)。
+        if payment_method == "onsite" and ref_type == "japan_booking":
+            return jsonify({"error": "日本教練課不提供現場付款,請選擇「匯款轉帳」或「線上刷卡」完成付款。"}), 400
+
         if payment_method == "online_card" and not _online_card_eligible(conn, ref_type, ref_id):
+            alt_methods = "「匯款轉帳」" if ref_type == "japan_booking" else "「現場付款」/「匯款轉帳」"
             return jsonify({
-                "error": "此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或選擇「現場付款」/「匯款轉帳」完成付款。"
+                "error": f"此項目的信用卡付款目前需要客服協助處理,請洽詢客服,或選擇{alt_methods}完成付款。"
             }), 400
 
         # 防止「同一筆訂單被重複產生多筆導向式付款單」:如果會員先前已經按過付款、
