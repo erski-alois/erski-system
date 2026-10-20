@@ -141,8 +141,16 @@ def notify_staff_new_booking(summary):
     存取權杖才能接,之後要補的話再說)。
 
     呼叫端請在conn.commit()之後才呼叫這個函式——通知的應該是「已經確定成立」的
-    報名,交易還可能rollback時不要先通知,避免寄出「假報名」的通知信。"""
+    報名,交易還可能rollback時不要先通知,避免寄出「假報名」的通知信。
+
+    2026-10新增:補上print()記錄實際寄送結果(成功/失敗/跳過),這幾行會進到Render的
+    app log裡——之前完全沒有記錄,出問題(例如RESEND_API_KEY忘記設定)時只會靜靜地
+    寄不出去,客服以為有設定好、但實際上從來沒收過信,卻完全無從排查。要手動測試
+    Email有沒有設定成功,可以用後台「系統管理」頁的「寄送測試通知信」按鈕
+    (對應/api/admin/system/test-notify-email,那邊故意不吞例外,直接把錯誤顯示
+    在畫面上,比等真正有人報名才知道結果快)。"""
     if not config.MAIL_CONFIGURED:
+        print(f"[新報名通知信/跳過] RESEND_API_KEY尚未設定,未寄出:{summary}")
         return
     try:
         mailer.send_email(
@@ -150,8 +158,9 @@ def notify_staff_new_booking(summary):
             f"[ER Ski新報名通知] {summary}",
             f"<p>{summary}</p>",
         )
-    except Exception:
-        pass
+        print(f"[新報名通知信/已寄出] 收件人={config.STAFF_NOTIFY_EMAIL}:{summary}")
+    except Exception as e:
+        print(f"[新報名通知信/寄送失敗] {summary} -> {e}")
 
 
 def check_and_auto_cancel_group_classes():

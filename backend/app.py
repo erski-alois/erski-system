@@ -17,6 +17,7 @@ import db as _db
 import auth
 import authtoken
 import booking
+import mailer
 import pricing
 import payroll
 import config
@@ -4357,6 +4358,33 @@ def admin_run_stress_test():
         })
     finally:
         _STRESS_TEST_STATE["active"] = False
+
+
+@app.route("/api/admin/system/test-notify-email", methods=["POST"])
+@require_role("boss")
+def admin_test_notify_email():
+    """2026-10新增:手動觸發一次「新報名通知信」測試,給部署完成後想馬上確認「Email
+    通知真的有設定成功、客服信箱真的會收到信」用,不用等到真的有客人報名才知道結果。
+
+    跟booking.notify_staff_new_booking()刻意不一樣的地方:這裡故意不吞掉例外,
+    直接把Resend回傳的錯誤訊息原始內容回給前端——真正的報名通知信因為絕對不能讓
+    客人的報名因此失敗,所以那邊才會整個包在try/except裡悄悄跳過;這支純粹是給
+    客服/老闆自己手動測試用,失敗了就是要讓畫面上直接看到原因,才好排查
+    (常見原因:RESEND_API_KEY打錯、MAIL_FROM的網域還沒在Resend完成DNS驗證)。"""
+    if not config.MAIL_CONFIGURED:
+        return jsonify({"error": "RESEND_API_KEY尚未設定,請先參考config.py開頭的說明申請Resend帳號並在Render設定好這組環境變數"}), 400
+    try:
+        mailer.send_email(
+            config.STAFF_NOTIFY_EMAIL,
+            "[ER Ski測試信] 新報名通知功能測試",
+            "<p>這是一封測試信,用來確認「有人報名就自動通知」這個功能設定正確。</p>"
+            f"<p>如果你收到這封信,代表Resend寄信設定沒問題,之後真的有客人報名"
+            f"(體驗課/自主練習/包機/團課/跳台/日本教練課/CSIA考照)時,通知信也會"
+            f"正常寄到這個信箱({config.STAFF_NOTIFY_EMAIL})。</p>",
+        )
+    except RuntimeError as e:
+        return jsonify({"error": f"寄信失敗:{e}"}), 502
+    return jsonify({"ok": True, "to": config.STAFF_NOTIFY_EMAIL})
 
 
 @app.route("/api/admin/system/run-backup-now", methods=["POST"])

@@ -2693,6 +2693,14 @@ async function renderClearTestDataTools() {
       <button class="small secondary" onclick="submitRunBackupNow()">立即執行一次備份</button>
       <div id="runBackupNowResult" style="margin-top:8px;"></div>
     </div>
+    <div class="person-card" style="border:1px solid #ef6c00; margin-top:16px;">
+      <b style="color:#ef6c00;">報名通知Email測試</b>
+      <p class="note">系統只要有人訂課/報名(體驗課/自主練習/包機/團課/跳台/日本教練課/CSIA考照),
+        都會自動寄一封通知信到客服信箱。按下面按鈕可以立即寄一封測試信,確認Email設定有沒有成功,
+        不用等到真的有客人報名才知道結果。</p>
+      <button class="small secondary" onclick="submitTestNotifyEmail()">寄送測試通知信</button>
+      <div id="testNotifyEmailResult" style="margin-top:8px;"></div>
+    </div>
     <div class="person-card" style="border:1px solid #1565c0; margin-top:16px;">
       <b style="color:#1565c0;">上線前壓力測試</b>
       <p class="note">模擬多位使用者同時查詢公開頁面(教練名單/價格/雪場/CSIA課程等),不會建立/修改/刪除任何資料,
@@ -2707,6 +2715,13 @@ async function renderClearTestDataTools() {
     </div>
   `;
   await loadTestDataSummary();
+}
+async function submitTestNotifyEmail() {
+  const resultEl = document.getElementById("testNotifyEmailResult");
+  resultEl.innerHTML = "寄送中,請稍候...";
+  const { ok, data } = await api("/admin/system/test-notify-email", { method: "POST" });
+  if (!ok) { resultEl.innerHTML = `<p class="note" style="color:#c0392b;">${data.error || "寄送失敗,請稍後再試或聯絡工程協助。"}</p>`; return; }
+  resultEl.innerHTML = `<p style="color:#2e7d32;">測試信已寄出到 ${escapeHtml(data.to)},請到該信箱確認有沒有收到(記得檢查垃圾郵件夾)。</p>`;
 }
 async function submitRunBackupNow() {
   const resultEl = document.getElementById("runBackupNowResult");
