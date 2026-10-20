@@ -8,6 +8,13 @@ API,跟auth.py呼叫LINE/Google OAuth API的做法一致,不多增加一個套�
 
 尚未設定RESEND_API_KEY前,config.MAIL_CONFIGURED會是False,呼叫send_email()會直接
 丟出RuntimeError——呼叫端請自行判斷config.MAIL_CONFIGURED,不要在沒設定時還呼叫。
+
+2026-10踩坑記錄:第一次設好RESEND_API_KEY上線測試時,寄信失敗,錯誤訊息是
+「HTTP 403:error code: 1010」——這不是Resend自己的錯誤格式,是Cloudflare的
+攔截頁(Resend的API前面擋了一層Cloudflare)。原因是urllib.request預設會送出
+「User-Agent: Python-urllib/3.x」這個headers,是極常見的爬蟲/腳本特徵,被
+Cloudflare的防護規則直接擋下來,連Resend自己的程式碼都還沒跑到。修法很單純:
+明確帶一個看起來像一般網路用戶端的User-Agent,就能正常通過。
 """
 
 import json
@@ -38,6 +45,9 @@ def send_email(to_email: str, subject: str, html_body: str):
         headers={
             "Authorization": f"Bearer {config.RESEND_API_KEY}",
             "Content-Type": "application/json",
+            # 2026-10新增:見檔案開頭「踩坑記錄」——沒有這個header會被Cloudflare擋下來
+            # (HTTP 403, error code 1010),不是Resend本身拒絕這次請求。
+            "User-Agent": "ERSKI-booking-system/1.0 (+https://erskischool.com)",
         },
     )
     try:
